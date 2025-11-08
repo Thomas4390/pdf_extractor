@@ -65,7 +65,7 @@ class PDFStatementParser:
     COMPANY_KEYWORDS = {
         "WS", "Assurance", "SSQ", "Beneva", "IA", "RBC",
         "Manuvie", "Desjardins", "iA", "Industrielle",
-        "Alliance", "Ivari", "Empire"
+        "Alliance", "Ivari", "Empire", "Assomption", "Asomption"
     }
 
     def __init__(self, pdf_path: str):
@@ -170,8 +170,8 @@ class PDFStatementParser:
         if token == "Unknown":
             return True
 
-        # Pattern: 6-20 alphanumeric characters, possibly with hyphens
-        if re.match(r'^[A-Z0-9\-]{6,20}$', token):
+        # Real account numbers are 7-9 digits (not preceded by #)
+        if re.match(r'^\d{7,9}$', token):
             return True
 
         return False
@@ -277,8 +277,11 @@ class PDFStatementParser:
         """
         Extract a single data row starting from given index.
 
-        Expected structure per line:
-        [Client Name tokens] [Account Number] [Company tokens] [Product tokens] [Date] [Amount $] [Amount $]
+        Two formats supported:
+        Format 1 (with "clt" keyword):
+            [...metadata...] crt [broker] clt [CLIENT NAME] Unknown [Company] [Product] [Date] [Amounts]
+        Format 2 (direct format):
+            [CLIENT NAME] [ACCOUNT#] [Company] [Product] [Date] [Amounts]
 
         Args:
             start_idx: Starting token index
@@ -297,11 +300,7 @@ class PDFStatementParser:
                 else:
                     break
 
-            # Strategy: Find account separator (Unknown or real account number)
-            # Everything before = client name
-            # Everything after and before date = company/product
-
-            # Phase 1: Collect tokens until we hit end markers or have enough
+            # Phase 1: Collect tokens until we hit end markers
             all_tokens_collected = []
 
             while idx < len(self.all_tokens):
@@ -332,47 +331,110 @@ class PDFStatementParser:
             if not all_tokens_collected:
                 return None
 
-            # Phase 2: Find the separator (account number) in collected tokens
-            separator_idx = self._find_account_separator(all_tokens_collected)
+            # Phase 2: Detect format by looking for "clt" keyword
+            clt_idx = None
+            client_name_tokens = []
+            tokens_after_client = []
+            account_number = "Unknown"
 
-            if separator_idx is None:
-                return None
+            for i, token in enumerate(all_tokens_collected):
+                if token == "clt":
+                    clt_idx = i
+                    break
 
-            # Extract client name (everything before separator)
-            client_name_tokens = all_tokens_collected[:separator_idx]
-
-            # Check if separator is an account number or just marks the boundary
-            if self._is_account_number(all_tokens_collected[separator_idx]):
-                account_number = all_tokens_collected[separator_idx]
-                tokens_after_account = all_tokens_collected[separator_idx + 1:]
-            else:
-                # Separator is a company keyword, no explicit account
+            if clt_idx is not None:
+                # FORMAT 1: Contains "clt" keyword (complex format with metadata)
+                # Extract ALL tokens from start until "Unknown"
+                # This includes all metadata and client name
                 account_number = "Unknown"
-                tokens_after_account = all_tokens_collected[separator_idx:]
 
-            if not client_name_tokens:
+                # Find "Unknown" in the tokens
+                unknown_idx = None
+                for i, token in enumerate(all_tokens_collected):
+                    if token == "Unknown":
+                        unknown_idx = i
+                        break
+
+                if unknown_idx is not None:
+                    # Everything before "Unknown" goes into client name (including metadata)
+                    client_name_tokens = all_tokens_collected[:unknown_idx]
+                    # Everything after "Unknown" is company/product/date
+                    tokens_after_client = all_tokens_collected[unknown_idx + 1:]
+                else:
+                    # No "Unknown" found, try finding company keyword as separator
+                    for i, token in enumerate(all_tokens_collected):
+                        if token in self.COMPANY_KEYWORDS:
+                            client_name_tokens = all_tokens_collected[:i]
+                            tokens_after_client = all_tokens_collected[i:]
+                            break
+
+                    if not client_name_tokens:
+                        return None
+
+            else:
+                # FORMAT 2: Direct format without "clt" (simple format with real account number)
+                # Pattern: [Client Name] [Account Number 7-9 digits] [Company] [Product] [Date]
+                account_idx = None
+                account_number = "Unknown"
+
+                # Look for a real account number (7-9 digits)
+                for i, token in enumerate(all_tokens_collected):
+                    if re.match(r'^\d{7,9}$', token):
+                        # Check if previous token is not "#" (to avoid metadata numbers)
+                        if i > 0 and all_tokens_collected[i - 1].endswith('#'):
+                            continue
+
+                        # Found real account number
+                        client_name_tokens = all_tokens_collected[:i]
+                        account_number = token
+                        tokens_after_client = all_tokens_collected[i + 1:]
+                        account_idx = i
+                        break
+
+                # If no real account number found, look for "Unknown" or company keyword
+                if account_idx is None:
+                    separator_idx = self._find_account_separator(all_tokens_collected)
+
+                    if separator_idx is None:
+                        return None
+
+                    client_name_tokens = all_tokens_collected[:separator_idx]
+
+                    if self._is_account_number(all_tokens_collected[separator_idx]):
+                        account_number = all_tokens_collected[separator_idx]
+                        tokens_after_client = all_tokens_collected[separator_idx + 1:]
+                    else:
+                        account_number = "Unknown"
+                        tokens_after_client = all_tokens_collected[separator_idx:]
+
+                        # Special case: check if there's nothing before "Unknown" except "Â"
+                        # This means the client name is empty - allow it for Unknown accounts
+                        if separator_idx == 0 or (separator_idx == 1 and all_tokens_collected[0] in ["Â", "â", "Ã"]):
+                            client_name_tokens = []  # Empty client name - will be set to "Unknown" later
+
+            # Only return None if client_name_tokens is empty AND account is not Unknown
+            if not client_name_tokens and account_number != "Unknown":
                 return None
 
-            # Phase 3: Find date in tokens_after_account
-            company_product_tokens = []
+            # Phase 3: Find date in remaining tokens
             date_found = False
             date_value = None
+            company_product_tokens = []
 
-            for i, token in enumerate(tokens_after_account):
-                # Check for date
+            for i, token in enumerate(tokens_after_client):
                 if self._is_date(token):
                     date_value = token
                     date_found = True
-                    # Company/product tokens are everything before the date
-                    company_product_tokens = tokens_after_account[:i]
-                    # Update idx to point after the date in all_tokens
-                    idx = start_idx + len(all_tokens_collected) - len(tokens_after_account) + i + 1
+                    company_product_tokens = tokens_after_client[:i]
+                    # Calculate position in all_tokens
+                    tokens_before_date = len(all_tokens_collected) - len(tokens_after_client) + i
+                    idx = start_idx + tokens_before_date + 1
                     break
 
             if not date_found:
                 return None
 
-            # Now collect the two currency amounts (gross and net)
+            # Phase 4: Extract currency amounts (gross and net)
             amounts = []
             while idx < len(self.all_tokens) and len(amounts) < 2:
                 if self._is_currency_amount(idx):
@@ -392,18 +454,53 @@ class PDFStatementParser:
             gross_fee = amounts[0] + " $"
             net_fee = amounts[1] + " $"
 
-            # Now construct the record from the tokens we collected
-            # client_name_tokens = everything before "Unknown"
-            # company_product_tokens = everything after "Unknown" and before date
+            # Phase 5: Build record
+            client_name = ' '.join(client_name_tokens).strip() if client_name_tokens else "Unknown"
 
-            client_name = ' '.join(client_name_tokens) if client_name_tokens else "Unknown"
-            account_number = "Unknown"
+            # Special case: if client name is empty after removing special chars and account is Unknown
+            # This handles the case where after "Â" there is no client name, just "Unknown"
+            if account_number == "Unknown":
+                # Remove special characters to check if there's actual content
+                cleaned_name = client_name.replace('Â', '').replace('â', '').replace('Ã', '').strip()
+                if not cleaned_name:
+                    client_name = "Unknown"
 
-            # Split company/product - simple heuristic: split in half
+            # Split company/product intelligently
+            # Company name should end with ")", product often starts with a company keyword
             if company_product_tokens:
-                mid = len(company_product_tokens) // 2
-                company = ' '.join(company_product_tokens[:mid]) if mid > 0 else ""
-                product = ' '.join(company_product_tokens[mid:])
+                # Strategy: find a token ending with ")" followed by a company keyword
+                split_idx = None
+                for i in range(len(company_product_tokens) - 1):
+                    # Check if current token ends with ")" and next token is a company keyword
+                    if (company_product_tokens[i].endswith(")") and
+                        i + 1 < len(company_product_tokens) and
+                        company_product_tokens[i + 1] in self.COMPANY_KEYWORDS):
+                        split_idx = i
+                        break
+
+                if split_idx is not None:
+                    # Company = everything up to and including the token ending with ")"
+                    company = ' '.join(company_product_tokens[:split_idx + 1]).strip()
+                    # Product = everything after (starting with company keyword)
+                    product = ' '.join(company_product_tokens[split_idx + 1:]).strip()
+                else:
+                    # No clear split found, use the last token ending with ")"
+                    last_paren_idx = None
+                    for i in range(len(company_product_tokens) - 1, -1, -1):
+                        if company_product_tokens[i].endswith(")"):
+                            last_paren_idx = i
+                            break
+
+                    if last_paren_idx is not None:
+                        # Company = everything up to and including the last token ending with ")"
+                        company = ' '.join(company_product_tokens[:last_paren_idx + 1]).strip()
+                        # Product = everything after
+                        product = ' '.join(company_product_tokens[last_paren_idx + 1:]).strip()
+                    else:
+                        # No ")" found, fall back to split in half
+                        mid = len(company_product_tokens) // 2
+                        company = ' '.join(company_product_tokens[:mid]).strip() if mid > 0 else ""
+                        product = ' '.join(company_product_tokens[mid:]).strip()
             else:
                 company = ""
                 product = ""
@@ -420,7 +517,7 @@ class PDFStatementParser:
 
             return record, idx
 
-        except (IndexError, ValueError):
+        except (IndexError, ValueError) as e:
             return None
 
     def parse_trailing_fees(self) -> pd.DataFrame:
@@ -589,7 +686,7 @@ class PDFStatementParser:
 
 if __name__ == "__main__":
     # Example usage - modify the path to your actual PDF
-    pdf_path = "../pdf/Statements (5).pdf"
+    pdf_path = "../pdf/Statements (8).pdf"
 
     if not os.path.exists(pdf_path):
         print(f"Error: PDF file not found at {pdf_path}")
