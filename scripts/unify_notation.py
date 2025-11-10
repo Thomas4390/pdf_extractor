@@ -121,7 +121,14 @@ class CommissionDataUnifier:
         'coverage_amount',
 
         # Metadata
-        'report_date'
+        'report_date',
+
+        # Additional fields for Monday.com integration
+        'status',
+        'advisor_name',
+        'is_verified',
+        'comments',
+        'amount_received'
     ]
 
     # Final columns to keep in output
@@ -129,6 +136,9 @@ class CommissionDataUnifier:
         'contract_number',
         'insured_name',
         'insurer_name',
+        'status',
+        'advisor_name',
+        'is_verified',
         'policy_premium',
         'sharing_rate',
         'commission_rate',
@@ -137,7 +147,9 @@ class CommissionDataUnifier:
         'bonus_amount',
         'on_commission_rate',
         'on_commission',
-        'report_date'
+        'amount_received',
+        'report_date',
+        'comments'
     ]
 
     def __init__(self, output_dir: str = "./unified_data"):
@@ -480,6 +492,120 @@ class CommissionDataUnifier:
 
         return self._ensure_standard_columns(standard_df)
 
+    def convert_monday_legacy_to_standard(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert legacy Monday.com board data to standard schema.
+
+        Legacy column mapping:
+        - '# de Police' → contract_number
+        - 'Compagnie' → insurer_name
+        - 'Statut' → status
+        - 'Conseiller' → advisor_name
+        - 'Vérifié' → is_verified
+        - 'PA' → policy_premium
+        - 'Com' → commission
+        - 'Boni' → bonus_amount
+        - 'Sur-Com' → on_commission
+        - 'Reçu' → amount_received
+        - 'Date' → report_date
+
+        Constants added:
+        - sharing_rate = 0.4 (40%)
+        - commission_rate = 0.5 (50%)
+        - bonus_rate = 0.0175 (1.75%)
+        - on_commission_rate = 0.75 (75%)
+
+        Args:
+            df: DataFrame from legacy Monday.com board
+
+        Returns:
+            Standardized DataFrame
+        """
+        if df.empty:
+            return self._create_empty_standard_df()
+
+        # Get the number of rows for consistent array creation
+        n_rows = len(df)
+
+        # Initialize with standard columns
+        standard_df = pd.DataFrame(index=df.index)
+
+        # Map columns from legacy format
+        # Required mappings
+        if '# de Police' in df.columns:
+            standard_df['contract_number'] = df['# de Police'].astype(str)
+
+        if 'Compagnie' in df.columns:
+            standard_df['insurer_name'] = df['Compagnie'].astype(str)
+
+        if 'PA' in df.columns:
+            # Convert PA (policy premium) to numeric
+            standard_df['policy_premium'] = pd.to_numeric(df['PA'], errors='coerce')
+
+        if 'Com' in df.columns:
+            # Convert commission to numeric
+            standard_df['commission'] = pd.to_numeric(df['Com'], errors='coerce')
+
+        if 'Boni' in df.columns:
+            # Convert bonus to numeric
+            standard_df['bonus_amount'] = pd.to_numeric(df['Boni'], errors='coerce')
+
+        if 'Sur-Com' in df.columns:
+            # Convert on_commission to numeric
+            standard_df['on_commission'] = pd.to_numeric(df['Sur-Com'], errors='coerce')
+
+        if 'Date' in df.columns:
+            # Parse and format date
+            standard_df['report_date'] = df['Date'].apply(
+                lambda x: self._format_date_uniform(self._parse_date(x))
+            )
+
+        # New columns from Monday.com
+        if 'Statut' in df.columns:
+            standard_df['status'] = df['Statut'].astype(str)
+
+        if 'Conseiller' in df.columns:
+            standard_df['advisor_name'] = df['Conseiller'].astype(str)
+
+        if 'Verifié' in df.columns:
+            standard_df['is_verified'] = df['Verifié'].astype(str)
+
+        if 'Reçu' in df.columns:
+            # Convert amount received to numeric
+            standard_df['amount_received'] = pd.to_numeric(df['Reçu'], errors='coerce')
+
+        if 'Texte' in df.columns:
+            standard_df['comments'] = df['Texte'].astype(str)
+
+        # Add constants
+        standard_df['sharing_rate'] = 0.4  # 40%
+        standard_df['commission_rate'] = 0.5  # 50%
+        standard_df['bonus_rate'] = 1.75  # 175%
+        standard_df['on_commission_rate'] = 0.75  # 75%
+
+        # Initialize comments as None if not already set
+        if 'comments' not in standard_df.columns:
+            standard_df['comments'] = None
+
+        # Round float columns using helper method
+        standard_df = self._round_float_columns(standard_df)
+
+        # IMPORTANT: Preserve group metadata from Monday.com extraction
+        if 'group_id' in df.columns:
+            standard_df['group_id'] = df['group_id']
+        if 'group_title' in df.columns:
+            standard_df['group_title'] = df['group_title']
+
+        print(f"✅ Converted {len(standard_df)} records from legacy Monday.com format")
+        print(f"   Constants applied: sharing_rate=0.4, commission_rate=0.5, bonus_rate=1.75, on_commission_rate=0.75")
+
+        # Check if group metadata was preserved
+        if 'group_title' in standard_df.columns:
+            unique_groups = standard_df['group_title'].dropna().unique()
+            print(f"   ✓ Group metadata preserved: {len(unique_groups)} groups - {list(unique_groups)}")
+
+        return self._ensure_standard_columns(standard_df)
+
     def filter_by_sharing_rate(self, df: pd.DataFrame, target_rate: float = 0.4) -> pd.DataFrame:
         """
         Filter DataFrame to keep only rows with a specific sharing_rate.
@@ -623,42 +749,58 @@ class CommissionDataUnifier:
             df: DataFrame to standardize
 
         Returns:
-            DataFrame with all standard columns
+            DataFrame with all standard columns (+ metadata columns if present)
         """
         # Add missing columns with None
         for col in self.STANDARD_COLUMNS:
             if col not in df.columns:
                 df[col] = None
 
-        # Reorder columns
-        return df[self.STANDARD_COLUMNS]
+        # Preserve metadata columns (group_id, group_title, etc.)
+        metadata_cols = ['group_id', 'group_title', 'item_id', 'board_id', 'board_name']
+        existing_metadata = [col for col in metadata_cols if col in df.columns]
+
+        # Reorder: standard columns first, then metadata
+        column_order = self.STANDARD_COLUMNS + existing_metadata
+        return df[column_order]
 
     def _create_empty_standard_df(self) -> pd.DataFrame:
         """Create empty DataFrame with standard schema."""
         return pd.DataFrame(columns=self.STANDARD_COLUMNS)
 
-    def process_source(self, source: str, pdf_path: str) -> pd.DataFrame:
+    def process_source(self, source: str, pdf_path: str = None, monday_df: pd.DataFrame = None) -> pd.DataFrame:
         """
-        Process a complete source from PDF to final standardized DataFrame.
+        Process a complete source from PDF or Monday.com to final standardized DataFrame.
 
         This method orchestrates the entire pipeline:
-        1. Extract data from PDF
+        1. Extract data from PDF or Monday.com DataFrame
         2. Convert to standard format
-        3. Filter by sharing_rate (0.4)
-        4. Aggregate by contract_number
+        3. Filter by sharing_rate (0.4) - SKIPPED for MONDAY_LEGACY
+        4. Aggregate by contract_number - SKIPPED for MONDAY_LEGACY
         5. Filter to final columns
 
         Args:
-            source: Source name - 'UV', 'IDC', or 'ASSOMPTION'
-            pdf_path: Path to the PDF file
+            source: Source name - 'UV', 'IDC', 'ASSOMPTION', or 'MONDAY_LEGACY'
+            pdf_path: Path to the PDF file (required for UV, IDC, ASSOMPTION)
+            monday_df: DataFrame from Monday.com extraction (required for MONDAY_LEGACY)
 
         Returns:
             Final processed DataFrame ready for Monday.com upload
         """
-        print(f"\n🔄 Processing {source} from: {pdf_path}")
+        print(f"\n🔄 Processing {source}" + (f" from: {pdf_path}" if pdf_path else " from Monday.com board"))
 
-        # Step 1: Extract data from PDF
-        if source == 'UV':
+        # Step 1: Extract data from PDF or Monday.com
+        if source == 'MONDAY_LEGACY':
+            # Use provided DataFrame from Monday.com
+            if monday_df is None or monday_df.empty:
+                print(f"❌ No Monday.com data provided for MONDAY_LEGACY source")
+                return pd.DataFrame(columns=self.FINAL_COLUMNS)
+
+            raw_df = monday_df
+            metadata = None
+            print(f"✅ Using {len(raw_df)} records from Monday.com board")
+
+        elif source == 'UV':
             try:
                 from uv_extractor import RemunerationReportExtractor
                 extractor = RemunerationReportExtractor(pdf_path)
@@ -714,10 +856,12 @@ class CommissionDataUnifier:
                 return pd.DataFrame(columns=self.FINAL_COLUMNS)
 
         else:
-            raise ValueError(f"Unknown source: {source}. Must be 'UV', 'IDC', or 'ASSOMPTION'")
+            raise ValueError(f"Unknown source: {source}. Must be 'UV', 'IDC', 'ASSOMPTION', or 'MONDAY_LEGACY'")
 
         # Step 2: Convert to standard format
-        if source == 'UV':
+        if source == 'MONDAY_LEGACY':
+            standardized = self.convert_monday_legacy_to_standard(raw_df)
+        elif source == 'UV':
             standardized = self.convert_uv_to_standard(raw_df, metadata)
         elif source == 'IDC':
             standardized = self.convert_idc_to_standard(raw_df)
@@ -726,16 +870,47 @@ class CommissionDataUnifier:
 
         print(f"✅ Standardized to {len(standardized)} records")
 
-        # Step 3: Filter by sharing_rate (0.4)
-        filtered = self.filter_by_sharing_rate(standardized, target_rate=0.4)
+        # Step 3: Filter by sharing_rate (0.4) - SKIP for MONDAY_LEGACY
+        if source == 'MONDAY_LEGACY':
+            # Skip filtering for legacy Monday.com data - keep all records
+            filtered = standardized
+            print(f"⏭️  Skipping sharing_rate filter for MONDAY_LEGACY source")
+        else:
+            filtered = self.filter_by_sharing_rate(standardized, target_rate=0.4)
 
-        # Step 4: Aggregate by contract_number
-        aggregated = self.aggregate_by_contract_number(filtered)
+        # Step 4: Aggregate by contract_number - SKIP for MONDAY_LEGACY
+        if source == 'MONDAY_LEGACY':
+            # Skip aggregation for legacy Monday.com data - keep original structure
+            aggregated = filtered
+            print(f"⏭️  Skipping aggregation for MONDAY_LEGACY source")
+        else:
+            aggregated = self.aggregate_by_contract_number(filtered)
 
         # Step 5: Filter to final columns
-        final = self.filter_final_columns(aggregated)
+        # For MONDAY_LEGACY, preserve group metadata
+        if source == 'MONDAY_LEGACY':
+            # Keep final columns but also preserve group metadata
+            final = self.filter_final_columns(aggregated)
 
-        print(f"✅ Final output: {len(final)} records ready")
+            # DEBUG: Check group columns before re-adding
+            print(f"   DEBUG - Columns in aggregated: {list(aggregated.columns)}")
+            print(f"   DEBUG - 'group_id' in aggregated: {'group_id' in aggregated.columns}")
+            print(f"   DEBUG - 'group_title' in aggregated: {'group_title' in aggregated.columns}")
+
+            # Re-add group metadata columns if they exist
+            if 'group_id' in aggregated.columns:
+                final['group_id'] = aggregated['group_id']
+                print(f"   ✓ group_id preserved ({aggregated['group_id'].notna().sum()} non-null values)")
+            if 'group_title' in aggregated.columns:
+                final['group_title'] = aggregated['group_title']
+                print(f"   ✓ group_title preserved ({aggregated['group_title'].notna().sum()} non-null values)")
+                print(f"   ✓ Unique groups: {aggregated['group_title'].dropna().unique().tolist()}")
+
+            print(f"✅ Final output: {len(final)} records ready (group metadata preserved)")
+            print(f"   Final columns: {list(final.columns)}")
+        else:
+            final = self.filter_final_columns(aggregated)
+            print(f"✅ Final output: {len(final)} records ready")
 
         return final
 

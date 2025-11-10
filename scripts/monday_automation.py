@@ -406,7 +406,7 @@ class MondayClient:
 
             # Small delay to avoid rate limiting
             if i < total:
-                time.sleep(0.5)
+                time.sleep(0.3)
 
         # Summary
         successful = sum(1 for r in results if r.success)

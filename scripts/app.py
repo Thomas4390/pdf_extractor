@@ -68,6 +68,13 @@ def init_session_state():
     if 'data_modified' not in st.session_state:
         st.session_state.data_modified = False
 
+    # For Monday.com board selection
+    if 'monday_boards' not in st.session_state:
+        st.session_state.monday_boards = None
+
+    if 'selected_board_id' not in st.session_state:
+        st.session_state.selected_board_id = None
+
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -126,6 +133,8 @@ def reset_pipeline():
     st.session_state.config = None
     st.session_state.upload_results = None
     st.session_state.data_modified = False
+    st.session_state.monday_boards = None
+    st.session_state.selected_board_id = None
 
 
 # =============================================================================
@@ -139,147 +148,368 @@ def render_stage_1():
 
     st.header("📁 Étape 1: Configuration et Upload")
 
-    with st.form("config_form"):
-        # PDF Upload
-        st.subheader("1️⃣ Upload du PDF")
-        uploaded_file = st.file_uploader(
-            "Déposez ou sélectionnez votre fichier PDF",
-            type=['pdf'],
-            help="Fichier PDF contenant les données de commissions"
+    # Create tabs for different workflows
+    tab1, tab2 = st.tabs(["📄 Extraction PDF", "🔄 Conversion Monday.com"])
+
+    # =========================================================================
+    # TAB 1: PDF EXTRACTION (UV, IDC, ASSOMPTION)
+    # =========================================================================
+    with tab1:
+        st.info("""
+        **📄 Extraction depuis fichiers PDF**
+
+        Ce mode extrait les données de commissions depuis des fichiers PDF pour les sources:
+        - **UV Assurance**: Rapports de rémunération
+        - **IDC**: Rapports de propositions
+        - **Assomption Vie**: Rapports de rémunération
+
+        Les données sont extraites, standardisées et prêtes à être uploadées vers Monday.com.
+        """)
+
+        with st.form("pdf_extraction_form"):
+            # Source Selection
+            st.subheader("1️⃣ Source des Données PDF")
+            source = st.selectbox(
+                "Sélectionnez la source d'assurance",
+                options=["UV", "IDC", "ASSOMPTION"],
+                help="Type de document PDF à traiter"
+            )
+
+            st.markdown("---")
+
+            # PDF Upload
+            st.subheader("2️⃣ Upload du PDF")
+            uploaded_file = st.file_uploader(
+                "Déposez ou sélectionnez votre fichier PDF",
+                type=['pdf'],
+                help="Fichier PDF contenant les données de commissions"
+            )
+
+            # No Monday.com source fields for PDF extraction
+            source_board_id = None
+            source_group_id = None
+
+            st.markdown("---")
+
+            # Monday.com Configuration
+            st.subheader("3️⃣ Configuration Monday.com")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                monday_api_key = st.text_input(
+                    "Clé API Monday.com",
+                    type="password",
+                    help="Votre clé API Monday.com pour l'authentification",
+                    key="pdf_monday_api_key"
+                )
+
+                board_name_input = st.text_input(
+                    "Nom du Board",
+                    placeholder=f"Ex: Commissions {source}",
+                    help="Nom du board Monday.com (sera créé s'il n'existe pas). Laissez vide pour utiliser le nom par défaut.",
+                    key="pdf_board_name"
+                )
+
+                # Show what will be used
+                if board_name_input and board_name_input.strip():
+                    st.caption(f"📋 Nom du board: **{board_name_input.strip()}**")
+                else:
+                    st.caption(f"📋 Nom par défaut sera utilisé: **Commissions {source}**")
+
+            with col2:
+                month_group = st.text_input(
+                    "Groupe de Mois (optionnel)",
+                    value="",
+                    placeholder="Ex: Octobre 2025",
+                    help="Nom du groupe pour organiser les données (optionnel)",
+                    key="pdf_month_group"
+                )
+
+                col_reuse1, col_reuse2 = st.columns(2)
+                with col_reuse1:
+                    reuse_board = st.checkbox(
+                        "Réutiliser board existant",
+                        value=True,
+                        help="Si coché, utilisera le board existant avec le même nom",
+                        key="pdf_reuse_board"
+                    )
+                with col_reuse2:
+                    reuse_group = st.checkbox(
+                        "Réutiliser groupe existant",
+                        value=True,
+                        help="Si coché, utilisera le groupe existant avec le même nom",
+                        key="pdf_reuse_group"
+                    )
+
+            st.markdown("---")
+
+            # Submit button
+            submitted = st.form_submit_button(
+                "🚀 Extraire les données du PDF",
+                use_container_width=True,
+                type="primary"
+            )
+
+            if submitted:
+                # Validation
+                errors = []
+
+                if not uploaded_file:
+                    errors.append("❌ Veuillez uploader un fichier PDF")
+
+                if not monday_api_key:
+                    errors.append("❌ Veuillez fournir une clé API Monday.com")
+
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    # Save uploaded file
+                    pdf_path = save_uploaded_file(uploaded_file)
+
+                    # Determine final board name
+                    board_name_from_state = st.session_state.get('pdf_board_name', '')
+
+                    if board_name_from_state and board_name_from_state.strip():
+                        final_board_name = board_name_from_state.strip()
+                    else:
+                        final_board_name = f"Commissions {source}"
+
+                    # Create configuration
+                    try:
+                        config = PipelineConfig(
+                            source=InsuranceSource(source),
+                            pdf_path=pdf_path,
+                            month_group=month_group if month_group else None,
+                            board_name=final_board_name,
+                            monday_api_key=monday_api_key,
+                            output_dir="./results",
+                            reuse_board=reuse_board,
+                            reuse_group=reuse_group,
+                            source_board_id=None,
+                            source_group_id=None
+                        )
+
+                        # Store in session state
+                        st.session_state.pdf_file = uploaded_file
+                        st.session_state.pdf_path = pdf_path
+                        st.session_state.config = config
+
+                        # Move to next stage
+                        st.session_state.stage = 2
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Erreur de configuration: {e}")
+
+    # =========================================================================
+    # TAB 2: MONDAY.COM CONVERSION (MONDAY_LEGACY)
+    # =========================================================================
+    with tab2:
+        st.warning("""
+        ⚠️ **Fonctionnalité Spéciale - Conversion de Board**
+
+        Cette fonction est conçue pour être utilisée **une seule fois** lors de la migration
+        d'un ancien format de board Monday.com vers le nouveau format standardisé.
+        """)
+
+        st.info("""
+        **🔄 Conversion Monday.com Legacy → Nouveau Format**
+
+        Cette fonctionnalité convertit les données d'un ancien tableau Monday.com vers le nouveau format standardisé.
+
+        **Colonnes converties automatiquement:**
+        - `# de Police` → `contract_number`
+        - `Compagnie` → `insurer_name`
+        - `PA` → `policy_premium`
+        - `Com` → `commission`
+        - `Boni` → `bonus_amount`
+        - `Sur-Com` → `on_commission`
+        - Et plus...
+
+        **Constantes appliquées:**
+        - sharing_rate = 0.4 (40%)
+        - commission_rate = 0.5 (50%)
+        - bonus_rate = 1.75 (175%)
+        - on_commission_rate = 0.75 (75%)
+        """)
+
+        # API Key input (outside form for loading boards)
+        st.subheader("1️⃣ Authentification Monday.com")
+
+        monday_api_key_legacy = st.text_input(
+            "Clé API Monday.com",
+            type="password",
+            help="Votre clé API Monday.com pour l'authentification",
+            key="legacy_monday_api_key_input"
         )
+
+        # Load boards button
+        if monday_api_key_legacy:
+            col_load, col_status = st.columns([1, 3])
+
+            with col_load:
+                load_boards_btn = st.button(
+                    "📥 Charger mes boards",
+                    use_container_width=True,
+                    type="secondary"
+                )
+
+            with col_status:
+                if st.session_state.monday_boards is not None:
+                    st.success(f"✅ {len(st.session_state.monday_boards)} boards chargés")
+                elif load_boards_btn:
+                    st.info("⏳ Chargement en cours...")
+
+            # Load boards when button clicked
+            if load_boards_btn:
+                try:
+                    from monday_automation import MondayClient
+
+                    with st.spinner("Chargement de vos boards Monday.com..."):
+                        client = MondayClient(api_key=monday_api_key_legacy)
+                        boards = client.list_boards()
+
+                        # Store in session state
+                        st.session_state.monday_boards = boards
+
+                        st.success(f"✅ {len(boards)} boards chargés avec succès!")
+                        st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Erreur lors du chargement des boards: {e}")
+                    st.session_state.monday_boards = None
 
         st.markdown("---")
 
-        # Source Selection
-        st.subheader("2️⃣ Source des Données")
-        source = st.selectbox(
-            "Sélectionnez la source d'assurance",
-            options=["UV", "IDC", "ASSOMPTION"],
-            help="Type de document PDF à traiter"
-        )
+        with st.form("monday_conversion_form"):
+            # Source Board Configuration
+            st.subheader("2️⃣ Sélection du Board Source")
 
-        st.markdown("---")
+            # Board selection dropdown
+            if st.session_state.monday_boards is not None and len(st.session_state.monday_boards) > 0:
+                # Create options with board name and ID
+                board_options = {
+                    f"{board['name']} (ID: {board['id']})": board['id']
+                    for board in st.session_state.monday_boards
+                }
 
-        # Monday.com Configuration
-        st.subheader("3️⃣ Configuration Monday.com")
+                selected_board_option = st.selectbox(
+                    "Sélectionnez le board à convertir",
+                    options=list(board_options.keys()),
+                    help="Choisissez le board contenant les données à convertir (ancien format)"
+                )
 
-        col1, col2 = st.columns(2)
+                # Get the board ID from selection
+                source_board_id = board_options[selected_board_option]
 
-        with col1:
-            monday_api_key = st.text_input(
-                "Clé API Monday.com",
-                type="password",
-                help="Votre clé API Monday.com pour l'authentification",
-                key="monday_api_key_input"
-            )
+                # Show board info
+                st.caption(f"📋 Board sélectionné - ID: **{source_board_id}**")
 
-            board_name_input = st.text_input(
-                "Nom du Board",
-                placeholder=f"Ex: Commissions {source}",
-                help="Nom du board Monday.com (sera créé s'il n'existe pas). Laissez vide pour utiliser le nom par défaut.",
-                key="board_name_input"
-            )
-
-            # Show what will be used
-            if board_name_input and board_name_input.strip():
-                st.caption(f"📋 Nom du board: **{board_name_input.strip()}**")
             else:
-                st.caption(f"📋 Nom par défaut sera utilisé: **Commissions {source}**")
+                st.warning("⚠️ Veuillez d'abord charger vos boards avec le bouton ci-dessus")
+                source_board_id = None
 
-        with col2:
-            month_group = st.text_input(
-                "Groupe de Mois (optionnel)",
-                value="",
-                placeholder="Ex: Octobre 2025",
-                help="Nom du groupe pour organiser les données (optionnel)"
+            st.markdown("---")
+
+            # Target Board Configuration
+            st.subheader("3️⃣ Configuration du Nouveau Board")
+
+            board_name_input_legacy = st.text_input(
+                "Nom du Nouveau Board",
+                placeholder="Ex: Commissions - Nouveau Format",
+                help="Nom du board Monday.com qui sera créé avec le nouveau format",
+                key="legacy_board_name"
             )
 
             col_reuse1, col_reuse2 = st.columns(2)
             with col_reuse1:
-                reuse_board = st.checkbox(
+                reuse_board_legacy = st.checkbox(
                     "Réutiliser board existant",
                     value=True,
-                    help="Si coché, utilisera le board existant avec le même nom"
+                    help="Si coché, utilisera le board existant avec le même nom",
+                    key="legacy_reuse_board"
                 )
             with col_reuse2:
-                reuse_group = st.checkbox(
-                    "Réutiliser groupe existant",
+                reuse_group_legacy = st.checkbox(
+                    "Réutiliser groupes existants",
                     value=True,
-                    help="Si coché, utilisera le groupe existant avec le même nom"
+                    help="Si coché, réutilisera les groupes existants (structure de groupes préservée)",
+                    key="legacy_reuse_group"
                 )
 
-        st.markdown("---")
+            st.info("""
+            **📌 Note importante sur les groupes:**
 
-        # Submit button
-        submitted = st.form_submit_button(
-            "🚀 Extraire les données",
-            use_container_width=True,
-            type="primary"
-        )
+            La structure de groupes du board source sera automatiquement préservée.
+            Si votre board source contient des groupes "Septembre" et "Octobre",
+            ces mêmes groupes seront créés dans le nouveau board.
+            """)
 
-        if submitted:
-            # Validation
-            errors = []
+            st.markdown("---")
 
-            if not uploaded_file:
-                errors.append("❌ Veuillez uploader un fichier PDF")
+            # Submit button
+            submitted_legacy = st.form_submit_button(
+                "🔄 Convertir le Board Monday.com",
+                use_container_width=True,
+                type="primary"
+            )
 
-            if not monday_api_key:
-                errors.append("❌ Veuillez fournir une clé API Monday.com")
+            if submitted_legacy:
+                # Validation
+                errors = []
 
-            if errors:
-                for error in errors:
-                    st.error(error)
-            else:
-                # Save uploaded file
-                pdf_path = save_uploaded_file(uploaded_file)
+                # Get API key from session state (outside form)
+                api_key_from_state = st.session_state.get('legacy_monday_api_key_input', '')
 
-                # Determine final board name - CRITICAL: Use the exact input from user
-                # Access via session_state for reliability in forms
-                board_name_from_state = st.session_state.get('board_name_input', '')
+                if not source_board_id:
+                    errors.append("❌ Veuillez sélectionner un board source")
 
-                # If user entered something, use it exactly as-is
-                # If user left it empty, use default
-                if board_name_from_state and board_name_from_state.strip():
-                    final_board_name = board_name_from_state.strip()
+                if not api_key_from_state:
+                    errors.append("❌ Veuillez fournir une clé API Monday.com")
+
+                if not board_name_input_legacy or not board_name_input_legacy.strip():
+                    errors.append("❌ Veuillez fournir un nom pour le nouveau board")
+
+                if errors:
+                    for error in errors:
+                        st.error(error)
                 else:
-                    final_board_name = f"Commissions {source}"
+                    # Determine final board name
+                    board_name_from_state = st.session_state.get('legacy_board_name', '')
 
-                # Debug: Show what was captured (temporary for debugging)
-                st.info(f"""
-                **Debug Info:**
-                - Source sélectionnée: `{source}`
-                - Board name (direct var): `'{board_name_input}'`
-                - Board name (session_state): `'{board_name_from_state}'`
-                - Board name final: `'{final_board_name}'`
-                - Month group: `'{month_group}'`
-                """)
+                    if board_name_from_state and board_name_from_state.strip():
+                        final_board_name = board_name_from_state.strip()
+                    else:
+                        final_board_name = "Commissions - Nouveau Format"
 
-                # Create configuration
-                try:
-                    config = PipelineConfig(
-                        source=InsuranceSource(source),
-                        pdf_path=pdf_path,
-                        month_group=month_group if month_group else None,
-                        board_name=final_board_name,  # This should be exactly what user entered
-                        monday_api_key=monday_api_key,
-                        output_dir="./results",
-                        reuse_board=reuse_board,
-                        reuse_group=reuse_group
-                    )
+                    # Create configuration for MONDAY_LEGACY
+                    try:
+                        config = PipelineConfig(
+                            source=InsuranceSource.MONDAY_LEGACY,
+                            pdf_path=None,  # No PDF for Monday.com source
+                            month_group=None,  # Groups are preserved from source board
+                            board_name=final_board_name,
+                            monday_api_key=api_key_from_state,
+                            output_dir="./results/monday_legacy",
+                            reuse_board=reuse_board_legacy,
+                            reuse_group=reuse_group_legacy,
+                            source_board_id=int(source_board_id),
+                            source_group_id=None  # Always extract ALL groups (entire board)
+                        )
 
+                        # Store in session state
+                        st.session_state.pdf_file = None
+                        st.session_state.pdf_path = None
+                        st.session_state.config = config
 
-                    # Store in session state
-                    st.session_state.pdf_file = uploaded_file
-                    st.session_state.pdf_path = pdf_path
-                    st.session_state.config = config
+                        # Move to next stage
+                        st.session_state.stage = 2
+                        st.rerun()
 
-                    # Move to next stage
-                    st.session_state.stage = 2
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Erreur de configuration: {e}")
+                    except Exception as e:
+                        st.error(f"❌ Erreur de configuration: {e}")
 
 
 # =============================================================================
@@ -300,7 +530,10 @@ def render_stage_2():
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Source", config.source.value)
-            st.metric("Fichier PDF", Path(config.pdf_path).name)
+            if config.source == InsuranceSource.MONDAY_LEGACY:
+                st.metric("Board Source ID", config.source_board_id)
+            else:
+                st.metric("Fichier PDF", Path(config.pdf_path).name if config.pdf_path else "N/A")
         with col2:
             st.metric("Board Monday.com", config.board_name)
             st.metric("Groupe de Mois", config.month_group or "Aucun")
@@ -312,7 +545,8 @@ def render_stage_2():
 
     # Extract data if not already done
     if st.session_state.extracted_data is None:
-        with st.spinner("🔄 Extraction des données en cours..."):
+        source_type = "PDF" if config.source != InsuranceSource.MONDAY_LEGACY else "Monday.com"
+        with st.spinner(f"🔄 Extraction des données en cours depuis {source_type}..."):
             try:
                 # Create pipeline
                 pipeline = InsuranceCommissionPipeline(config)
@@ -320,7 +554,7 @@ def render_stage_2():
                 # Execute Steps 1 and 2
                 success_step1 = pipeline._step1_extract_data()
                 if not success_step1:
-                    st.error("❌ Échec de l'extraction des données")
+                    st.error(f"❌ Échec de l'extraction des données depuis {source_type}")
                     if st.button("🔄 Recommencer"):
                         reset_pipeline()
                         st.rerun()
@@ -375,6 +609,87 @@ def render_stage_2():
             # Check for duplicates
             duplicates = df.duplicated().sum()
             st.metric("Doublons", duplicates)
+
+        st.markdown("---")
+
+        # Show groups for MONDAY_LEGACY source
+        if config.source == InsuranceSource.MONDAY_LEGACY:
+            st.subheader("📁 Groupes du Board Source")
+
+            try:
+                # Get Monday.com client
+                from monday_automation import MondayClient
+                monday_client = MondayClient(api_key=config.monday_api_key)
+
+                # List groups from source board
+                with st.spinner("Chargement des groupes du board source..."):
+                    all_groups = monday_client.list_groups(board_id=config.source_board_id)
+
+                    # Filter out default "Group Title" groups
+                    groups = [g for g in all_groups if g['title'] != 'Group Title']
+                    filtered_count = len(all_groups) - len(groups)
+
+                if groups and len(groups) > 0:
+                    st.success(f"✅ {len(groups)} groupes trouvés dans le board source")
+
+                    st.info("""
+                    **📋 Ces groupes seront recréés dans le nouveau board:**
+
+                    Les noms de groupes ci-dessous proviennent du board source Monday.com.
+                    Chaque groupe sera automatiquement recréé avec le même nom dans le nouveau board,
+                    et les items seront placés dans leur groupe d'origine respectif.
+                    """)
+
+                    # Prepare data for display
+                    groups_display = pd.DataFrame([
+                        {
+                            "Nom du Groupe": group['title'],
+                            "ID": group['id'],
+                            "Couleur": group.get('color', 'N/A')
+                        }
+                        for group in groups
+                    ])
+
+                    # Display groups table
+                    st.dataframe(
+                        groups_display,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Nom du Groupe": st.column_config.TextColumn(
+                                "Nom du Groupe",
+                                help="Nom du groupe tel qu'il apparaît dans Monday.com",
+                                width="large"
+                            ),
+                            "ID": st.column_config.TextColumn(
+                                "ID",
+                                help="Identifiant unique du groupe",
+                                width="small"
+                            ),
+                            "Couleur": st.column_config.TextColumn(
+                                "Couleur",
+                                help="Code couleur du groupe",
+                                width="small"
+                            )
+                        }
+                    )
+
+                    # Summary metric
+                    st.metric("📂 Nombre de groupes à copier", len(groups))
+
+                    # Show info about filtered groups if any
+                    if filtered_count > 0:
+                        st.caption(f"ℹ️ {filtered_count} groupe(s) par défaut 'Group Title' non affiché(s) (les items seront copiés dans le groupe par défaut du nouveau board)")
+
+                else:
+                    st.warning("⚠️ Aucun groupe trouvé dans le board source.")
+                    st.info("Le board source ne contient aucun groupe, ou l'API n'a pas pu les récupérer.")
+
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la récupération des groupes: {e}")
+                st.info("Impossible de charger les groupes du board source.")
+
+            st.markdown("---")
 
         st.markdown("---")
 
@@ -756,14 +1071,15 @@ def main():
         **Pipeline de Commissions d'Assurance**
 
         Cette application permet de:
-        1. Extraire les données de PDF
+        1. Extraire les données de PDF ou Monday.com
         2. Visualiser les données extraites
         3. Uploader vers Monday.com
 
         **Sources supportées:**
-        - UV Assurance
-        - IDC
-        - Assomption Vie
+        - UV Assurance (PDF)
+        - IDC (PDF)
+        - Assomption Vie (PDF)
+        - Monday.com Legacy (conversion de board)
         """)
 
         st.markdown("---")

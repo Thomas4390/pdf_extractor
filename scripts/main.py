@@ -135,6 +135,7 @@ class InsuranceSource(Enum):
     UV = "UV"
     IDC = "IDC"
     ASSOMPTION = "ASSOMPTION"
+    MONDAY_LEGACY = "MONDAY_LEGACY"
 
 
 @dataclass
@@ -143,8 +144,8 @@ class PipelineConfig:
     Configuration for the insurance commission data pipeline.
 
     Attributes:
-        source: Insurance source to process (UV, IDC, or ASSOMPTION)
-        pdf_path: Path to the PDF file to process
+        source: Insurance source to process (UV, IDC, ASSOMPTION, or MONDAY_LEGACY)
+        pdf_path: Path to the PDF file to process (required for UV, IDC, ASSOMPTION)
         month_group: Month group name (e.g., "Octobre 2025"). If None, no group is created.
         board_name: Name of the Monday.com board to create/use
         board_id: Optional existing board ID to use (overrides board_name if provided)
@@ -152,10 +153,12 @@ class PipelineConfig:
         output_dir: Directory for intermediate results
         reuse_board: Whether to reuse existing board with same name
         reuse_group: Whether to reuse existing group with same name
+        source_board_id: Board ID to extract from (required for MONDAY_LEGACY)
+        source_group_id: Optional group ID to filter extraction (for MONDAY_LEGACY)
     """
     # Data source configuration
     source: InsuranceSource
-    pdf_path: str
+    pdf_path: Optional[str] = None
 
     # Monday.com configuration
     month_group: Optional[str] = None
@@ -168,15 +171,27 @@ class PipelineConfig:
     reuse_board: bool = True
     reuse_group: bool = True
 
+    # Monday.com source configuration (for MONDAY_LEGACY)
+    source_board_id: Optional[int] = None
+    source_group_id: Optional[str] = None
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         # Validate source
         if isinstance(self.source, str):
             self.source = InsuranceSource(self.source)
 
-        # Validate PDF path
-        if not Path(self.pdf_path).exists():
-            raise FileNotFoundError(f"PDF file not found: {self.pdf_path}")
+        # Validate PDF path for PDF-based sources
+        if self.source in [InsuranceSource.UV, InsuranceSource.IDC, InsuranceSource.ASSOMPTION]:
+            if not self.pdf_path:
+                raise ValueError(f"PDF path is required for source: {self.source.value}")
+            if not Path(self.pdf_path).exists():
+                raise FileNotFoundError(f"PDF file not found: {self.pdf_path}")
+
+        # Validate Monday.com source configuration for MONDAY_LEGACY
+        if self.source == InsuranceSource.MONDAY_LEGACY:
+            if not self.source_board_id:
+                raise ValueError("source_board_id is required for MONDAY_LEGACY source")
 
         # Validate Monday.com API key
         if not self.monday_api_key:
@@ -220,6 +235,7 @@ class InsuranceCommissionPipeline:
         self.board_id: Optional[int] = None
         self.group_id: Optional[str] = None
         self.column_mapping: Dict[str, str] = {}  # Maps column names to Monday.com column IDs
+        self.group_mapping: Dict[str, str] = {}  # Maps original group titles to new group IDs (for MONDAY_LEGACY)
 
     def run(self) -> bool:
         """
@@ -274,22 +290,59 @@ class InsuranceCommissionPipeline:
 
     def _step1_extract_data(self) -> bool:
         """
-        Step 1: Extract and standardize data from PDF.
+        Step 1: Extract and standardize data from PDF or Monday.com.
 
         Returns:
             True if successful, False otherwise
         """
-        ColorPrint.section("STEP 1: EXTRACT & PROCESS DATA FROM PDF")
+        source_type = "PDF" if self.config.source != InsuranceSource.MONDAY_LEGACY else "Monday.com Board"
+        ColorPrint.section(f"STEP 1: EXTRACT & PROCESS DATA FROM {source_type}")
 
         try:
             source = self.config.source.value
-            pdf_path = self.config.pdf_path
 
-            ColorPrint.info(f"Processing {source} data from: {pdf_path}")
+            # Handle MONDAY_LEGACY source differently
+            if self.config.source == InsuranceSource.MONDAY_LEGACY:
+                ColorPrint.info(f"Extracting data from Monday.com board: {self.config.source_board_id}")
+                ColorPrint.info(f"Extracting ALL groups to preserve board structure...")
 
-            # Use the unified process_source method from CommissionDataUnifier
-            # This handles extraction, standardization, filtering, and aggregation
-            self.final_data = self.data_unifier.process_source(source, pdf_path)
+                # Import necessary classes
+                from monday_automation import DataProcessor
+
+                # Extract data from Monday.com board (entire board, no group filtering)
+                board_data = self.monday_client.extract_board_data(
+                    board_id=self.config.source_board_id,
+                    group_id=None  # Extract ALL groups, not just one
+                )
+
+                # Convert to DataFrame
+                processor = DataProcessor()
+                monday_df = processor.board_to_dataframe(board_data, include_subitems=False)
+
+                ColorPrint.success(f"Extracted {len(monday_df)} records from Monday.com")
+                ColorPrint.info(f"Columns found: {list(monday_df.columns)}")
+
+                # Check for group information
+                if 'group_title' in monday_df.columns:
+                    unique_groups = monday_df['group_title'].dropna().unique()
+                    ColorPrint.info(f"Groups found: {len(unique_groups)} - {list(unique_groups)}")
+                else:
+                    ColorPrint.warning("No group information found in extracted data")
+
+                # Process using the unified method with Monday.com DataFrame
+                self.final_data = self.data_unifier.process_source(
+                    source=source,
+                    monday_df=monday_df
+                )
+
+            else:
+                # PDF-based sources
+                pdf_path = self.config.pdf_path
+                ColorPrint.info(f"Processing {source} data from: {pdf_path}")
+
+                # Use the unified process_source method from CommissionDataUnifier
+                # This handles extraction, standardization, filtering, and aggregation
+                self.final_data = self.data_unifier.process_source(source, pdf_path)
 
             # Check if data was processed
             if self.final_data is None or self.final_data.empty:
@@ -403,8 +456,59 @@ class InsuranceCommissionPipeline:
                 self.board_id = int(board_result.board_id)
                 ColorPrint.success(f"Board ready: {board_result.board_name} (ID: {self.board_id})")
 
-            # Create or reuse group if month_group is specified
-            if self.config.month_group:
+            # Handle groups based on source type
+            if self.config.source == InsuranceSource.MONDAY_LEGACY:
+                # For MONDAY_LEGACY: preserve original group structure
+                ColorPrint.info("Detecting and creating groups from source board...")
+
+                # Get unique groups from the data
+                if 'group_title' in self.final_data.columns:
+                    all_unique_groups = self.final_data['group_title'].dropna().unique()
+
+                    # Filter out default "Group Title" groups
+                    unique_groups = [g for g in all_unique_groups if g != 'Group Title']
+
+                    # Reverse the order to maintain correct display order in Monday.com
+                    # (Monday.com displays groups in reverse creation order)
+                    unique_groups = list(reversed(unique_groups))
+
+                    ColorPrint.info(f"Found {len(unique_groups)} unique groups in source data (excluding default 'Group Title')")
+                    ColorPrint.info(f"Groups to create: {unique_groups}")
+
+                    # Create each group in the new board
+                    self.group_mapping = {}
+                    ColorPrint.info(f"Starting group creation loop for {len(unique_groups)} groups...")
+                    for idx, group_title in enumerate(unique_groups):
+                        ColorPrint.info(f"[{idx+1}/{len(unique_groups)}] Creating/reusing group: {group_title}")
+
+                        try:
+                            group_result = self.monday_client.create_group(
+                                board_id=self.board_id,
+                                group_name=str(group_title),
+                                group_color="#0086c0",  # Blue color
+                                reuse_existing=self.config.reuse_group
+                            )
+
+                            if group_result.success:
+                                self.group_mapping[str(group_title)] = group_result.group_id
+                                ColorPrint.success(f"  ✓ Group '{group_title}' ready (ID: {group_result.group_id})")
+                            else:
+                                ColorPrint.warning(f"  ⚠️  Failed to create group '{group_title}': {group_result.error}")
+
+                        except Exception as e:
+                            ColorPrint.error(f"  ❌ Exception while creating group '{group_title}': {e}")
+                            import traceback
+                            traceback.print_exc()
+
+                    ColorPrint.success(f"Group structure preserved: {len(self.group_mapping)} groups created")
+                    self.group_id = None  # No single group, we'll use mapping
+                else:
+                    ColorPrint.warning("No group information found in source data")
+                    self.group_id = None
+                    self.group_mapping = {}
+
+            elif self.config.month_group:
+                # For PDF sources: create or reuse single month group
                 ColorPrint.info(f"Creating/reusing group: {self.config.month_group}")
                 group_result = self.monday_client.create_group(
                     board_id=self.board_id,
@@ -433,43 +537,41 @@ class InsuranceCommissionPipeline:
                                    'group_id', 'group_title', 'is_subitem',
                                    'parent_item_id', 'parent_item_name']
 
-                # TOUTES les colonnes de données sont créées, y compris contract_number et insured_name
-                data_columns = [col for col in self.final_data.columns
-                               if col not in metadata_columns]
+                # Import FINAL_COLUMNS from unify_notation to ensure correct order
+                from unify_notation import CommissionDataUnifier
+                FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS
+
+                # Use FINAL_COLUMNS order, but only keep columns that exist in DataFrame
+                data_columns = [col for col in FINAL_COLUMNS
+                               if col in self.final_data.columns and col not in metadata_columns]
 
                 ColorPrint.info(f"Found {len(data_columns)} data columns to create/map in Monday.com")
-                ColorPrint.info(f"Columns: {data_columns}")
+                ColorPrint.info(f"Columns (in order): {data_columns}")
 
                 # Define column types based on data
                 # Note: Dates are now treated as text/strings for simplicity
-                number_columns = ['policy_premium', 'sharing_rate', 'commission_rate',
-                                 'commission', 'bonus_rate', 'bonus_amount',
-                                 'on_commission_rate', 'on_commission']
+                number_columns_set = {'policy_premium', 'sharing_rate', 'commission_rate',
+                                     'commission', 'bonus_rate', 'bonus_amount',
+                                     'on_commission_rate', 'on_commission', 'amount_received'}
 
                 # Get or create columns with appropriate types
+                # IMPORTANT: Create columns in order to preserve FINAL_COLUMNS order
                 self.column_mapping = {}
 
-                # Create/get text columns (includes dates now)
-                text_columns = [col for col in data_columns if col not in number_columns]
-                if text_columns:
-                    ColorPrint.info(f"Creating/mapping {len(text_columns)} text columns...")
-                    text_mapping = self.monday_client.get_or_create_columns(
-                        board_id=self.board_id,
-                        column_names=text_columns,
-                        column_type="text"
-                    )
-                    self.column_mapping.update(text_mapping)
+                ColorPrint.info(f"Creating/mapping columns in order...")
 
-                # Create/get number columns with proper type
-                number_cols_present = [col for col in data_columns if col in number_columns]
-                if number_cols_present:
-                    ColorPrint.info(f"Creating/mapping {len(number_cols_present)} number columns...")
-                    number_mapping = self.monday_client.get_or_create_columns(
+                # Create columns one by one in the order of data_columns (which follows FINAL_COLUMNS)
+                for col_name in data_columns:
+                    # Determine column type
+                    col_type = "numbers" if col_name in number_columns_set else "text"
+
+                    # Create or get this single column
+                    col_mapping = self.monday_client.get_or_create_columns(
                         board_id=self.board_id,
-                        column_names=number_cols_present,
-                        column_type="numbers"
+                        column_names=[col_name],
+                        column_type=col_type
                     )
-                    self.column_mapping.update(number_mapping)
+                    self.column_mapping.update(col_mapping)
 
                 ColorPrint.success(f"Columns configured: {len(self.column_mapping)} columns ready")
 
@@ -509,17 +611,124 @@ class InsuranceCommissionPipeline:
                 ColorPrint.error("No data to upload")
                 return False
 
-            # Prepare items for batch creation
-            items_to_create = self._prepare_monday_items(self.final_data)
+            # Filter out rows with empty/invalid contract numbers
+            initial_count = len(self.final_data)
+            if 'contract_number' in self.final_data.columns:
+                self.final_data = self.final_data[
+                    self.final_data['contract_number'].notna() &
+                    (self.final_data['contract_number'] != '') &
+                    (self.final_data['contract_number'] != 'nan')
+                ].copy()
 
-            ColorPrint.info(f"Uploading {len(items_to_create)} items to Monday.com...")
+                filtered_count = initial_count - len(self.final_data)
+                if filtered_count > 0:
+                    ColorPrint.warning(f"Filtered out {filtered_count} rows with empty contract numbers")
 
-            # Upload items in batch
-            results = self.monday_client.create_items_batch(
-                board_id=self.board_id,
-                items=items_to_create,
-                group_id=self.group_id
-            )
+            # Check if we need to preserve group structure (MONDAY_LEGACY)
+            if self.config.source == InsuranceSource.MONDAY_LEGACY and self.group_mapping:
+                ColorPrint.info(f"Uploading items by group to preserve structure...")
+
+                # Display detailed summary before upload
+                ColorPrint.section("RÉSUMÉ DES DONNÉES À TRANSFÉRER")
+                ColorPrint.info(f"📊 Total d'items à uploader: {len(self.final_data)}")
+                ColorPrint.info(f"📁 Nombre de groupes: {len(self.group_mapping)}")
+
+                # Display items per group
+                for group_title in self.group_mapping.keys():
+                    if 'group_title' in self.final_data.columns:
+                        group_data = self.final_data[self.final_data['group_title'] == group_title]
+                        if not group_data.empty:
+                            ColorPrint.info(f"\n  📂 Groupe: {group_title}")
+                            ColorPrint.info(f"     → {len(group_data)} items")
+                            # Display first 5 item names (contract numbers)
+                            if 'contract_number' in group_data.columns:
+                                sample_items = group_data['contract_number'].head(5).tolist()
+                                ColorPrint.info(f"     → Exemples: {sample_items}")
+                                if len(group_data) > 5:
+                                    ColorPrint.info(f"     → ... et {len(group_data) - 5} autres")
+
+                # Show items in default "Group Title" if any
+                if 'group_title' in self.final_data.columns:
+                    default_items = self.final_data[self.final_data['group_title'] == 'Group Title']
+                    if not default_items.empty:
+                        ColorPrint.info(f"\n  📂 Groupe par défaut (non renommé)")
+                        ColorPrint.info(f"     → {len(default_items)} items (seront uploadés dans le groupe par défaut)")
+
+                ColorPrint.info("\n" + "="*60 + "\n")
+
+                results = []
+
+                # DEBUG: Show group mapping and data
+                ColorPrint.info(f"DEBUG - Group mapping keys: {list(self.group_mapping.keys())}")
+                if 'group_title' in self.final_data.columns:
+                    unique_in_data = self.final_data['group_title'].unique()
+                    ColorPrint.info(f"DEBUG - Unique group_title in data: {list(unique_in_data)}")
+                    ColorPrint.info(f"DEBUG - Group_title value counts:")
+                    for group, count in self.final_data['group_title'].value_counts().items():
+                        ColorPrint.info(f"  '{group}': {count} items")
+
+                # Upload items group by group
+                for group_title, group_id in self.group_mapping.items():
+                    # Skip default "Group Title" groups
+                    if group_title == 'Group Title':
+                        continue
+
+                    # Filter data for this group
+                    if 'group_title' in self.final_data.columns:
+                        ColorPrint.info(f"DEBUG - Filtering for group: '{group_title}' (group_id: {group_id})")
+                        group_data = self.final_data[
+                            self.final_data['group_title'] == group_title
+                        ].copy()
+
+                        ColorPrint.info(f"DEBUG - Filtered {len(group_data)} items for group '{group_title}'")
+
+                        if not group_data.empty:
+                            ColorPrint.info(f"  Uploading {len(group_data)} items to group '{group_title}'...")
+
+                            # Prepare items for this group
+                            items_to_create = self._prepare_monday_items(group_data)
+
+                            # Upload items to this specific group
+                            group_results = self.monday_client.create_items_batch(
+                                board_id=self.board_id,
+                                items=items_to_create,
+                                group_id=group_id
+                            )
+                            results.extend(group_results)
+                            ColorPrint.success(f"  ✓ Uploaded {len(group_results)} items to '{group_title}'")
+
+                # Handle items from default "Group Title" group separately
+                if 'group_title' in self.final_data.columns:
+                    default_group_items = self.final_data[
+                        self.final_data['group_title'] == 'Group Title'
+                    ].copy()
+
+                    if not default_group_items.empty:
+                        ColorPrint.info(f"  Uploading {len(default_group_items)} items from default 'Group Title' group...")
+                        items_to_create = self._prepare_monday_items(default_group_items)
+
+                        # Upload without specifying group (will go to default group)
+                        default_results = self.monday_client.create_items_batch(
+                            board_id=self.board_id,
+                            items=items_to_create,
+                            group_id=None
+                        )
+                        results.extend(default_results)
+                        ColorPrint.success(f"  ✓ Uploaded {len(default_results)} items to default group")
+
+            else:
+                # Standard upload (PDF sources or no groups)
+                # Prepare items for batch creation
+                items_to_create = self._prepare_monday_items(self.final_data)
+
+                ColorPrint.info(f"Uploading {len(items_to_create)} items to Monday.com...")
+
+                # Upload items in batch
+                results = self.monday_client.create_items_batch(
+                    board_id=self.board_id,
+                    items=items_to_create,
+                    group_id=self.group_id
+                )
 
             # Analyze results
             successful = sum(1 for r in results if r.success)
@@ -592,10 +801,9 @@ class InsuranceCommissionPipeline:
                            'parent_item_id', 'parent_item_name']
 
         for idx, row in df.iterrows():
-            # Create item name from contract number and insured name
+            # Create item name from contract number only (column "Élément" in Monday.com)
             contract_num = str(row.get('contract_number', 'N/A'))
-            insured_name = str(row.get('insured_name', 'Unknown'))
-            item_name = f"{contract_num} - {insured_name}"
+            item_name = contract_num
 
             # Prepare column values - iterate in DataFrame column order
             column_values = {}
@@ -720,6 +928,40 @@ def create_assomption_config(api_key: str) -> PipelineConfig:
         board_name="Commissions Assomption",
         monday_api_key=api_key,
         output_dir="./results/assomption"
+    )
+
+
+def create_monday_legacy_config(
+    api_key: str,
+    source_board_id: int,
+    target_board_name: str,
+    source_group_id: Optional[str] = None,
+    month_group: Optional[str] = None
+) -> PipelineConfig:
+    """
+    Create configuration for Monday.com legacy board conversion.
+
+    Args:
+        api_key: Monday.com API key
+        source_board_id: ID of the legacy board to convert FROM
+        target_board_name: Name of the new board to create
+        source_group_id: Optional group ID to filter extraction
+        month_group: Optional month group for the new board
+
+    Returns:
+        PipelineConfig for MONDAY_LEGACY conversion
+    """
+    return PipelineConfig(
+        source=InsuranceSource.MONDAY_LEGACY,
+        pdf_path=None,  # Not needed for Monday.com source
+        month_group=month_group,
+        board_name=target_board_name,
+        monday_api_key=api_key,
+        output_dir="./results/monday_legacy",
+        source_board_id=source_board_id,
+        source_group_id=source_group_id,
+        reuse_board=True,
+        reuse_group=True
     )
 
 
