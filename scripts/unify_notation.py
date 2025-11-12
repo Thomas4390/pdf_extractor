@@ -55,6 +55,13 @@ except ImportError:
     print("⚠️  Warning: assomption_extractor.py not found")
     ASSOMPTION_AVAILABLE = False
 
+try:
+    from idc_statements_extractor import PDFStatementParser
+    IDC_STATEMENT_AVAILABLE = True
+except ImportError:
+    print("⚠️  Warning: idc_statements_extractor.py not found")
+    IDC_STATEMENT_AVAILABLE = False
+
 # =============================================================================
 # CONFIGURATION - UPDATE THESE PATHS FOR YOUR DATA
 # =============================================================================
@@ -492,11 +499,69 @@ class CommissionDataUnifier:
 
         return self._ensure_standard_columns(standard_df)
 
+    def convert_idc_statement_to_standard(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert IDC Statement data (trailing fees) to standard schema.
+
+        IDC Statement extracts trailing fee reports with columns:
+        - 'Nom du client' → insured_name
+        - 'Numéro de compte' → contract_number
+        - 'Compagnie' → insurer_name
+        - 'Date' → report_date
+        - 'Frais de suivi nets' → on_commission
+        - 'Taux sur-commission' → on_commission_rate
+
+        Args:
+            df: IDC Statement DataFrame
+
+        Returns:
+            Standardized DataFrame
+        """
+        if df.empty:
+            return self._create_empty_standard_df()
+
+        # Initialize with standard columns
+        standard_df = pd.DataFrame(index=df.index)
+
+        # Map columns from IDC Statement format
+        standard_df['insured_name'] = df['Nom du client'].astype(str)
+        standard_df['contract_number'] = df['Numéro de compte'].astype(str)
+        standard_df['insurer_name'] = df['Compagnie'].astype(str)
+
+        # Parse and format dates
+        standard_df['report_date'] = df['Date'].apply(lambda x: self._format_date_uniform(self._parse_date(x)))
+
+        # Parse trailing fees - Map 'Frais de suivi nets' to 'on_commission'
+        standard_df['on_commission'] = df['Frais de suivi nets'].apply(self._clean_currency)
+
+        # Map advisor name and on-commission rate
+        if 'Nom du conseiller' in df.columns:
+            standard_df['advisor_name'] = df['Nom du conseiller'].astype(str)
+        else:
+            standard_df['advisor_name'] = None
+
+        if 'Taux sur-commission' in df.columns:
+            # on_commission_rate is already a float from extraction (e.g., 0.75)
+            standard_df['on_commission_rate'] = pd.to_numeric(df['Taux sur-commission'], errors='coerce')
+        else:
+            standard_df['on_commission_rate'] = None
+
+        # Replace 'Unknown' and 'None' strings with NaN
+        for col in standard_df.columns:
+            if standard_df[col].dtype == 'object':  # Only for string columns
+                standard_df[col] = standard_df[col].replace(['Unknown', 'None', 'unknown', 'none'], np.nan)
+
+        # Round float columns using helper method
+        standard_df = self._round_float_columns(standard_df)
+
+        return self._ensure_standard_columns(standard_df)
+
     def convert_monday_legacy_to_standard(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Convert legacy Monday.com board data to standard schema.
 
         Legacy column mapping:
+        - 'item_name' (colonne "Élément") → insured_name  ** NOUVEAU **
         - '# de Police' → contract_number
         - 'Compagnie' → insurer_name
         - 'Statut' → status
@@ -531,6 +596,11 @@ class CommissionDataUnifier:
         standard_df = pd.DataFrame(index=df.index)
 
         # Map columns from legacy format
+        # NOUVEAU: Map item_name (colonne "Élément" dans Monday.com) vers insured_name
+        if 'item_name' in df.columns:
+            standard_df['insured_name'] = df['item_name'].astype(str)
+            print(f"   ✓ Mapped 'item_name' (Élément) → 'insured_name': {df['item_name'].notna().sum()} values")
+
         # Required mappings
         if '# de Police' in df.columns:
             standard_df['contract_number'] = df['# de Police'].astype(str)
@@ -542,6 +612,7 @@ class CommissionDataUnifier:
             # Convert PA (policy premium) to numeric
             standard_df['policy_premium'] = pd.to_numeric(df['PA'], errors='coerce')
 
+        # Try to extract Com, Boni, Sur-Com from source (may be empty for formula columns)
         if 'Com' in df.columns:
             # Convert commission to numeric
             standard_df['commission'] = pd.to_numeric(df['Com'], errors='coerce')
@@ -582,6 +653,55 @@ class CommissionDataUnifier:
         standard_df['commission_rate'] = 0.5  # 50%
         standard_df['bonus_rate'] = 1.75  # 175%
         standard_df['on_commission_rate'] = 0.75  # 75%
+
+        # CALCUL AUTOMATIQUE: Calculate Com, Boni, Sur-Com if they are empty
+        # This is necessary because Monday.com formula columns don't return values via API
+        if 'policy_premium' in standard_df.columns:
+            # Count how many values are missing
+            com_missing = standard_df['commission'].isna().sum() if 'commission' in standard_df.columns else n_rows
+            boni_missing = standard_df['bonus_amount'].isna().sum() if 'bonus_amount' in standard_df.columns else n_rows
+            surcom_missing = standard_df['on_commission'].isna().sum() if 'on_commission' in standard_df.columns else n_rows
+
+            if com_missing > 0 or boni_missing > 0 or surcom_missing > 0:
+                print(f"\n   🧮 Calculating missing formula columns:")
+                print(f"      - commission: {com_missing} missing values")
+                print(f"      - bonus_amount: {boni_missing} missing values")
+                print(f"      - on_commission: {surcom_missing} missing values")
+
+                # Calculate commission: PA × sharing_rate × commission_rate
+                if com_missing > 0:
+                    mask = standard_df['commission'].isna()
+                    standard_df.loc[mask, 'commission'] = (
+                        standard_df.loc[mask, 'policy_premium'] *
+                        standard_df.loc[mask, 'sharing_rate'] *
+                        standard_df.loc[mask, 'commission_rate']
+                    )
+                    calculated = standard_df.loc[mask, 'commission'].notna().sum()
+                    print(f"      ✓ Calculated {calculated} commission values")
+
+                # Calculate bonus_amount: PA × sharing_rate × commission_rate × bonus_rate
+                if boni_missing > 0:
+                    mask = standard_df['bonus_amount'].isna()
+                    standard_df.loc[mask, 'bonus_amount'] = (
+                        standard_df.loc[mask, 'policy_premium'] *
+                        standard_df.loc[mask, 'sharing_rate'] *
+                        standard_df.loc[mask, 'commission_rate'] *
+                        standard_df.loc[mask, 'bonus_rate']
+                    )
+                    calculated = standard_df.loc[mask, 'bonus_amount'].notna().sum()
+                    print(f"      ✓ Calculated {calculated} bonus_amount values")
+
+                # Calculate on_commission: PA × (1 - sharing_rate) × on_commission_rate × commission_rate
+                if surcom_missing > 0:
+                    mask = standard_df['on_commission'].isna()
+                    standard_df.loc[mask, 'on_commission'] = (
+                        standard_df.loc[mask, 'policy_premium'] *
+                        (1 - standard_df.loc[mask, 'sharing_rate']) *
+                        standard_df.loc[mask, 'on_commission_rate'] *
+                        standard_df.loc[mask, 'commission_rate']
+                    )
+                    calculated = standard_df.loc[mask, 'on_commission'].notna().sum()
+                    print(f"      ✓ Calculated {calculated} on_commission values")
 
         # Initialize comments as None if not already set
         if 'comments' not in standard_df.columns:
@@ -768,21 +888,23 @@ class CommissionDataUnifier:
         """Create empty DataFrame with standard schema."""
         return pd.DataFrame(columns=self.STANDARD_COLUMNS)
 
-    def process_source(self, source: str, pdf_path: str = None, monday_df: pd.DataFrame = None) -> pd.DataFrame:
+    def process_source(self, source: str, pdf_path: str = None, monday_df: pd.DataFrame = None,
+                      aggregate_by_contract: bool = True) -> pd.DataFrame:
         """
         Process a complete source from PDF or Monday.com to final standardized DataFrame.
 
         This method orchestrates the entire pipeline:
         1. Extract data from PDF or Monday.com DataFrame
         2. Convert to standard format
-        3. Filter by sharing_rate (0.4) - SKIPPED for MONDAY_LEGACY
-        4. Aggregate by contract_number - SKIPPED for MONDAY_LEGACY
+        3. Filter by sharing_rate (0.4) - SKIPPED for MONDAY_LEGACY and IDC_STATEMENT
+        4. Aggregate by contract_number - SKIPPED for MONDAY_LEGACY and IDC_STATEMENT (or if aggregate_by_contract=False)
         5. Filter to final columns
 
         Args:
-            source: Source name - 'UV', 'IDC', 'ASSOMPTION', or 'MONDAY_LEGACY'
-            pdf_path: Path to the PDF file (required for UV, IDC, ASSOMPTION)
+            source: Source name - 'UV', 'IDC', 'IDC_STATEMENT', 'ASSOMPTION', or 'MONDAY_LEGACY'
+            pdf_path: Path to the PDF file (required for UV, IDC, IDC_STATEMENT, ASSOMPTION)
             monday_df: DataFrame from Monday.com extraction (required for MONDAY_LEGACY)
+            aggregate_by_contract: Whether to aggregate rows by contract_number (default: True)
 
         Returns:
             Final processed DataFrame ready for Monday.com upload
@@ -855,8 +977,25 @@ class CommissionDataUnifier:
                 print(f"❌ Assomption extractor not available")
                 return pd.DataFrame(columns=self.FINAL_COLUMNS)
 
+        elif source == 'IDC_STATEMENT':
+            try:
+                from idc_statements_extractor import PDFStatementParser
+                parser = PDFStatementParser(pdf_path)
+                raw_df = parser.parse_trailing_fees()
+                metadata = None
+
+                if raw_df.empty:
+                    print(f"❌ No data extracted from {source} PDF")
+                    return pd.DataFrame(columns=self.FINAL_COLUMNS)
+
+                print(f"✅ Extracted {len(raw_df)} records from {source}")
+
+            except ImportError:
+                print(f"❌ IDC Statement extractor not available")
+                return pd.DataFrame(columns=self.FINAL_COLUMNS)
+
         else:
-            raise ValueError(f"Unknown source: {source}. Must be 'UV', 'IDC', 'ASSOMPTION', or 'MONDAY_LEGACY'")
+            raise ValueError(f"Unknown source: {source}. Must be 'UV', 'IDC', 'IDC_STATEMENT', 'ASSOMPTION', or 'MONDAY_LEGACY'")
 
         # Step 2: Convert to standard format
         if source == 'MONDAY_LEGACY':
@@ -865,24 +1004,32 @@ class CommissionDataUnifier:
             standardized = self.convert_uv_to_standard(raw_df, metadata)
         elif source == 'IDC':
             standardized = self.convert_idc_to_standard(raw_df)
+        elif source == 'IDC_STATEMENT':
+            standardized = self.convert_idc_statement_to_standard(raw_df)
         elif source == 'ASSOMPTION':
             standardized = self.convert_assomption_to_standard(raw_df)
 
         print(f"✅ Standardized to {len(standardized)} records")
 
-        # Step 3: Filter by sharing_rate (0.4) - SKIP for MONDAY_LEGACY
-        if source == 'MONDAY_LEGACY':
-            # Skip filtering for legacy Monday.com data - keep all records
+        # Step 3: Filter by sharing_rate (0.4) - SKIP for MONDAY_LEGACY and IDC_STATEMENT
+        if source in ['MONDAY_LEGACY', 'IDC_STATEMENT']:
+            # Skip filtering for legacy Monday.com data and IDC Statement (trailing fees)
             filtered = standardized
-            print(f"⏭️  Skipping sharing_rate filter for MONDAY_LEGACY source")
+            print(f"⏭️  Skipping sharing_rate filter for {source} source")
         else:
             filtered = self.filter_by_sharing_rate(standardized, target_rate=0.4)
 
-        # Step 4: Aggregate by contract_number - SKIP for MONDAY_LEGACY
-        if source == 'MONDAY_LEGACY':
-            # Skip aggregation for legacy Monday.com data - keep original structure
+        # Step 4: Aggregate by contract_number - SKIP for MONDAY_LEGACY, IDC_STATEMENT, or if aggregate_by_contract=False
+        if source in ['MONDAY_LEGACY', 'IDC_STATEMENT'] or not aggregate_by_contract:
+            # Skip aggregation if:
+            # - Source is MONDAY_LEGACY (preserve group structure)
+            # - Source is IDC_STATEMENT (each line is a unique trailing fee payment)
+            # - User explicitly disabled aggregation (aggregate_by_contract=False)
             aggregated = filtered
-            print(f"⏭️  Skipping aggregation for MONDAY_LEGACY source")
+            if source in ['MONDAY_LEGACY', 'IDC_STATEMENT']:
+                print(f"⏭️  Skipping aggregation for {source} source")
+            else:
+                print(f"⏭️  Skipping aggregation (aggregate_by_contract=False)")
         else:
             aggregated = self.aggregate_by_contract_number(filtered)
 

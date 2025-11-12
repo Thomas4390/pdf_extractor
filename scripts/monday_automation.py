@@ -451,6 +451,96 @@ class MondayClient:
         result = self._execute_query(query=query)
         return result['data']['boards'][0]['groups']
 
+    def extract_element_column(
+        self,
+        board_id: int,
+        group_id: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        Extract the 'Element' column (item names) from a Monday.com board.
+
+        This function is particularly useful for copying boards, as the 'Element' column
+        (item_name in the API) contains the primary identifier displayed in Monday.com.
+
+        Args:
+            board_id: The board ID to extract from
+            group_id: Optional group ID to filter by
+
+        Returns:
+            DataFrame with columns: item_id, element (item name), group_id, group_title
+
+        Example:
+            df = client.extract_element_column(board_id=18283488594)
+            # Returns DataFrame with element names that can be mapped to insured_name
+        """
+        # Construire la requete GraphQL
+        if group_id:
+            query = f"""
+            {{
+                boards(ids: {board_id}) {{
+                    id
+                    name
+                    groups(ids: ["{group_id}"]) {{
+                        id
+                        title
+                        items_page(limit: 500) {{
+                            items {{
+                                id
+                                name
+                                group {{
+                                    id
+                                    title
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+            """
+        else:
+            query = f"""
+            {{
+                boards(ids: {board_id}) {{
+                    id
+                    name
+                    items_page(limit: 500) {{
+                        items {{
+                            id
+                            name
+                            group {{
+                                id
+                                title
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+            """
+
+        # Executer la requete
+        result = self._execute_query(query=query)
+
+        board_data = result['data']['boards'][0]
+
+        # Extraire les items
+        if group_id and board_data.get('groups'):
+            items = board_data['groups'][0]['items_page']['items']
+        else:
+            items = board_data['items_page']['items']
+
+        # Creer le DataFrame
+        rows = []
+        for item in items:
+            row = {
+                'item_id': item['id'],
+                'element': item['name'],  # La colonne 'Element' (nom de l'item)
+                'group_id': item.get('group', {}).get('id'),
+                'group_title': item.get('group', {}).get('title')
+            }
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
     def list_items(
         self,
         board_id: int,
@@ -1169,7 +1259,30 @@ class DataProcessor:
                 column_title = (col_value['column']['title']
                               if col_value.get('column')
                               else col_value['id'])
-                cell_value = col_value['text'] or col_value['value']
+
+                # Extract cell value based on column type
+                col_type = col_value.get('type', '')
+
+                if col_type == 'formula':
+                    # For formula columns, use 'text' which contains the calculated value
+                    # If text is empty, try parsing the 'value' JSON
+                    if col_value.get('text'):
+                        cell_value = col_value['text']
+                    elif col_value.get('value'):
+                        # Parse JSON value for formula columns
+                        try:
+                            import json
+                            value_data = json.loads(col_value['value']) if isinstance(col_value['value'], str) else col_value['value']
+                            # Formula columns return {"value": "123.45"} or similar
+                            cell_value = value_data.get('value') if isinstance(value_data, dict) else str(value_data)
+                        except:
+                            cell_value = col_value['value']
+                    else:
+                        cell_value = None
+                else:
+                    # For other column types, use text or value
+                    cell_value = col_value['text'] or col_value['value']
+
                 row[column_title] = cell_value
 
             rows.append(row)
@@ -1193,7 +1306,30 @@ class DataProcessor:
                         column_title = (col_value['column']['title']
                                       if col_value.get('column')
                                       else col_value['id'])
-                        cell_value = col_value['text'] or col_value['value']
+
+                        # Extract cell value based on column type
+                        col_type = col_value.get('type', '')
+
+                        if col_type == 'formula':
+                            # For formula columns, use 'text' which contains the calculated value
+                            # If text is empty, try parsing the 'value' JSON
+                            if col_value.get('text'):
+                                cell_value = col_value['text']
+                            elif col_value.get('value'):
+                                # Parse JSON value for formula columns
+                                try:
+                                    import json
+                                    value_data = json.loads(col_value['value']) if isinstance(col_value['value'], str) else col_value['value']
+                                    # Formula columns return {"value": "123.45"} or similar
+                                    cell_value = value_data.get('value') if isinstance(value_data, dict) else str(value_data)
+                                except:
+                                    cell_value = col_value['value']
+                            else:
+                                cell_value = None
+                        else:
+                            # For other column types, use text or value
+                            cell_value = col_value['text'] or col_value['value']
+
                         subitem_row[column_title] = cell_value
 
                     rows.append(subitem_row)

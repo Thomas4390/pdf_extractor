@@ -161,6 +161,7 @@ def render_stage_1():
         Ce mode extrait les données de commissions depuis des fichiers PDF pour les sources:
         - **UV Assurance**: Rapports de rémunération
         - **IDC**: Rapports de propositions
+        - **IDC Statement**: Rapports de frais de suivi (trailing fees)
         - **Assomption Vie**: Rapports de rémunération
 
         Les données sont extraites, standardisées et prêtes à être uploadées vers Monday.com.
@@ -171,7 +172,7 @@ def render_stage_1():
             st.subheader("1️⃣ Source des Données PDF")
             source = st.selectbox(
                 "Sélectionnez la source d'assurance",
-                options=["UV", "IDC", "ASSOMPTION"],
+                options=["UV", "IDC", "IDC Statement", "ASSOMPTION"],
                 help="Type de document PDF à traiter"
             )
 
@@ -244,6 +245,17 @@ def render_stage_1():
 
             st.markdown("---")
 
+            # Data Processing Options
+            st.subheader("4️⃣ Options de Traitement")
+            aggregate_by_contract = st.checkbox(
+                "Agréger par numéro de contrat",
+                value=True,
+                help="Si coché, les lignes avec le même numéro de contrat seront agrégées (somme des montants, moyenne des taux). Décochez pour garder toutes les lignes séparées.",
+                key="pdf_aggregate_by_contract"
+            )
+
+            st.markdown("---")
+
             # Submit button
             submitted = st.form_submit_button(
                 "🚀 Extraire les données du PDF",
@@ -278,8 +290,11 @@ def render_stage_1():
 
                     # Create configuration
                     try:
+                        # Convert display name to enum value
+                        source_enum_value = source.replace(" ", "_").upper()
+
                         config = PipelineConfig(
-                            source=InsuranceSource(source),
+                            source=InsuranceSource(source_enum_value),
                             pdf_path=pdf_path,
                             month_group=month_group if month_group else None,
                             board_name=final_board_name,
@@ -287,6 +302,7 @@ def render_stage_1():
                             output_dir="./results",
                             reuse_board=reuse_board,
                             reuse_group=reuse_group,
+                            aggregate_by_contract=aggregate_by_contract,
                             source_board_id=None,
                             source_group_id=None
                         )
@@ -449,6 +465,17 @@ def render_stage_1():
 
             st.markdown("---")
 
+            # Data Processing Options
+            st.subheader("4️⃣ Options de Traitement")
+            aggregate_by_contract_legacy = st.checkbox(
+                "Agréger par numéro de contrat",
+                value=False,
+                help="Si coché, les lignes avec le même numéro de contrat seront agrégées (somme des montants, moyenne des taux). Normalement désactivé pour préserver la structure originale du board.",
+                key="legacy_aggregate_by_contract"
+            )
+
+            st.markdown("---")
+
             # Submit button
             submitted_legacy = st.form_submit_button(
                 "🔄 Convertir le Board Monday.com",
@@ -495,6 +522,7 @@ def render_stage_1():
                             output_dir="./results/monday_legacy",
                             reuse_board=reuse_board_legacy,
                             reuse_group=reuse_group_legacy,
+                            aggregate_by_contract=aggregate_by_contract_legacy,
                             source_board_id=int(source_board_id),
                             source_group_id=None  # Always extract ALL groups (entire board)
                         )
@@ -900,43 +928,67 @@ def render_stage_3():
 
                         progress_bar.progress(50)
 
-                        # Step 4: Upload data with real-time progress
+                        # Step 4: Upload data using pipeline method (handles sequential group creation)
                         status_text.text("Upload des données vers Monday.com...")
 
-                        # Prepare items for batch creation
-                        items_to_create = pipeline._prepare_monday_items(df)
-                        total_items = len(items_to_create)
+                        # Check if this is a Monday.com conversion with multiple groups
+                        is_monday_legacy = config.source == InsuranceSource.MONDAY_LEGACY
+                        has_groups = hasattr(pipeline, 'groups_to_create') and pipeline.groups_to_create
 
-                        # Upload in batches with progress updates
-                        batch_size = 10  # Upload 10 items at a time
-                        results = []
+                        if is_monday_legacy and has_groups:
+                            # Sequential group creation and upload
+                            total_groups = len(pipeline.groups_to_create)
 
-                        for i in range(0, total_items, batch_size):
-                            batch = items_to_create[i:i + batch_size]
-                            batch_num = (i // batch_size) + 1
-                            total_batches = (total_items + batch_size - 1) // batch_size
+                            # Execute step 4 which handles sequential group creation
+                            success_step4 = pipeline._step4_upload_to_monday()
 
-                            # Update status
-                            status_text.text(f"Upload vers Monday.com... ({i + len(batch)}/{total_items} items)")
+                            if not success_step4:
+                                st.error("❌ Échec de l'upload des données")
+                                return
 
-                            # Upload batch
-                            batch_results = pipeline.monday_client.create_items_batch(
-                                board_id=pipeline.board_id,
-                                items=batch,
-                                group_id=pipeline.group_id
-                            )
-                            results.extend(batch_results)
+                            # Get results from pipeline
+                            results = []
+                            if hasattr(pipeline, 'upload_results'):
+                                results = pipeline.upload_results
 
-                            # Update progress bar: 50% to 100%
-                            progress_percent = 50 + int(50 * (i + len(batch)) / total_items)
-                            progress_bar.progress(min(progress_percent, 100))
+                            progress_bar.progress(100)
+                            status_text.text(f"Upload terminé - {total_groups} groupes créés")
 
-                        progress_bar.progress(100)
+                        else:
+                            # Standard upload for PDF sources (single group)
+                            items_to_create = pipeline._prepare_monday_items(df)
+                            total_items = len(items_to_create)
+
+                            # Upload in batches with progress updates
+                            batch_size = 10
+                            results = []
+
+                            for i in range(0, total_items, batch_size):
+                                batch = items_to_create[i:i + batch_size]
+
+                                # Update status
+                                status_text.text(f"Upload vers Monday.com... ({i + len(batch)}/{total_items} items)")
+
+                                # Upload batch
+                                batch_results = pipeline.monday_client.create_items_batch(
+                                    board_id=pipeline.board_id,
+                                    items=batch,
+                                    group_id=pipeline.group_id
+                                )
+                                results.extend(batch_results)
+
+                                # Update progress bar: 50% to 100%
+                                progress_percent = 50 + int(50 * (i + len(batch)) / total_items)
+                                progress_bar.progress(min(progress_percent, 100))
+
+                            progress_bar.progress(100)
+
                         status_text.empty()
 
                         # Analyze results
                         successful = sum(1 for r in results if r.success)
                         failed = len(results) - successful
+                        total_uploaded = len(results)
 
                         if successful > 0:
                             st.session_state.upload_results = {
@@ -946,7 +998,7 @@ def render_stage_3():
                                 'items_uploaded': successful,
                                 'items_failed': failed
                             }
-                            st.success(f"✅ Upload réussi! ({successful}/{total_items} items)")
+                            st.success(f"✅ Upload réussi! ({successful}/{total_uploaded} items)")
                             if failed > 0:
                                 st.warning(f"⚠️ {failed} items ont échoué")
                             st.rerun()
@@ -1078,6 +1130,7 @@ def main():
         **Sources supportées:**
         - UV Assurance (PDF)
         - IDC (PDF)
+        - IDC Statement (PDF - Frais de suivi)
         - Assomption Vie (PDF)
         - Monday.com Legacy (conversion de board)
         """)

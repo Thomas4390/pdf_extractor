@@ -134,6 +134,7 @@ class InsuranceSource(Enum):
     """Enum for supported insurance sources."""
     UV = "UV"
     IDC = "IDC"
+    IDC_STATEMENT = "IDC_STATEMENT"
     ASSOMPTION = "ASSOMPTION"
     MONDAY_LEGACY = "MONDAY_LEGACY"
 
@@ -153,6 +154,7 @@ class PipelineConfig:
         output_dir: Directory for intermediate results
         reuse_board: Whether to reuse existing board with same name
         reuse_group: Whether to reuse existing group with same name
+        aggregate_by_contract: Whether to aggregate rows by contract_number (default: True)
         source_board_id: Board ID to extract from (required for MONDAY_LEGACY)
         source_group_id: Optional group ID to filter extraction (for MONDAY_LEGACY)
     """
@@ -170,6 +172,7 @@ class PipelineConfig:
     output_dir: str = "./results"
     reuse_board: bool = True
     reuse_group: bool = True
+    aggregate_by_contract: bool = True
 
     # Monday.com source configuration (for MONDAY_LEGACY)
     source_board_id: Optional[int] = None
@@ -182,7 +185,7 @@ class PipelineConfig:
             self.source = InsuranceSource(self.source)
 
         # Validate PDF path for PDF-based sources
-        if self.source in [InsuranceSource.UV, InsuranceSource.IDC, InsuranceSource.ASSOMPTION]:
+        if self.source in [InsuranceSource.UV, InsuranceSource.IDC, InsuranceSource.IDC_STATEMENT, InsuranceSource.ASSOMPTION]:
             if not self.pdf_path:
                 raise ValueError(f"PDF path is required for source: {self.source.value}")
             if not Path(self.pdf_path).exists():
@@ -332,7 +335,8 @@ class InsuranceCommissionPipeline:
                 # Process using the unified method with Monday.com DataFrame
                 self.final_data = self.data_unifier.process_source(
                     source=source,
-                    monday_df=monday_df
+                    monday_df=monday_df,
+                    aggregate_by_contract=self.config.aggregate_by_contract
                 )
 
             else:
@@ -342,7 +346,11 @@ class InsuranceCommissionPipeline:
 
                 # Use the unified process_source method from CommissionDataUnifier
                 # This handles extraction, standardization, filtering, and aggregation
-                self.final_data = self.data_unifier.process_source(source, pdf_path)
+                self.final_data = self.data_unifier.process_source(
+                    source,
+                    pdf_path,
+                    aggregate_by_contract=self.config.aggregate_by_contract
+                )
 
             # Check if data was processed
             if self.final_data is None or self.final_data.empty:
@@ -459,9 +467,10 @@ class InsuranceCommissionPipeline:
             # Handle groups based on source type
             if self.config.source == InsuranceSource.MONDAY_LEGACY:
                 # For MONDAY_LEGACY: preserve original group structure
-                ColorPrint.info("Detecting and creating groups from source board...")
+                # Groups will be created one by one during upload (after columns)
+                ColorPrint.info("Preparing group structure for sequential creation...")
 
-                # Get unique groups from the data
+                # Get unique groups from the data but don't create them yet
                 if 'group_title' in self.final_data.columns:
                     all_unique_groups = self.final_data['group_title'].dropna().unique()
 
@@ -469,43 +478,20 @@ class InsuranceCommissionPipeline:
                     unique_groups = [g for g in all_unique_groups if g != 'Group Title']
 
                     # Reverse the order to maintain correct display order in Monday.com
-                    # (Monday.com displays groups in reverse creation order)
                     unique_groups = list(reversed(unique_groups))
 
-                    ColorPrint.info(f"Found {len(unique_groups)} unique groups in source data (excluding default 'Group Title')")
-                    ColorPrint.info(f"Groups to create: {unique_groups}")
+                    ColorPrint.info(f"Found {len(unique_groups)} unique groups to create")
+                    ColorPrint.info(f"Groups will be created sequentially during upload")
 
-                    # Create each group in the new board
+                    # Store the list of groups to create but don't create them yet
+                    self.groups_to_create = unique_groups
                     self.group_mapping = {}
-                    ColorPrint.info(f"Starting group creation loop for {len(unique_groups)} groups...")
-                    for idx, group_title in enumerate(unique_groups):
-                        ColorPrint.info(f"[{idx+1}/{len(unique_groups)}] Creating/reusing group: {group_title}")
-
-                        try:
-                            group_result = self.monday_client.create_group(
-                                board_id=self.board_id,
-                                group_name=str(group_title),
-                                group_color="#0086c0",  # Blue color
-                                reuse_existing=self.config.reuse_group
-                            )
-
-                            if group_result.success:
-                                self.group_mapping[str(group_title)] = group_result.group_id
-                                ColorPrint.success(f"  ✓ Group '{group_title}' ready (ID: {group_result.group_id})")
-                            else:
-                                ColorPrint.warning(f"  ⚠️  Failed to create group '{group_title}': {group_result.error}")
-
-                        except Exception as e:
-                            ColorPrint.error(f"  ❌ Exception while creating group '{group_title}': {e}")
-                            import traceback
-                            traceback.print_exc()
-
-                    ColorPrint.success(f"Group structure preserved: {len(self.group_mapping)} groups created")
-                    self.group_id = None  # No single group, we'll use mapping
+                    self.group_id = None
                 else:
                     ColorPrint.warning("No group information found in source data")
-                    self.group_id = None
+                    self.groups_to_create = []
                     self.group_mapping = {}
+                    self.group_id = None
 
             elif self.config.month_group:
                 # For PDF sources: create or reuse single month group
@@ -625,16 +611,16 @@ class InsuranceCommissionPipeline:
                     ColorPrint.warning(f"Filtered out {filtered_count} rows with empty contract numbers")
 
             # Check if we need to preserve group structure (MONDAY_LEGACY)
-            if self.config.source == InsuranceSource.MONDAY_LEGACY and self.group_mapping:
-                ColorPrint.info(f"Uploading items by group to preserve structure...")
+            if self.config.source == InsuranceSource.MONDAY_LEGACY and hasattr(self, 'groups_to_create') and self.groups_to_create:
+                ColorPrint.info(f"Creating groups and uploading items sequentially...")
 
                 # Display detailed summary before upload
                 ColorPrint.section("RÉSUMÉ DES DONNÉES À TRANSFÉRER")
                 ColorPrint.info(f"📊 Total d'items à uploader: {len(self.final_data)}")
-                ColorPrint.info(f"📁 Nombre de groupes: {len(self.group_mapping)}")
+                ColorPrint.info(f"📁 Nombre de groupes: {len(self.groups_to_create)}")
 
                 # Display items per group
-                for group_title in self.group_mapping.keys():
+                for group_title in self.groups_to_create:
                     if 'group_title' in self.final_data.columns:
                         group_data = self.final_data[self.final_data['group_title'] == group_title]
                         if not group_data.empty:
@@ -658,63 +644,93 @@ class InsuranceCommissionPipeline:
 
                 results = []
 
-                # DEBUG: Show group mapping and data
-                ColorPrint.info(f"DEBUG - Group mapping keys: {list(self.group_mapping.keys())}")
-                if 'group_title' in self.final_data.columns:
-                    unique_in_data = self.final_data['group_title'].unique()
-                    ColorPrint.info(f"DEBUG - Unique group_title in data: {list(unique_in_data)}")
-                    ColorPrint.info(f"DEBUG - Group_title value counts:")
-                    for group, count in self.final_data['group_title'].value_counts().items():
-                        ColorPrint.info(f"  '{group}': {count} items")
+                # NOUVELLE APPROCHE: Créer groupe → Uploader items → Groupe suivant
+                for idx, group_title in enumerate(self.groups_to_create, 1):
+                    ColorPrint.info(f"\n{'='*60}")
+                    ColorPrint.info(f"[{idx}/{len(self.groups_to_create)}] Processing group: '{group_title}'")
+                    ColorPrint.info(f"{'='*60}")
 
-                # Upload items group by group
-                for group_title, group_id in self.group_mapping.items():
-                    # Skip default "Group Title" groups
-                    if group_title == 'Group Title':
+                    # STEP 1: Create the group
+                    ColorPrint.info(f"  → Step 1: Creating group '{group_title}'...")
+                    try:
+                        group_result = self.monday_client.create_group(
+                            board_id=self.board_id,
+                            group_name=str(group_title),
+                            group_color="#0086c0",  # Blue color
+                            reuse_existing=self.config.reuse_group
+                        )
+
+                        if not group_result.success:
+                            ColorPrint.error(f"  ✗ Failed to create group '{group_title}': {group_result.error}")
+                            continue
+
+                        group_id = group_result.group_id
+                        self.group_mapping[str(group_title)] = group_id
+                        ColorPrint.success(f"  ✓ Group created (ID: {group_id})")
+
+                        # Small delay to let Monday.com process the group creation
+                        import time
+                        time.sleep(0.5)
+
+                    except Exception as e:
+                        ColorPrint.error(f"  ✗ Exception creating group '{group_title}': {e}")
+                        import traceback
+                        traceback.print_exc()
                         continue
 
-                    # Filter data for this group
+                    # STEP 2: Filter data for this group
+                    ColorPrint.info(f"  → Step 2: Filtering items for group '{group_title}'...")
                     if 'group_title' in self.final_data.columns:
-                        ColorPrint.info(f"DEBUG - Filtering for group: '{group_title}' (group_id: {group_id})")
                         group_data = self.final_data[
                             self.final_data['group_title'] == group_title
                         ].copy()
 
-                        ColorPrint.info(f"DEBUG - Filtered {len(group_data)} items for group '{group_title}'")
+                        if group_data.empty:
+                            ColorPrint.warning(f"  ⚠️  No items found for group '{group_title}'")
+                            continue
 
-                        if not group_data.empty:
-                            ColorPrint.info(f"  Uploading {len(group_data)} items to group '{group_title}'...")
+                        ColorPrint.info(f"  ✓ Found {len(group_data)} items")
 
-                            # Prepare items for this group
-                            items_to_create = self._prepare_monday_items(group_data)
+                        # STEP 3: Upload items to THIS group IMMEDIATELY
+                        ColorPrint.info(f"  → Step 3: Uploading {len(group_data)} items to group '{group_title}'...")
 
-                            # Upload items to this specific group
-                            group_results = self.monday_client.create_items_batch(
-                                board_id=self.board_id,
-                                items=items_to_create,
-                                group_id=group_id
-                            )
-                            results.extend(group_results)
-                            ColorPrint.success(f"  ✓ Uploaded {len(group_results)} items to '{group_title}'")
+                        # Prepare items for this group
+                        items_to_create = self._prepare_monday_items(group_data)
 
-                # Handle items from default "Group Title" group separately
-                if 'group_title' in self.final_data.columns:
-                    default_group_items = self.final_data[
-                        self.final_data['group_title'] == 'Group Title'
-                    ].copy()
-
-                    if not default_group_items.empty:
-                        ColorPrint.info(f"  Uploading {len(default_group_items)} items from default 'Group Title' group...")
-                        items_to_create = self._prepare_monday_items(default_group_items)
-
-                        # Upload without specifying group (will go to default group)
-                        default_results = self.monday_client.create_items_batch(
+                        # Upload items to this specific group
+                        group_results = self.monday_client.create_items_batch(
                             board_id=self.board_id,
                             items=items_to_create,
-                            group_id=None
+                            group_id=group_id
                         )
-                        results.extend(default_results)
-                        ColorPrint.success(f"  ✓ Uploaded {len(default_results)} items to default group")
+                        results.extend(group_results)
+
+                        successful = sum(1 for r in group_results if r.success)
+                        ColorPrint.success(f"  ✓ Uploaded {successful}/{len(group_results)} items to group '{group_title}'")
+
+                        if successful < len(group_results):
+                            failed = len(group_results) - successful
+                            ColorPrint.warning(f"  ⚠️  {failed} items failed to upload")
+
+                ColorPrint.success(f"\n✅ All groups processed: {len(self.group_mapping)} groups created")
+
+                # Handle items from default "Group Title" group separately
+                default_group_items = self.final_data[
+                    self.final_data['group_title'] == 'Group Title'
+                ].copy()
+
+                if not default_group_items.empty:
+                    ColorPrint.info(f"\n  Uploading {len(default_group_items)} items from default 'Group Title' group...")
+                    items_to_create = self._prepare_monday_items(default_group_items)
+
+                    # Upload without specifying group (will go to default group)
+                    default_results = self.monday_client.create_items_batch(
+                        board_id=self.board_id,
+                        items=items_to_create,
+                        group_id=None
+                    )
+                    results.extend(default_results)
+                    ColorPrint.success(f"  ✓ Uploaded {len(default_results)} items to default group")
 
             else:
                 # Standard upload (PDF sources or no groups)
@@ -747,6 +763,9 @@ class InsuranceCommissionPipeline:
                 for i, result in enumerate(results):
                     if not result.success and i < 3:
                         ColorPrint.warning(f"Failed item: {result.error}")
+
+            # Store results for access by app.py
+            self.upload_results = results
 
             return successful > 0
 
@@ -928,6 +947,18 @@ def create_assomption_config(api_key: str) -> PipelineConfig:
         board_name="Commissions Assomption",
         monday_api_key=api_key,
         output_dir="./results/assomption"
+    )
+
+
+def create_idc_statement_config(api_key: str) -> PipelineConfig:
+    """Create configuration for IDC Statement (trailing fees) processing."""
+    return PipelineConfig(
+        source=InsuranceSource.IDC_STATEMENT,
+        pdf_path="../pdf/Statements (8).pdf",
+        month_group="Octobre 2025",
+        board_name="Frais de suivi IDC",
+        monday_api_key=api_key,
+        output_dir="./results/idc_statement"
     )
 
 

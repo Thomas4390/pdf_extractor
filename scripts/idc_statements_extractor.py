@@ -41,6 +41,8 @@ class TrailingFeeRecord:
     date: str
     gross_trailing_fee: str
     net_trailing_fee: str
+    advisor_name: str = None  # Extracted from complex cases
+    on_commission_rate: float = None  # Extracted from complex cases
 
 
 class PDFStatementParser:
@@ -273,6 +275,449 @@ class PDFStatementParser:
 
         return None
 
+    def _clean_client_name(self, client_name: str) -> str:
+        """
+        Clean client name by removing parentheses content, 'crt' keyword, and commas.
+
+        Args:
+            client_name: Raw client name with metadata
+
+        Returns:
+            Cleaned client name
+        """
+        if not client_name:
+            return client_name
+
+        # Remove content in parentheses along with the parentheses and preceding space
+        cleaned = re.sub(r'\s*\([^)]*\)', '', client_name)
+
+        # Remove 'crt' keyword if present
+        cleaned = cleaned.replace(' crt ', ' ').replace('_crt_', '_').replace('_crt', '')
+
+        # Remove commas
+        cleaned = cleaned.replace(',', '')
+
+        return cleaned.strip()
+
+    def _is_only_metadata(self, client_name: str) -> bool:
+        """
+        Check if client name contains only metadata patterns and no actual client name.
+
+        Metadata patterns include:
+        - Company patterns: Assomption_..., Beneva_..., Manuvie-..., etc.
+        - Account patterns: #... or _crt
+        - Date patterns: 2025-..., _2025-...
+        - Advisor patterns: Senhaji_..., etc. after _crt
+        - Rate patterns: 75%, 75 %
+
+        Args:
+            client_name: Client name to check
+
+        Returns:
+            True if the name contains only metadata, False if it has actual client content
+        """
+        if not client_name or client_name == "Unknown":
+            return True
+
+        # Remove all known metadata patterns and check if anything remains
+        test_name = client_name
+
+        # Remove company prefixes with underscores and optional rate
+        # Patterns: Assomption_18456_75, Assomption_8055_75%, Beneva_925800, etc.
+        test_name = re.sub(r'\b(Assomption|Asomption|Beneva|Manuvie|IA|RBC|UV|iA)_[0-9_]+(%)?', '', test_name)
+
+        # Remove account number patterns after # (including _crt suffix)
+        test_name = re.sub(r'#[A-Z0-9]+(_crt)?', '', test_name)
+
+        # Remove advisor name patterns (name after _crt followed by date)
+        # Patterns: Senhaji_2025-10-01-EZ, St- Pierre_2025-10-01-EZ, Poirier M_2025-10-10-EZ
+        test_name = re.sub(r'[A-Z][a-z]+(-\s?)?([A-Z]?[a-z]*)?_?\d{4}-\d{2}-\d{2}[-A-Z]*', '', test_name)
+
+        # Remove standalone rate patterns
+        test_name = re.sub(r'\b\d+\s*%', '', test_name)
+
+        # Remove date patterns
+        test_name = re.sub(r'\d{4}-\d{2}-\d{2}', '', test_name)
+
+        # Remove special characters and whitespace
+        test_name = re.sub(r'[_%#\-\s]+', '', test_name)
+
+        # If nothing substantial remains, it's only metadata
+        return len(test_name) == 0
+
+    def _extract_company_after_special_char(self, tokens: List[str]) -> Optional[str]:
+        """
+        Extract company name from metadata patterns.
+        Handles four cases:
+        1. After 'Â': Â Beneva_... → extract "Beneva"
+        2. First token with underscore: Asomption_8055_75% → extract "Asomption"
+        3. First token is company name: RBC, UV → extract directly
+        4. Manuvie pattern: 1305-Manuvie-32570-... → extract "Manuvie"
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Company name or None
+        """
+        # Case 1: After 'Â' marker
+        for i, token in enumerate(tokens):
+            if token in ["Â", "â", "Ã"]:
+                if i + 1 < len(tokens):
+                    next_token = tokens[i + 1]
+                    # Extract company name until '_' or space
+                    company = next_token.split('_')[0].split()[0]
+
+                    # Normalize company names
+                    if company.lower() in ['asomption', 'assomption']:
+                        return 'Assomption'
+                    elif company.lower() == 'beneva':
+                        return 'Beneva'
+                    elif company.lower() == 'ia':
+                        return 'IA'
+                    elif company.lower() == 'rbc':
+                        return 'RBC'
+                    elif company.lower() == 'uv':
+                        return 'UV'
+                    elif company.lower() == 'manuvie':
+                        return 'Manuvie'
+                    else:
+                        return company
+
+        # Case 4: Check for Manuvie pattern first (CODE-Manuvie-...)
+        # Pattern: "1305-Manuvie-32570-2025-10-07-643334-El"
+        for token in tokens:
+            if '-Manuvie-' in token or token.startswith('Manuvie-') or '-Manuvie' in token:
+                return 'Manuvie'
+
+        # Case 2: First token contains company_CODE_RATE% pattern
+        if tokens:
+            first_token = tokens[0]
+            # Pattern: "Asomption_8055_75%" or "Beneva_925800"
+            if '_' in first_token:
+                company = first_token.split('_')[0]
+
+                # Normalize company names
+                if company.lower() in ['asomption', 'assomption']:
+                    return 'Assomption'
+                elif company.lower() == 'beneva':
+                    return 'Beneva'
+                elif company.lower() == 'ia':
+                    return 'IA'
+                elif company.lower() == 'rbc':
+                    return 'RBC'
+                elif company.lower() == 'uv':
+                    return 'UV'
+                elif company.lower() == 'manuvie':
+                    return 'Manuvie'
+                # Only return if it's a known company pattern
+                elif company and company[0].isupper():
+                    return company
+
+            # Case 3: First token is directly a known company (RBC, UV)
+            # Pattern: "RBC 41613 2025-10-24 boni 70% #N894713"
+            else:
+                company = first_token.strip()
+                if company.lower() in ['asomption', 'assomption']:
+                    return 'Assomption'
+                elif company.lower() == 'beneva':
+                    return 'Beneva'
+                elif company.lower() == 'ia':
+                    return 'IA'
+                elif company.lower() == 'rbc':
+                    return 'RBC'
+                elif company.lower() == 'uv':
+                    return 'UV'
+                elif company.lower() == 'manuvie':
+                    return 'Manuvie'
+
+        return None
+
+    def _extract_commission_rate(self, tokens: List[str]) -> Optional[float]:
+        """
+        Extract commission rate from pattern before '%'.
+        Examples:
+        - 75% → 0.75
+        - "75 %" → 0.75
+        - "Assomption_18456_75 %" → 0.75
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Commission rate as float (0.75 for 75%) or None
+        """
+        for i, token in enumerate(tokens):
+            # Pattern 1: "75%" (rate and % together)
+            match = re.search(r'(\d+)%', token)
+            if match:
+                return float(match.group(1)) / 100
+
+            # Pattern 2: "75 %" or "Assomption_18456_75 %" (rate and % separate)
+            if token == '%' and i > 0:
+                prev_token = tokens[i - 1]
+                # Try to extract digits from end of previous token
+                # Handle cases like "75", "Assomption_18456_75", etc.
+                rate_match = re.search(r'(\d+)$', prev_token)
+                if rate_match:
+                    return float(rate_match.group(1)) / 100
+
+        return None
+
+    def _extract_account_number_from_hash(self, tokens: List[str]) -> Optional[str]:
+        """
+        Extract account number after '#'.
+        Handles multiple formats:
+        - "#1012274-CLIENT" or "#1012274" or "#N894713" (alphanumeric)
+        - "#1006493-" (ends with dash)
+        - "# 1012274"
+        - "75%#016529104" (Beneva case)
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Account number or None
+        """
+        for i, token in enumerate(tokens):
+            # Pattern 1: "#1012274-CLIENT" or "#1012274" or "#N894713"
+            if token.startswith('#'):
+                account = token[1:]  # Remove the #
+                # Remove client name after '-' if present
+                if '-' in account:
+                    account = account.split('-')[0]
+                # Remove 'crt' suffix if present
+                if '_crt' in account:
+                    account = account.split('_crt')[0]
+                # Extract alphanumeric account (letters and digits)
+                account = re.match(r'^([A-Z0-9]+)', account)
+                if account:
+                    return account.group(1)
+
+            # Pattern 2: "# 1012274" (separate tokens)
+            elif token == '#' and i + 1 < len(tokens):
+                next_token = tokens[i + 1]
+                # Account might have '-' separator
+                if '-' in next_token:
+                    return next_token.split('-')[0]
+                # Extract alphanumeric account
+                account = re.match(r'^([A-Z0-9]+)', next_token)
+                if account:
+                    return account.group(1)
+
+            # Pattern 3: "75%#016529104" (# in middle of token - Beneva case)
+            elif '#' in token:
+                # Extract everything after '#'
+                parts = token.split('#', 1)
+                if len(parts) > 1:
+                    account = parts[1]
+                    # Remove client name after '-' if present
+                    if '-' in account:
+                        account = account.split('-')[0]
+                    # Remove 'crt' suffix if present
+                    if '_crt' in account:
+                        account = account.split('_crt')[0]
+                    # Extract alphanumeric account
+                    account = re.match(r'^([A-Z0-9]+)', account)
+                    if account:
+                        return account.group(1)
+
+        return None
+
+    def _extract_advisor_name(self, tokens: List[str]) -> Optional[str]:
+        """
+        Extract advisor name after 'crt' until '_' or 'clt'.
+        Handles two cases:
+        1. Separate token: "crt Lussier T_..."
+        2. Suffix: "...FANGUE_crt Senhaji_..."
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Advisor name or None
+        """
+        for i, token in enumerate(tokens):
+            # Case 1: 'crt' as separate token
+            if token == 'crt':
+                # Collect tokens until '_' or 'clt' or end of reasonable length
+                advisor_parts = []
+                j = i + 1
+                while j < len(tokens) and j < i + 5:  # Max 4 tokens for name
+                    next_token = tokens[j]
+
+                    # Stop at separators
+                    if next_token in ['clt', '_'] or next_token.startswith('_') or next_token.endswith('_'):
+                        break
+
+                    # Stop at dates (tokens that start with dates)
+                    if re.match(r'^\d{4}-\d{2}-\d{2}', next_token):
+                        break
+
+                    # Check if token contains date after underscore (e.g., "M_2025-10-10-EZ")
+                    # This handles IA cases where advisor name is like "Poirier," "M_2025-10-10-EZ"
+                    if '_' in next_token:
+                        token_parts = next_token.split('_')
+                        # Check if any part after '_' starts with a date
+                        has_date_after_underscore = any(re.match(r'^\d{4}-\d{2}-\d{2}', part) for part in token_parts[1:])
+
+                        if has_date_after_underscore:
+                            # Extract only the part before the date
+                            clean_part = token_parts[0].rstrip(',').strip()
+                            if clean_part:
+                                advisor_parts.append(clean_part)
+                            # Stop here - don't continue collecting
+                            break
+
+                    # Add to advisor name
+                    clean_token = next_token.rstrip('_').rstrip(',').strip()
+                    if clean_token:
+                        advisor_parts.append(clean_token)
+                    j += 1
+
+                if advisor_parts:
+                    advisor_name = ' '.join(advisor_parts)
+                    advisor_name = advisor_name.replace('_', ' ').replace(',', '')
+                    return advisor_name.strip()
+
+            # Case 2: 'crt' as suffix in token (e.g., "#1012274-FANGUE_crt" or "MORNEAU_crt")
+            elif token.endswith('_crt') and i + 1 < len(tokens):
+                # Collect advisor name tokens (can be multiple: "Lussier," "T_2025...")
+                advisor_parts = []
+                j = i + 1
+                while j < len(tokens) and j < i + 5:  # Max 4 tokens for name
+                    next_token = tokens[j]
+
+                    # Stop at separators
+                    if next_token in ['clt', '_']:
+                        break
+
+                    # Stop at dates (including tokens that start with dates)
+                    if re.match(r'^\d{4}-\d{2}-\d{2}', next_token):
+                        break
+
+                    # Check if token contains date after underscore (e.g., "T_2025-10-24-EZ")
+                    token_parts = next_token.split('_')
+                    clean_part = token_parts[0]
+
+                    # Remove trailing punctuation (comma, etc.)
+                    clean_part = clean_part.rstrip(',').strip()
+
+                    if clean_part:
+                        advisor_parts.append(clean_part)
+
+                    # If this token ends with '_' or contains a date, stop
+                    if next_token.endswith('_') or any(re.match(r'^\d{4}', part) for part in token_parts[1:]):
+                        break
+
+                    j += 1
+
+                if advisor_parts:
+                    advisor_name = ' '.join(advisor_parts)
+                    # Clean up any remaining commas and underscores
+                    advisor_name = advisor_name.replace('_', ' ').replace(',', '').strip()
+                    return advisor_name
+
+        return None
+
+    def _extract_client_name_from_clt(self, tokens: List[str]) -> Optional[str]:
+        """
+        Extract client name after 'clt' until 'Unknown' or company keyword.
+        Example: "clt Ismael Tuguhore Unknown" → "Ismael Tuguhore"
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Client name or None
+        """
+        for i, token in enumerate(tokens):
+            if token == 'clt':
+                # Collect tokens until 'Unknown' or company keyword
+                client_parts = []
+                j = i + 1
+                while j < len(tokens) and j < i + 10:  # Max 10 tokens for client name
+                    next_token = tokens[j]
+
+                    # Stop at separators
+                    if next_token in ['Unknown', 'WS', 'Assurance'] or next_token in self.COMPANY_KEYWORDS:
+                        break
+
+                    client_parts.append(next_token)
+                    j += 1
+
+                if client_parts:
+                    return ' '.join(client_parts).strip()
+
+        return None
+
+    def _extract_manuvie_info(self, tokens: List[str]) -> Optional[dict]:
+        """
+        Extract information from Manuvie pattern.
+        Format: CODE-Manuvie-PRODUIT-DATE-COMPTE-CLIENT-CONSEILLER
+        Example: "1305-Manuvie-32570-2025-10-07-643334-El Hajji-DL"
+
+        This can span multiple tokens due to spaces.
+
+        Args:
+            tokens: List of tokens to search
+
+        Returns:
+            Dict with account_number, client_name, advisor_name or None
+        """
+        # Find token containing Manuvie pattern
+        for i, token in enumerate(tokens):
+            if '-Manuvie-' in token or token.startswith('Manuvie-'):
+                # Reconstruct the full string by joining this and following tokens
+                # until we find a date pattern or run out of tokens
+                full_string = token
+                j = i + 1
+                # Join subsequent tokens that look like they're part of the Manuvie line
+                while j < len(tokens) and j < i + 5:
+                    next_token = tokens[j]
+                    # Stop if we hit a separator or known keyword
+                    if next_token in ['Unknown', 'WS', 'Assurance'] or next_token in self.COMPANY_KEYWORDS:
+                        break
+                    # Add the next token with space
+                    full_string += ' ' + next_token
+                    j += 1
+
+                # Split by '-' to extract fields
+                parts = full_string.split('-')
+                if len(parts) >= 7:
+                    # parts[0]: code
+                    # parts[1]: Manuvie
+                    # parts[2]: product
+                    # parts[3-5]: date (2025-10-07)
+                    # parts[6]: account number
+                    # parts[7+]: client and advisor
+
+                    account_number = parts[6].strip()
+
+                    # Client name and advisor: combine remaining parts
+                    # Last part is advisor, everything in between is client
+                    remaining = parts[7:]
+                    if len(remaining) >= 2:
+                        # Last part is advisor
+                        advisor_name = remaining[-1].strip()
+                        # Everything else is client name
+                        client_name = '-'.join(remaining[:-1]).strip()
+                    elif len(remaining) == 1:
+                        # Only one part - could be client or advisor
+                        client_name = remaining[0].strip()
+                        advisor_name = None
+                    else:
+                        client_name = None
+                        advisor_name = None
+
+                    return {
+                        'account_number': account_number,
+                        'client_name': client_name,
+                        'advisor_name': advisor_name
+                    }
+
+        return None
+
     def _extract_data_row(self, start_idx: int) -> Optional[Tuple[TrailingFeeRecord, int]]:
         """
         Extract a single data row starting from given index.
@@ -306,6 +751,11 @@ class PDFStatementParser:
             while idx < len(self.all_tokens):
                 token, _ = self.all_tokens[idx]
 
+                # CRITICAL FIX: Stop at next 'Â' (start of next record)
+                # This prevents collecting tokens from multiple records
+                if token in ["Â", "â", "Ã"]:
+                    break
+
                 # Check if we hit end markers
                 if token in ["Rapport", "Total", "Printed", "Fonds"]:
                     break
@@ -324,8 +774,8 @@ class PDFStatementParser:
                 all_tokens_collected.append(token)
                 idx += 1
 
-                # Safety: collect up to 120 tokens
-                if len(all_tokens_collected) > 120:
+                # Safety: collect up to 50 tokens per record (reduced from 120)
+                if len(all_tokens_collected) > 50:
                     break
 
             if not all_tokens_collected:
@@ -515,6 +965,82 @@ class PDFStatementParser:
                 net_trailing_fee=net_fee
             )
 
+            # Phase 6: Clean and extract metadata from complex cases
+            # Check if this is a Manuvie case first (special handling)
+            is_manuvie = any('-Manuvie-' in token or token.startswith('Manuvie-') for token in all_tokens_collected)
+            if is_manuvie:
+                manuvie_info = self._extract_manuvie_info(all_tokens_collected)
+                if manuvie_info:
+                    record.company = 'Manuvie'
+                    if manuvie_info['account_number']:
+                        record.account_number = manuvie_info['account_number']
+                    if manuvie_info['client_name']:
+                        record.client_name = manuvie_info['client_name']
+                    if manuvie_info['advisor_name']:
+                        record.advisor_name = manuvie_info['advisor_name']
+            else:
+                # Check if this is a complex case (contains metadata patterns)
+                is_complex = (any(marker in all_tokens_collected for marker in ['Â', 'â', 'Ã', 'crt', 'clt']) or
+                             any('#' in token for token in all_tokens_collected))
+                if is_complex:
+                    # Extract company name from metadata (this might overwrite existing company)
+                    extracted_company = self._extract_company_after_special_char(all_tokens_collected)
+                    if extracted_company:
+                        record.company = extracted_company
+
+                    # Extract commission rate
+                    extracted_rate = self._extract_commission_rate(all_tokens_collected)
+                    if extracted_rate:
+                        record.on_commission_rate = extracted_rate
+
+                    # Extract account number from # pattern (if current account is "Unknown")
+                    if record.account_number == "Unknown":
+                        extracted_account = self._extract_account_number_from_hash(all_tokens_collected)
+                        if extracted_account:
+                            record.account_number = extracted_account
+
+                    # Extract advisor name
+                    extracted_advisor = self._extract_advisor_name(all_tokens_collected)
+                    if extracted_advisor:
+                        record.advisor_name = extracted_advisor
+
+                    # Extract client name from 'clt' pattern if present
+                    extracted_client_from_clt = self._extract_client_name_from_clt(all_tokens_collected)
+                    if extracted_client_from_clt:
+                        record.client_name = extracted_client_from_clt
+                    # Otherwise, if client name has '-' after account number, extract client name
+                    elif '-' in record.client_name:
+                        # Pattern 1: #account-CLIENT_... (client in same token)
+                        # Pattern 2: #account- then CLIENT_crt in next token
+                        for i, token in enumerate(all_tokens_collected):
+                            if token.startswith('#') and '-' in token:
+                                parts = token.split('-', 1)
+                                if len(parts) > 1 and parts[1]:
+                                    # Pattern 1: Client name is in same token
+                                    client_part = parts[1].split('_')[0]  # Remove trailing metadata
+                                    if client_part:
+                                        record.client_name = client_part
+                                        break
+                                elif len(parts) > 1 and not parts[1]:
+                                    # Pattern 2: Token ends with '-', client is in next token
+                                    # Example: '#1006493-' then 'TOUZOUHOULIA_crt'
+                                    if i + 1 < len(all_tokens_collected):
+                                        next_token = all_tokens_collected[i + 1]
+                                        # Extract client name before '_crt'
+                                        client_part = next_token.split('_crt')[0].split('_')[0]
+                                        if client_part:
+                                            record.client_name = client_part
+                                            break
+
+            # Clean client name (remove parentheses, 'crt' keyword, and commas)
+            record.client_name = self._clean_client_name(record.client_name)
+
+            # Check if client name contains only metadata (no actual client name)
+            # This handles cases like "Assomption_18456_75 % #1012264_crt Senhaji_2025-10-01-EZ"
+            # where there's no real client name, only metadata
+            if self._is_only_metadata(record.client_name):
+                record.client_name = "Unknown"
+
             return record, idx
 
         except (IndexError, ValueError) as e:
@@ -588,7 +1114,9 @@ class PDFStatementParser:
                         'Produit': record.product,
                         'Date': record.date,
                         'Frais de suivi brut': record.gross_trailing_fee,
-                        'Frais de suivi nets': record.net_trailing_fee
+                        'Frais de suivi nets': record.net_trailing_fee,
+                        'Nom du conseiller': record.advisor_name,
+                        'Taux sur-commission': record.on_commission_rate
                     })
                     idx = next_idx
                     attempts_without_success = 0
@@ -602,7 +1130,8 @@ class PDFStatementParser:
 
         columns = [
             'Nom du client', 'Numéro de compte', 'Compagnie', 'Produit',
-            'Date', 'Frais de suivi brut', 'Frais de suivi nets'
+            'Date', 'Frais de suivi brut', 'Frais de suivi nets',
+            'Nom du conseiller', 'Taux sur-commission'
         ]
 
         df = pd.DataFrame(records, columns=columns)
@@ -686,7 +1215,7 @@ class PDFStatementParser:
 
 if __name__ == "__main__":
     # Example usage - modify the path to your actual PDF
-    pdf_path = "../pdf/Statements (8).pdf"
+    pdf_path = "../pdf/Statements (5).pdf"
 
     if not os.path.exists(pdf_path):
         print(f"Error: PDF file not found at {pdf_path}")
