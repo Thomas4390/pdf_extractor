@@ -25,6 +25,7 @@ from main import (
     InsuranceSource,
     ColorPrint
 )
+from unify_notation import BoardType
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -74,6 +75,10 @@ def init_session_state():
 
     if 'selected_board_id' not in st.session_state:
         st.session_state.selected_board_id = None
+
+    # Global Monday.com API Key
+    if 'monday_api_key' not in st.session_state:
+        st.session_state.monday_api_key = None
 
 
 # =============================================================================
@@ -167,9 +172,84 @@ def render_stage_1():
         Les données sont extraites, standardisées et prêtes à être uploadées vers Monday.com.
         """)
 
+        st.markdown("---")
+
+        # Load boards section (outside form) - More prominent
+        st.subheader("3️⃣ Chargement des Boards Monday.com")
+
+        # Get API key from session state
+        pdf_monday_api_key = st.session_state.monday_api_key
+
+        if pdf_monday_api_key:
+            st.info("""
+            **📋 Gestion des Boards**
+
+            Chargez vos boards Monday.com pour pouvoir sélectionner un board existant
+            ou vérifier les boards disponibles avant d'en créer un nouveau.
+            """)
+
+            col_load, col_status, col_refresh = st.columns([1, 2, 1])
+
+            with col_load:
+                load_boards_btn_pdf = st.button(
+                    "📥 Charger mes boards",
+                    use_container_width=True,
+                    type="primary",
+                    key="pdf_load_boards_btn"
+                )
+
+            with col_status:
+                if st.session_state.monday_boards is not None:
+                    st.success(f"✅ {len(st.session_state.monday_boards)} boards disponibles")
+                else:
+                    st.info("ℹ️ Cliquez pour charger vos boards")
+
+            with col_refresh:
+                if st.session_state.monday_boards is not None:
+                    if st.button("🔄 Rafraîchir", use_container_width=True, key="pdf_refresh_boards"):
+                        st.session_state.monday_boards = None
+                        st.rerun()
+
+            # Load boards when button clicked
+            if load_boards_btn_pdf:
+                try:
+                    from monday_automation import MondayClient
+
+                    with st.spinner("Chargement de vos boards Monday.com..."):
+                        client = MondayClient(api_key=pdf_monday_api_key)
+                        boards = client.list_boards()
+
+                        # Store in session state
+                        st.session_state.monday_boards = boards
+
+                        st.success(f"✅ {len(boards)} boards chargés avec succès!")
+                        st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Erreur lors du chargement des boards: {e}")
+                    st.session_state.monday_boards = None
+        else:
+            st.warning("⚠️ **Veuillez d'abord entrer votre clé API Monday.com dans la barre latérale** pour pouvoir charger vos boards.")
+
+        st.markdown("---")
+
+        # Board Selection Mode (outside form so it's reactive)
+        st.subheader("4️⃣ Sélection du Board")
+
+        # Choose between new or existing board
+        board_mode = st.radio(
+            "Mode de sélection du board",
+            options=["Créer un nouveau board", "Utiliser un board existant"],
+            index=1,  # Default to "Utiliser un board existant"
+            help="Choisissez si vous voulez créer un nouveau board ou utiliser un board existant",
+            key="pdf_board_mode"
+        )
+
+        st.markdown("---")
+
         with st.form("pdf_extraction_form"):
             # Source Selection
-            st.subheader("1️⃣ Source des Données PDF")
+            st.subheader("5️⃣ Source des Données PDF")
             source = st.selectbox(
                 "Sélectionnez la source d'assurance",
                 options=["UV", "IDC", "IDC Statement", "ASSOMPTION"],
@@ -179,7 +259,7 @@ def render_stage_1():
             st.markdown("---")
 
             # PDF Upload
-            st.subheader("2️⃣ Upload du PDF")
+            st.subheader("6️⃣ Upload du PDF")
             uploaded_file = st.file_uploader(
                 "Déposez ou sélectionnez votre fichier PDF",
                 type=['pdf'],
@@ -192,61 +272,140 @@ def render_stage_1():
 
             st.markdown("---")
 
-            # Monday.com Configuration
-            st.subheader("3️⃣ Configuration Monday.com")
+            # Board Configuration (content depends on board_mode selected above)
+            st.subheader("7️⃣ Configuration du Board")
 
-            col1, col2 = st.columns(2)
+            selected_board_id_pdf = None
+            board_name_input = None
 
-            with col1:
-                monday_api_key = st.text_input(
-                    "Clé API Monday.com",
-                    type="password",
-                    help="Votre clé API Monday.com pour l'authentification",
-                    key="pdf_monday_api_key"
-                )
+            if board_mode == "Créer un nouveau board":
+                # New board mode
+                st.info("""
+                **📝 Mode Nouveau Board**
 
-                board_name_input = st.text_input(
-                    "Nom du Board",
-                    placeholder=f"Ex: Commissions {source}",
-                    help="Nom du board Monday.com (sera créé s'il n'existe pas). Laissez vide pour utiliser le nom par défaut.",
-                    key="pdf_board_name"
-                )
+                Créez un nouveau board Monday.com ou réutilisez un board existant avec le même nom.
+                """)
 
-                # Show what will be used
-                if board_name_input and board_name_input.strip():
-                    st.caption(f"📋 Nom du board: **{board_name_input.strip()}**")
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    board_name_input = st.text_input(
+                        "Nom du Nouveau Board",
+                        placeholder=f"Ex: Commissions {source}",
+                        help="Nom du board Monday.com qui sera créé. Laissez vide pour utiliser le nom par défaut.",
+                        key="pdf_board_name"
+                    )
+
+                    # Show what will be used
+                    if board_name_input and board_name_input.strip():
+                        st.caption(f"📋 Nom du board: **{board_name_input.strip()}**")
+                    else:
+                        st.caption(f"📋 Nom par défaut sera utilisé: **Commissions {source}**")
+
+                with col2:
+                    col_reuse1, col_reuse2 = st.columns(2)
+                    with col_reuse1:
+                        reuse_board = st.checkbox(
+                            "Réutiliser si existe",
+                            value=True,
+                            help="Si coché, utilisera le board existant avec le même nom au lieu d'en créer un nouveau",
+                            key="pdf_reuse_board"
+                        )
+                    with col_reuse2:
+                        reuse_group = st.checkbox(
+                            "Réutiliser groupe",
+                            value=True,
+                            help="Si coché, utilisera le groupe existant avec le même nom",
+                            key="pdf_reuse_group"
+                        )
+
+            else:
+                # Existing board mode
+                if st.session_state.monday_boards is not None and len(st.session_state.monday_boards) > 0:
+                    st.success(f"✅ {len(st.session_state.monday_boards)} boards disponibles pour sélection")
+
+                    # Create options with board name and ID
+                    board_options = {
+                        f"{board['name']} (ID: {board['id']})": board['id']
+                        for board in st.session_state.monday_boards
+                    }
+
+                    selected_board_option = st.selectbox(
+                        "Sélectionnez le board où uploader les données",
+                        options=list(board_options.keys()),
+                        help="Choisissez le board où les données PDF seront uploadées",
+                        key="pdf_selected_board"
+                    )
+
+                    # Get the board ID and name from selection
+                    selected_board_id_pdf = board_options[selected_board_option]
+
+                    # Extract board name from the selected board
+                    selected_board = next(b for b in st.session_state.monday_boards if b['id'] == selected_board_id_pdf)
+                    board_name_input = selected_board['name']
+
+                    # Show board info in an expander
+                    with st.expander("ℹ️ Détails du board sélectionné", expanded=False):
+                        st.write(f"**Nom du board:** {board_name_input}")
+                        st.write(f"**ID du board:** {selected_board_id_pdf}")
+                        st.write(f"**Type:** {selected_board.get('board_kind', 'N/A')}")
+                        st.write(f"**État:** {selected_board.get('state', 'N/A')}")
+
+                    # Force reuse_board and reuse_group to True for existing boards
+                    reuse_board = True
+                    reuse_group = True
+
                 else:
-                    st.caption(f"📋 Nom par défaut sera utilisé: **Commissions {source}**")
+                    st.error("❌ **Aucun board chargé**")
+                    st.warning("""
+                    **Action requise:**
 
-            with col2:
-                month_group = st.text_input(
-                    "Groupe de Mois (optionnel)",
-                    value="",
-                    placeholder="Ex: Octobre 2025",
-                    help="Nom du groupe pour organiser les données (optionnel)",
-                    key="pdf_month_group"
-                )
+                    1. Retournez à la section **"3️⃣ Chargement des Boards Monday.com"** ci-dessus
+                    2. Cliquez sur le bouton **"📥 Charger mes boards"**
+                    3. Attendez que vos boards soient chargés
+                    4. Revenez ici pour sélectionner votre board
 
-                col_reuse1, col_reuse2 = st.columns(2)
-                with col_reuse1:
-                    reuse_board = st.checkbox(
-                        "Réutiliser board existant",
-                        value=True,
-                        help="Si coché, utilisera le board existant avec le même nom",
-                        key="pdf_reuse_board"
-                    )
-                with col_reuse2:
-                    reuse_group = st.checkbox(
-                        "Réutiliser groupe existant",
-                        value=True,
-                        help="Si coché, utilisera le groupe existant avec le même nom",
-                        key="pdf_reuse_group"
-                    )
+                    *Si vous n'avez pas encore entré votre clé API, allez dans la barre latérale.*
+                    """)
+                    reuse_board = True
+                    reuse_group = True
+
+            st.markdown("---")
+
+            # Group Configuration
+            st.subheader("8️⃣ Configuration du Groupe")
+
+            month_group = st.text_input(
+                "Groupe de Mois (optionnel)",
+                value="",
+                placeholder="Ex: Octobre 2025",
+                help="Nom du groupe pour organiser les données (optionnel)",
+                key="pdf_month_group"
+            )
+
+            st.markdown("---")
+
+            # Target Board Type Selection
+            st.subheader("9️⃣ Type de Table Cible")
+            target_board_type_option = st.selectbox(
+                "Type de board Monday.com",
+                options=["Paiements Historiques", "Ventes et Production"],
+                index=0,
+                help="Sélectionnez le type de table Monday.com où les données seront uploadées",
+                key="pdf_target_board_type"
+            )
+
+            st.info(f"""
+            **📋 Type de table sélectionné: {target_board_type_option}**
+
+            - **Paiements Historiques**: Pour les paiements reçus et vérifiés
+            - **Ventes et Production**: Pour les ventes avec suivi de complétion et reçus
+            """)
 
             st.markdown("---")
 
             # Data Processing Options
-            st.subheader("4️⃣ Options de Traitement")
+            st.subheader("🔟 Options de Traitement")
             aggregate_by_contract = st.checkbox(
                 "Agréger par numéro de contrat",
                 value=True,
@@ -270,8 +429,19 @@ def render_stage_1():
                 if not uploaded_file:
                     errors.append("❌ Veuillez uploader un fichier PDF")
 
+                # Get API key from session state
+                monday_api_key = st.session_state.monday_api_key
+
                 if not monday_api_key:
-                    errors.append("❌ Veuillez fournir une clé API Monday.com")
+                    errors.append("❌ Veuillez fournir une clé API Monday.com dans la barre latérale")
+
+                # Get board mode from session state
+                board_mode_from_state = st.session_state.get('pdf_board_mode', 'Créer un nouveau board')
+
+                # Validate board selection for existing board mode
+                if board_mode_from_state == "Utiliser un board existant":
+                    if not selected_board_id_pdf:
+                        errors.append("❌ Veuillez charger vos boards et sélectionner un board existant")
 
                 if errors:
                     for error in errors:
@@ -281,17 +451,35 @@ def render_stage_1():
                     pdf_path = save_uploaded_file(uploaded_file)
 
                     # Determine final board name
-                    board_name_from_state = st.session_state.get('pdf_board_name', '')
-
-                    if board_name_from_state and board_name_from_state.strip():
-                        final_board_name = board_name_from_state.strip()
+                    if board_mode_from_state == "Utiliser un board existant":
+                        # Use the name from selected board
+                        final_board_name = board_name_input
+                        # For existing boards, force reuse
+                        final_reuse_board = True
+                        final_reuse_group = True
                     else:
-                        final_board_name = f"Commissions {source}"
+                        # New board mode
+                        board_name_from_state = st.session_state.get('pdf_board_name', '')
+
+                        if board_name_from_state and board_name_from_state.strip():
+                            final_board_name = board_name_from_state.strip()
+                        else:
+                            final_board_name = f"Commissions {source}"
+
+                        final_reuse_board = reuse_board
+                        final_reuse_group = reuse_group
 
                     # Create configuration
                     try:
                         # Convert display name to enum value
                         source_enum_value = source.replace(" ", "_").upper()
+
+                        # Convert target board type option to BoardType enum
+                        target_board_type_from_state = st.session_state.get('pdf_target_board_type', 'Paiements Historiques')
+                        if target_board_type_from_state == "Ventes et Production":
+                            target_board_type = BoardType.SALES_PRODUCTION
+                        else:
+                            target_board_type = BoardType.HISTORICAL_PAYMENTS
 
                         config = PipelineConfig(
                             source=InsuranceSource(source_enum_value),
@@ -300,11 +488,12 @@ def render_stage_1():
                             board_name=final_board_name,
                             monday_api_key=monday_api_key,
                             output_dir="./results",
-                            reuse_board=reuse_board,
-                            reuse_group=reuse_group,
+                            reuse_board=final_reuse_board,
+                            reuse_group=final_reuse_group,
                             aggregate_by_contract=aggregate_by_contract,
                             source_board_id=None,
-                            source_group_id=None
+                            source_group_id=None,
+                            target_board_type=target_board_type
                         )
 
                         # Store in session state
@@ -351,17 +540,12 @@ def render_stage_1():
         - on_commission_rate = 0.75 (75%)
         """)
 
-        # API Key input (outside form for loading boards)
-        st.subheader("1️⃣ Authentification Monday.com")
-
-        monday_api_key_legacy = st.text_input(
-            "Clé API Monday.com",
-            type="password",
-            help="Votre clé API Monday.com pour l'authentification",
-            key="legacy_monday_api_key_input"
-        )
-
         # Load boards button
+        st.subheader("1️⃣ Sélection du Board Source")
+
+        # Get API key from session state
+        monday_api_key_legacy = st.session_state.monday_api_key
+
         if monday_api_key_legacy:
             col_load, col_status = st.columns([1, 3])
 
@@ -396,12 +580,14 @@ def render_stage_1():
                 except Exception as e:
                     st.error(f"❌ Erreur lors du chargement des boards: {e}")
                     st.session_state.monday_boards = None
+        else:
+            st.warning("⚠️ Veuillez d'abord entrer votre clé API Monday.com dans la barre latérale")
 
         st.markdown("---")
 
         with st.form("monday_conversion_form"):
             # Source Board Configuration
-            st.subheader("2️⃣ Sélection du Board Source")
+            st.subheader("2️⃣ Board à Convertir")
 
             # Board selection dropdown
             if st.session_state.monday_boards is not None and len(st.session_state.monday_boards) > 0:
@@ -487,14 +673,14 @@ def render_stage_1():
                 # Validation
                 errors = []
 
-                # Get API key from session state (outside form)
-                api_key_from_state = st.session_state.get('legacy_monday_api_key_input', '')
+                # Get API key from session state
+                api_key_from_state = st.session_state.monday_api_key
 
                 if not source_board_id:
                     errors.append("❌ Veuillez sélectionner un board source")
 
                 if not api_key_from_state:
-                    errors.append("❌ Veuillez fournir une clé API Monday.com")
+                    errors.append("❌ Veuillez fournir une clé API Monday.com dans la barre latérale")
 
                 if not board_name_input_legacy or not board_name_input_legacy.strip():
                     errors.append("❌ Veuillez fournir un nom pour le nouveau board")
@@ -524,7 +710,8 @@ def render_stage_1():
                             reuse_group=reuse_group_legacy,
                             aggregate_by_contract=aggregate_by_contract_legacy,
                             source_board_id=int(source_board_id),
-                            source_group_id=None  # Always extract ALL groups (entire board)
+                            source_group_id=None,  # Always extract ALL groups (entire board)
+                            target_board_type=None  # Auto-detected from source board
                         )
 
                         # Store in session state
@@ -1097,6 +1284,38 @@ def main():
     # Sidebar
     with st.sidebar:
         st.title("Navigation")
+        st.markdown("---")
+
+        # Global API Key Configuration
+        st.subheader("🔑 Configuration Monday.com")
+
+        # Check if API key is already stored
+        if st.session_state.monday_api_key:
+            st.success("✅ Clé API configurée")
+
+            # Button to change API key
+            if st.button("🔄 Modifier la clé API", use_container_width=True):
+                st.session_state.monday_api_key = None
+                st.session_state.monday_boards = None  # Reset boards when changing API key
+                st.rerun()
+        else:
+            # Input for API key
+            api_key_input = st.text_input(
+                "Clé API Monday.com",
+                type="password",
+                help="Votre clé API Monday.com pour l'authentification",
+                key="global_monday_api_key_input"
+            )
+
+            # Save button
+            if api_key_input:
+                if st.button("💾 Enregistrer la clé API", use_container_width=True, type="primary"):
+                    st.session_state.monday_api_key = api_key_input
+                    st.success("✅ Clé API enregistrée!")
+                    st.rerun()
+            else:
+                st.info("ℹ️ Entrez votre clé API Monday.com pour commencer")
+
         st.markdown("---")
 
         # Current stage indicator

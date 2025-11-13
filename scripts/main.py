@@ -26,7 +26,7 @@ from enum import Enum
 import pandas as pd
 
 # Import local modules
-from unify_notation import CommissionDataUnifier, PDF_PATHS as DEFAULT_PDF_PATHS
+from unify_notation import CommissionDataUnifier, PDF_PATHS as DEFAULT_PDF_PATHS, BoardType
 from monday_automation import MondayClient, CreateBoardResult, CreateGroupResult, CreateItemResult
 
 
@@ -157,6 +157,8 @@ class PipelineConfig:
         aggregate_by_contract: Whether to aggregate rows by contract_number (default: True)
         source_board_id: Board ID to extract from (required for MONDAY_LEGACY)
         source_group_id: Optional group ID to filter extraction (for MONDAY_LEGACY)
+        target_board_type: Target Monday.com board type (HISTORICAL_PAYMENTS or SALES_PRODUCTION)
+                          Auto-detected for MONDAY_LEGACY, defaults to HISTORICAL_PAYMENTS for PDFs
     """
     # Data source configuration
     source: InsuranceSource
@@ -177,6 +179,9 @@ class PipelineConfig:
     # Monday.com source configuration (for MONDAY_LEGACY)
     source_board_id: Optional[int] = None
     source_group_id: Optional[str] = None
+
+    # Target board type configuration
+    target_board_type: Optional[BoardType] = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -336,7 +341,8 @@ class InsuranceCommissionPipeline:
                 self.final_data = self.data_unifier.process_source(
                     source=source,
                     monday_df=monday_df,
-                    aggregate_by_contract=self.config.aggregate_by_contract
+                    aggregate_by_contract=self.config.aggregate_by_contract,
+                    target_board_type=self.config.target_board_type
                 )
 
             else:
@@ -349,7 +355,8 @@ class InsuranceCommissionPipeline:
                 self.final_data = self.data_unifier.process_source(
                     source,
                     pdf_path,
-                    aggregate_by_contract=self.config.aggregate_by_contract
+                    aggregate_by_contract=self.config.aggregate_by_contract,
+                    target_board_type=self.config.target_board_type
                 )
 
             # Check if data was processed
@@ -513,7 +520,7 @@ class InsuranceCommissionPipeline:
                 ColorPrint.info("No month group specified - items will be added to default group")
                 self.group_id = None
 
-            # NOUVEAU: Setup columns based on DataFrame structure
+            # NOUVEAU: Setup columns based on DataFrame structure and board type
             if self.final_data is not None and not self.final_data.empty:
                 ColorPrint.info("Setting up columns for data structure...")
 
@@ -523,9 +530,25 @@ class InsuranceCommissionPipeline:
                                    'group_id', 'group_title', 'is_subitem',
                                    'parent_item_id', 'parent_item_name']
 
-                # Import FINAL_COLUMNS from unify_notation to ensure correct order
-                from unify_notation import CommissionDataUnifier
-                FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS
+                # Import from unify_notation to ensure correct order
+                from unify_notation import CommissionDataUnifier, BoardType
+
+                # Detect board_type from DataFrame attributes or use config
+                board_type = None
+                if hasattr(self.final_data, 'attrs') and 'board_type' in self.final_data.attrs:
+                    board_type = self.final_data.attrs['board_type']
+                elif self.config.target_board_type:
+                    board_type = self.config.target_board_type
+                else:
+                    board_type = BoardType.HISTORICAL_PAYMENTS  # Default
+
+                ColorPrint.info(f"Board type detected: {board_type.value}")
+
+                # Select appropriate FINAL_COLUMNS based on board type
+                if board_type == BoardType.SALES_PRODUCTION:
+                    FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS_SALES_PRODUCTION
+                else:
+                    FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS_HISTORICAL_PAYMENTS
 
                 # Use FINAL_COLUMNS order, but only keep columns that exist in DataFrame
                 data_columns = [col for col in FINAL_COLUMNS
@@ -536,9 +559,11 @@ class InsuranceCommissionPipeline:
 
                 # Define column types based on data
                 # Note: Dates are now treated as text/strings for simplicity
-                number_columns_set = {'policy_premium', 'sharing_rate', 'commission_rate',
-                                     'commission', 'bonus_rate', 'bonus_amount',
-                                     'on_commission_rate', 'on_commission', 'amount_received'}
+                # Add new number columns for Sales Production
+                number_columns_set = {'policy_premium', 'sharing_rate', 'sharing_amount', 'commission_rate',
+                                     'commission', 'commission_receipt', 'bonus_rate', 'bonus_amount',
+                                     'bonus_amount_receipt', 'on_commission_rate', 'on_commission',
+                                     'on_commission_receipt', 'amount_received', 'total'}
 
                 # Get or create columns with appropriate types
                 # IMPORTANT: Create columns in order to preserve FINAL_COLUMNS order

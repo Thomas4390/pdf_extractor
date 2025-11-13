@@ -28,6 +28,7 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
+from enum import Enum
 import sys
 import warnings
 
@@ -61,6 +62,17 @@ try:
 except ImportError:
     print("⚠️  Warning: idc_statements_extractor.py not found")
     IDC_STATEMENT_AVAILABLE = False
+
+# =============================================================================
+# BOARD TYPE ENUM
+# =============================================================================
+
+
+class BoardType(Enum):
+    """Enum for Monday.com board types."""
+    HISTORICAL_PAYMENTS = "HISTORICAL_PAYMENTS"  # Paiements historiques
+    SALES_PRODUCTION = "SALES_PRODUCTION"        # Ventes et production
+
 
 # =============================================================================
 # CONFIGURATION - UPDATE THESE PATHS FOR YOUR DATA
@@ -130,16 +142,24 @@ class CommissionDataUnifier:
         # Metadata
         'report_date',
 
-        # Additional fields for Monday.com integration
+        # Additional fields for Monday.com integration - Historical Payments
         'status',
         'advisor_name',
         'is_verified',
         'comments',
-        'amount_received'
+        'amount_received',
+
+        # Additional fields for Monday.com integration - Sales Production
+        'completion',
+        'sharing_amount',
+        'commission_receipt',
+        'bonus_amount_receipt',
+        'on_commission_receipt',
+        'total'
     ]
 
-    # Final columns to keep in output
-    FINAL_COLUMNS = [
+    # Final columns for Historical Payments (Paiements historiques)
+    FINAL_COLUMNS_HISTORICAL_PAYMENTS = [
         'contract_number',
         'insured_name',
         'insurer_name',
@@ -158,6 +178,34 @@ class CommissionDataUnifier:
         'report_date',
         'comments'
     ]
+
+    # Final columns for Sales Production (Ventes et production)
+    FINAL_COLUMNS_SALES_PRODUCTION = [
+        'contract_number',
+        'insured_name',
+        'insurer_name',
+        'status',
+        'advisor_name',
+        'completion',
+        'policy_premium',
+        'sharing_rate',
+        'sharing_amount',
+        'commission_rate',
+        'commission',
+        'commission_receipt',
+        'bonus_rate',
+        'bonus_amount',
+        'bonus_amount_receipt',
+        'on_commission_rate',
+        'on_commission',
+        'on_commission_receipt',
+        'total',
+        'report_date',
+        'comments'
+    ]
+
+    # Keep FINAL_COLUMNS as alias for backward compatibility (defaults to Historical Payments)
+    FINAL_COLUMNS = FINAL_COLUMNS_HISTORICAL_PAYMENTS
 
     def __init__(self, output_dir: str = "./unified_data"):
         """
@@ -556,17 +604,49 @@ class CommissionDataUnifier:
 
         return self._ensure_standard_columns(standard_df)
 
-    def convert_monday_legacy_to_standard(self, df: pd.DataFrame) -> pd.DataFrame:
+    def detect_board_type(self, df: pd.DataFrame) -> BoardType:
+        """
+        Automatically detect the board type based on column names.
+
+        Detection logic:
+        - If 'Reçu 1', 'Reçu 2', 'Reçu 3', or 'Complet' columns exist → SALES_PRODUCTION
+        - Otherwise → HISTORICAL_PAYMENTS
+
+        Args:
+            df: DataFrame from Monday.com board
+
+        Returns:
+            BoardType enum value
+        """
+        if df.empty:
+            return BoardType.HISTORICAL_PAYMENTS  # Default
+
+        sales_production_indicators = ['Reçu 1', 'Reçu 2', 'Reçu 3', 'Complet', 'Total']
+
+        # Check if any of the Sales Production indicators exist
+        for indicator in sales_production_indicators:
+            if indicator in df.columns:
+                print(f"   🔍 Detected SALES_PRODUCTION board (found column: '{indicator}')")
+                return BoardType.SALES_PRODUCTION
+
+        print(f"   🔍 Detected HISTORICAL_PAYMENTS board (no Sales Production columns found)")
+        return BoardType.HISTORICAL_PAYMENTS
+
+    def convert_monday_legacy_to_standard(self, df: pd.DataFrame, board_type: BoardType = None) -> pd.DataFrame:
         """
         Convert legacy Monday.com board data to standard schema.
 
-        Legacy column mapping:
-        - 'item_name' (colonne "Élément") → insured_name  ** NOUVEAU **
+        Supports two board types:
+        1. HISTORICAL_PAYMENTS (Paiements historiques)
+        2. SALES_PRODUCTION (Ventes et production)
+
+        Column mapping for HISTORICAL_PAYMENTS:
+        - 'item_name' (colonne "Élément") → insured_name
         - '# de Police' → contract_number
         - 'Compagnie' → insurer_name
         - 'Statut' → status
         - 'Conseiller' → advisor_name
-        - 'Vérifié' → is_verified
+        - 'Verifié' → is_verified
         - 'PA' → policy_premium
         - 'Com' → commission
         - 'Boni' → bonus_amount
@@ -574,14 +654,34 @@ class CommissionDataUnifier:
         - 'Reçu' → amount_received
         - 'Date' → report_date
 
+        Column mapping for SALES_PRODUCTION:
+        - 'item_name' (colonne "Élément") → contract_number
+        - 'item_name' → insured_name (also copied)
+        - '# de Police' → contract_number (if exists)
+        - 'Compagnie' → insurer_name
+        - 'Statut' → status
+        - 'Conseiller' → advisor_name
+        - 'Complet' → completion
+        - 'PA' → policy_premium
+        - 'Partage' → sharing_amount (calculated if missing)
+        - 'Com' → commission
+        - 'Reçu 1' → commission_receipt
+        - 'Boni' → bonus_amount
+        - 'Reçu 2' → bonus_amount_receipt
+        - 'Sur-Com' → on_commission
+        - 'Reçu 3' → on_commission_receipt
+        - 'Total' → total (calculated if missing)
+        - 'Date' → report_date
+
         Constants added:
         - sharing_rate = 0.4 (40%)
         - commission_rate = 0.5 (50%)
-        - bonus_rate = 0.0175 (1.75%)
+        - bonus_rate = 1.75 (175%)
         - on_commission_rate = 0.75 (75%)
 
         Args:
             df: DataFrame from legacy Monday.com board
+            board_type: Type of board (auto-detected if None)
 
         Returns:
             Standardized DataFrame
@@ -589,73 +689,127 @@ class CommissionDataUnifier:
         if df.empty:
             return self._create_empty_standard_df()
 
+        # Auto-detect board type if not provided
+        if board_type is None:
+            board_type = self.detect_board_type(df)
+            print(f"   🔍 Auto-detected board type: {board_type.value}")
+
         # Get the number of rows for consistent array creation
         n_rows = len(df)
 
         # Initialize with standard columns
         standard_df = pd.DataFrame(index=df.index)
 
-        # Map columns from legacy format
-        # NOUVEAU: Map item_name (colonne "Élément" dans Monday.com) vers insured_name
-        if 'item_name' in df.columns:
-            standard_df['insured_name'] = df['item_name'].astype(str)
-            print(f"   ✓ Mapped 'item_name' (Élément) → 'insured_name': {df['item_name'].notna().sum()} values")
+        # =====================================================================
+        # COMMON MAPPINGS (both board types)
+        # =====================================================================
 
-        # Required mappings
-        if '# de Police' in df.columns:
-            standard_df['contract_number'] = df['# de Police'].astype(str)
+        # Map contract_number based on board type
+        if board_type == BoardType.SALES_PRODUCTION:
+            # For Sales Production: Élément contains contract_number
+            if 'item_name' in df.columns:
+                standard_df['contract_number'] = df['item_name'].astype(str)
+                print(f"   ✓ Mapped 'item_name' (Élément) → 'contract_number': {df['item_name'].notna().sum()} values")
+            # Also use '# de Police' if it exists
+            if '# de Police' in df.columns:
+                # Override with '# de Police' if it's not empty
+                mask = df['# de Police'].notna() & (df['# de Police'] != '')
+                if mask.any():
+                    standard_df.loc[mask, 'contract_number'] = df.loc[mask, '# de Police'].astype(str)
+                    print(f"   ✓ Overrode contract_number with '# de Police' for {mask.sum()} rows")
+        else:
+            # For Historical Payments: '# de Police' is contract_number
+            if '# de Police' in df.columns:
+                standard_df['contract_number'] = df['# de Police'].astype(str)
 
+        # Map insured_name based on board type
+        if board_type == BoardType.HISTORICAL_PAYMENTS:
+            # For Historical Payments: item_name contains insured_name
+            if 'item_name' in df.columns:
+                standard_df['insured_name'] = df['item_name'].astype(str)
+                print(f"   ✓ Mapped 'item_name' (Élément) → 'insured_name': {df['item_name'].notna().sum()} values")
+        else:
+            # For Sales Production: insured_name comes from original item_name
+            # (which now contains contract_number, but we still need the name)
+            # In this case, the name should be in item_name initially
+            if 'item_name' in df.columns:
+                standard_df['insured_name'] = df['item_name'].astype(str)
+                print(f"   ✓ Mapped 'item_name' → 'insured_name': {df['item_name'].notna().sum()} values")
+
+        # Common mappings
         if 'Compagnie' in df.columns:
             standard_df['insurer_name'] = df['Compagnie'].astype(str)
 
         if 'PA' in df.columns:
-            # Convert PA (policy premium) to numeric
             standard_df['policy_premium'] = pd.to_numeric(df['PA'], errors='coerce')
 
-        # Try to extract Com, Boni, Sur-Com from source (may be empty for formula columns)
         if 'Com' in df.columns:
-            # Convert commission to numeric
             standard_df['commission'] = pd.to_numeric(df['Com'], errors='coerce')
 
         if 'Boni' in df.columns:
-            # Convert bonus to numeric
             standard_df['bonus_amount'] = pd.to_numeric(df['Boni'], errors='coerce')
 
         if 'Sur-Com' in df.columns:
-            # Convert on_commission to numeric
             standard_df['on_commission'] = pd.to_numeric(df['Sur-Com'], errors='coerce')
 
         if 'Date' in df.columns:
-            # Parse and format date
             standard_df['report_date'] = df['Date'].apply(
                 lambda x: self._format_date_uniform(self._parse_date(x))
             )
 
-        # New columns from Monday.com
         if 'Statut' in df.columns:
             standard_df['status'] = df['Statut'].astype(str)
 
         if 'Conseiller' in df.columns:
             standard_df['advisor_name'] = df['Conseiller'].astype(str)
 
-        if 'Verifié' in df.columns:
-            standard_df['is_verified'] = df['Verifié'].astype(str)
-
-        if 'Reçu' in df.columns:
-            # Convert amount received to numeric
-            standard_df['amount_received'] = pd.to_numeric(df['Reçu'], errors='coerce')
-
         if 'Texte' in df.columns:
             standard_df['comments'] = df['Texte'].astype(str)
 
-        # Add constants
+        # =====================================================================
+        # BOARD-SPECIFIC MAPPINGS
+        # =====================================================================
+
+        if board_type == BoardType.HISTORICAL_PAYMENTS:
+            # Historical Payments specific columns
+            if 'Verifié' in df.columns:
+                standard_df['is_verified'] = df['Verifié'].astype(str)
+
+            if 'Reçu' in df.columns:
+                standard_df['amount_received'] = pd.to_numeric(df['Reçu'], errors='coerce')
+
+        else:  # SALES_PRODUCTION
+            # Sales Production specific columns
+            if 'Complet' in df.columns:
+                standard_df['completion'] = df['Complet'].astype(str)
+
+            if 'Partage' in df.columns:
+                standard_df['sharing_amount'] = pd.to_numeric(df['Partage'], errors='coerce')
+
+            if 'Reçu 1' in df.columns:
+                standard_df['commission_receipt'] = pd.to_numeric(df['Reçu 1'], errors='coerce')
+
+            if 'Reçu 2' in df.columns:
+                standard_df['bonus_amount_receipt'] = pd.to_numeric(df['Reçu 2'], errors='coerce')
+
+            if 'Reçu 3' in df.columns:
+                standard_df['on_commission_receipt'] = pd.to_numeric(df['Reçu 3'], errors='coerce')
+
+            if 'Total' in df.columns:
+                standard_df['total'] = pd.to_numeric(df['Total'], errors='coerce')
+
+        # =====================================================================
+        # ADD CONSTANTS
+        # =====================================================================
         standard_df['sharing_rate'] = 0.4  # 40%
         standard_df['commission_rate'] = 0.5  # 50%
         standard_df['bonus_rate'] = 1.75  # 175%
         standard_df['on_commission_rate'] = 0.75  # 75%
 
-        # CALCUL AUTOMATIQUE: Calculate Com, Boni, Sur-Com if they are empty
-        # This is necessary because Monday.com formula columns don't return values via API
+        # =====================================================================
+        # AUTOMATIC CALCULATIONS
+        # =====================================================================
+        # Calculate missing formula columns (Monday.com formula columns don't return values via API)
         if 'policy_premium' in standard_df.columns:
             # Count how many values are missing
             com_missing = standard_df['commission'].isna().sum() if 'commission' in standard_df.columns else n_rows
@@ -703,6 +857,49 @@ class CommissionDataUnifier:
                     calculated = standard_df.loc[mask, 'on_commission'].notna().sum()
                     print(f"      ✓ Calculated {calculated} on_commission values")
 
+            # =====================================================================
+            # SALES PRODUCTION SPECIFIC CALCULATIONS
+            # =====================================================================
+            if board_type == BoardType.SALES_PRODUCTION:
+                # Calculate sharing_amount if missing: sharing_rate × policy_premium
+                if 'sharing_amount' in standard_df.columns:
+                    sharing_missing = standard_df['sharing_amount'].isna().sum()
+                    if sharing_missing > 0:
+                        mask = standard_df['sharing_amount'].isna()
+                        standard_df.loc[mask, 'sharing_amount'] = (
+                            standard_df.loc[mask, 'sharing_rate'] *
+                            standard_df.loc[mask, 'policy_premium']
+                        )
+                        calculated = standard_df.loc[mask, 'sharing_amount'].notna().sum()
+                        print(f"      ✓ Calculated {calculated} sharing_amount values")
+                else:
+                    # Create sharing_amount column
+                    standard_df['sharing_amount'] = (
+                        standard_df['sharing_rate'] * standard_df['policy_premium']
+                    )
+                    print(f"      ✓ Created sharing_amount column")
+
+                # Calculate total if missing: commission + bonus_amount + on_commission
+                if 'total' in standard_df.columns:
+                    total_missing = standard_df['total'].isna().sum()
+                    if total_missing > 0:
+                        mask = standard_df['total'].isna()
+                        standard_df.loc[mask, 'total'] = (
+                            standard_df.loc[mask, 'commission'].fillna(0) +
+                            standard_df.loc[mask, 'bonus_amount'].fillna(0) +
+                            standard_df.loc[mask, 'on_commission'].fillna(0)
+                        )
+                        calculated = standard_df.loc[mask, 'total'].notna().sum()
+                        print(f"      ✓ Calculated {calculated} total values")
+                else:
+                    # Create total column
+                    standard_df['total'] = (
+                        standard_df['commission'].fillna(0) +
+                        standard_df['bonus_amount'].fillna(0) +
+                        standard_df['on_commission'].fillna(0)
+                    )
+                    print(f"      ✓ Created total column")
+
         # Initialize comments as None if not already set
         if 'comments' not in standard_df.columns:
             standard_df['comments'] = None
@@ -716,13 +913,16 @@ class CommissionDataUnifier:
         if 'group_title' in df.columns:
             standard_df['group_title'] = df['group_title']
 
-        print(f"✅ Converted {len(standard_df)} records from legacy Monday.com format")
+        print(f"✅ Converted {len(standard_df)} records from legacy Monday.com format ({board_type.value})")
         print(f"   Constants applied: sharing_rate=0.4, commission_rate=0.5, bonus_rate=1.75, on_commission_rate=0.75")
 
         # Check if group metadata was preserved
         if 'group_title' in standard_df.columns:
             unique_groups = standard_df['group_title'].dropna().unique()
             print(f"   ✓ Group metadata preserved: {len(unique_groups)} groups - {list(unique_groups)}")
+
+        # Store board_type as metadata for later use
+        standard_df.attrs['board_type'] = board_type
 
         return self._ensure_standard_columns(standard_df)
 
@@ -834,32 +1034,50 @@ class CommissionDataUnifier:
 
         return aggregated_df
 
-    def filter_final_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+    def filter_final_columns(self, df: pd.DataFrame, board_type: BoardType = None) -> pd.DataFrame:
         """
         Filter DataFrame to keep only the final required columns.
 
         Args:
             df: Standardized DataFrame
+            board_type: Type of board (auto-detected from df.attrs if None)
 
         Returns:
-            DataFrame with only FINAL_COLUMNS
+            DataFrame with only FINAL_COLUMNS (specific to board type)
         """
-        if df.empty:
-            return pd.DataFrame(columns=self.FINAL_COLUMNS)
+        # Auto-detect board_type from DataFrame attributes if not provided
+        if board_type is None and hasattr(df, 'attrs') and 'board_type' in df.attrs:
+            board_type = df.attrs['board_type']
 
-        # Keep only columns that exist in both FINAL_COLUMNS and df
-        available_columns = [col for col in self.FINAL_COLUMNS if col in df.columns]
+        # Select appropriate final columns based on board type
+        if board_type == BoardType.SALES_PRODUCTION:
+            final_columns = self.FINAL_COLUMNS_SALES_PRODUCTION
+        else:
+            # Default to Historical Payments
+            final_columns = self.FINAL_COLUMNS_HISTORICAL_PAYMENTS
+
+        if df.empty:
+            return pd.DataFrame(columns=final_columns)
+
+        # Keep only columns that exist in both final_columns and df
+        available_columns = [col for col in final_columns if col in df.columns]
 
         # Create filtered dataframe
         filtered_df = df[available_columns].copy()
 
         # Add missing columns with None
-        for col in self.FINAL_COLUMNS:
+        for col in final_columns:
             if col not in filtered_df.columns:
                 filtered_df[col] = None
 
-        # Reorder columns to match FINAL_COLUMNS
-        return filtered_df[self.FINAL_COLUMNS]
+        # Reorder columns to match final_columns
+        result_df = filtered_df[final_columns]
+
+        # Preserve board_type in attrs
+        if board_type is not None:
+            result_df.attrs['board_type'] = board_type
+
+        return result_df
 
     def _ensure_standard_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -889,7 +1107,7 @@ class CommissionDataUnifier:
         return pd.DataFrame(columns=self.STANDARD_COLUMNS)
 
     def process_source(self, source: str, pdf_path: str = None, monday_df: pd.DataFrame = None,
-                      aggregate_by_contract: bool = True) -> pd.DataFrame:
+                      aggregate_by_contract: bool = True, target_board_type: BoardType = None) -> pd.DataFrame:
         """
         Process a complete source from PDF or Monday.com to final standardized DataFrame.
 
@@ -898,13 +1116,15 @@ class CommissionDataUnifier:
         2. Convert to standard format
         3. Filter by sharing_rate (0.4) - SKIPPED for MONDAY_LEGACY and IDC_STATEMENT
         4. Aggregate by contract_number - SKIPPED for MONDAY_LEGACY and IDC_STATEMENT (or if aggregate_by_contract=False)
-        5. Filter to final columns
+        5. Filter to final columns (board-type specific)
 
         Args:
             source: Source name - 'UV', 'IDC', 'IDC_STATEMENT', 'ASSOMPTION', or 'MONDAY_LEGACY'
             pdf_path: Path to the PDF file (required for UV, IDC, IDC_STATEMENT, ASSOMPTION)
             monday_df: DataFrame from Monday.com extraction (required for MONDAY_LEGACY)
             aggregate_by_contract: Whether to aggregate rows by contract_number (default: True)
+            target_board_type: Target board type for Monday.com upload (auto-detected for MONDAY_LEGACY,
+                              defaults to HISTORICAL_PAYMENTS for PDF sources)
 
         Returns:
             Final processed DataFrame ready for Monday.com upload
@@ -997,9 +1217,23 @@ class CommissionDataUnifier:
         else:
             raise ValueError(f"Unknown source: {source}. Must be 'UV', 'IDC', 'IDC_STATEMENT', 'ASSOMPTION', or 'MONDAY_LEGACY'")
 
+        # Determine board_type for the target
+        if source == 'MONDAY_LEGACY':
+            # For MONDAY_LEGACY: auto-detect source board type, use it as target
+            # (same type to same type)
+            if target_board_type is None:
+                target_board_type = self.detect_board_type(raw_df)
+        else:
+            # For PDF sources: use provided target_board_type or default to HISTORICAL_PAYMENTS
+            if target_board_type is None:
+                target_board_type = BoardType.HISTORICAL_PAYMENTS
+                print(f"   📋 Target board type not specified, defaulting to: {target_board_type.value}")
+            else:
+                print(f"   📋 Target board type: {target_board_type.value}")
+
         # Step 2: Convert to standard format
         if source == 'MONDAY_LEGACY':
-            standardized = self.convert_monday_legacy_to_standard(raw_df)
+            standardized = self.convert_monday_legacy_to_standard(raw_df, board_type=target_board_type)
         elif source == 'UV':
             standardized = self.convert_uv_to_standard(raw_df, metadata)
         elif source == 'IDC':
@@ -1008,6 +1242,9 @@ class CommissionDataUnifier:
             standardized = self.convert_idc_statement_to_standard(raw_df)
         elif source == 'ASSOMPTION':
             standardized = self.convert_assomption_to_standard(raw_df)
+
+        # Store board_type in DataFrame attrs for later use
+        standardized.attrs['board_type'] = target_board_type
 
         print(f"✅ Standardized to {len(standardized)} records")
 
@@ -1033,11 +1270,11 @@ class CommissionDataUnifier:
         else:
             aggregated = self.aggregate_by_contract_number(filtered)
 
-        # Step 5: Filter to final columns
+        # Step 5: Filter to final columns (board-type specific)
         # For MONDAY_LEGACY, preserve group metadata
         if source == 'MONDAY_LEGACY':
             # Keep final columns but also preserve group metadata
-            final = self.filter_final_columns(aggregated)
+            final = self.filter_final_columns(aggregated, board_type=target_board_type)
 
             # DEBUG: Check group columns before re-adding
             print(f"   DEBUG - Columns in aggregated: {list(aggregated.columns)}")
@@ -1056,8 +1293,8 @@ class CommissionDataUnifier:
             print(f"✅ Final output: {len(final)} records ready (group metadata preserved)")
             print(f"   Final columns: {list(final.columns)}")
         else:
-            final = self.filter_final_columns(aggregated)
-            print(f"✅ Final output: {len(final)} records ready")
+            final = self.filter_final_columns(aggregated, board_type=target_board_type)
+            print(f"✅ Final output: {len(final)} records ready for {target_board_type.value} board")
 
         return final
 
