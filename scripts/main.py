@@ -18,12 +18,21 @@ Version: 1.1.0 (avec support colonnes Monday.com)
 """
 
 import sys
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 import pandas as pd
+
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed, using system environment variables only
+    pass
 
 # Import local modules
 from unify_notation import CommissionDataUnifier, PDF_PATHS as DEFAULT_PDF_PATHS, BoardType
@@ -1034,10 +1043,17 @@ def main():
     configurations or creating your own.
     """
 
-    # eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjU3OTYxMDI3NiwiYWFpIjoxMSwidWlkIjo5NTA2NjUzNywiaWFkIjoiMjAyNS0xMC0yOFQxNToxMDo0My40NjZaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjY0NjQxNDIsInJnbiI6InVzZTEifQ.q54YnC23stSJfLRnd0E9p9e4ZF8lRUK1TLgQM-13kdI
+    # Load Monday.com API key from environment variable
+    # You must set MONDAY_API_KEY in your .env file or system environment
+    MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
 
-    # Monday.com API key
-    MONDAY_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjU3OTYxMDI3NiwiYWFpIjoxMSwidWlkIjo5NTA2NjUzNywiaWFkIjoiMjAyNS0xMC0yOFQxNToxMDo0My40NjZaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjY0NjQxNDIsInJnbiI6InVzZTEifQ.q54YnC23stSJfLRnd0E9p9e4ZF8lRUK1TLgQM-13kdI"
+    if not MONDAY_API_KEY:
+        ColorPrint.error("ERROR: MONDAY_API_KEY environment variable not set!")
+        ColorPrint.info("Please set your Monday.com API key in one of the following ways:")
+        ColorPrint.info("  1. Create a .env file in the project root with: MONDAY_API_KEY=your_key_here")
+        ColorPrint.info("  2. Set it as a system environment variable")
+        ColorPrint.info("  3. In PyCharm: Run > Edit Configurations > Environment Variables")
+        sys.exit(1)
 
     # =========================================================================
     # CONFIGURATION - MODIFY THIS SECTION TO CHANGE BEHAVIOR

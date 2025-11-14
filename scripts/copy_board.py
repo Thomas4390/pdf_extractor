@@ -8,6 +8,7 @@ Script de copie de board Monday.com avec toutes les fonctionnalités implément�
 """
 
 import sys
+import os
 from main import (
     InsuranceCommissionPipeline,
     create_monday_legacy_config
@@ -17,8 +18,14 @@ from main import (
 # CONFIGURATION - Modifiez ces valeurs selon vos besoins
 # =============================================================================
 
-# API Key Monday.com
-MONDAY_API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjU3OTYxMDI3NiwiYWFpIjoxMSwidWlkIjo5NTA2NjUzNywiaWFkIjoiMjAyNS0xMC0yOFQxNToxMDo0My40NjZaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjY0NjQxNDIsInJnbiI6InVzZTEifQ.q54YnC23stSJfLRnd0E9p9e4ZF8lRUK1TLgQM-13kdI"
+# Load Monday.com API key from environment variable
+# The main module already loads .env, so we can just use os.getenv here
+MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
+
+if not MONDAY_API_KEY:
+    print("ERROR: MONDAY_API_KEY environment variable not set!")
+    print("Please set your Monday.com API key in a .env file or system environment.")
+    sys.exit(1)
 
 # Board source (ID du board à copier)
 SOURCE_BOARD_ID = 18283488594  # "Copie de Paiement Historique"

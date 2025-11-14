@@ -20,16 +20,27 @@ import aiohttp
 import pandas as pd
 import requests
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed, using system environment variables only
+    pass
+
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjU3OTYxMDI3NiwiYWFpIjoxMSwidWlkIjo5NTA2NjUzNywiaWFkIjoiMjAyNS0xMC0yOFQxNToxMDo0My40NjZaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjY0NjQxNDIsInJnbiI6InVzZTEifQ.q54YnC23stSJfLRnd0E9p9e4ZF8lRUK1TLgQM-13kdI"
+# Load API key from environment variable for security
+# Fallback to empty string if not set (will raise error when used)
+API_KEY = os.getenv("MONDAY_API_KEY", "")
 API_URL = "https://api.monday.com/v2"
 
-BOARD_ID_PAIEMENT = 18283488594
-BOARD_ID_VENTES = 18283499297
+# Board IDs can also be configured via environment variables
+BOARD_ID_PAIEMENT = int(os.getenv("BOARD_ID_PAIEMENT", "18283488594"))
+BOARD_ID_VENTES = int(os.getenv("BOARD_ID_VENTES", "18283499297"))
 
 
 # =============================================================================
