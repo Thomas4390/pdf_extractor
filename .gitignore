@@ -98,7 +98,10 @@ ipython_config.py
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
-#uv.lock
+# NOTE: For Streamlit Cloud deployment, uv.lock is not supported, so we ignore it
+uv.lock
+*.lock.backup
+pyproject.toml.backup
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
@@ -205,3 +208,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Streamlit Cloud Deployment
+# Exclude directories not needed for deployment
+notebooks/
+other/
+pdf/
+results/
+temp/
+.idea/
+.vscode/
