@@ -430,21 +430,51 @@ class MondayClient:
 
         return results
 
-    def list_boards(self) -> List[Dict]:
-        """List all boards from Monday.com account."""
-        query = """
-        {
-            boards {
-                id
-                name
-                description
-                state
-                board_kind
-            }
-        }
+    def list_boards(self, limit: int = 100) -> List[Dict]:
         """
-        result = self._execute_query(query=query)
-        return result['data']['boards']
+        List all boards from Monday.com account with pagination support.
+
+        Args:
+            limit: Number of boards per page (max 100, default: 100)
+
+        Returns:
+            List of all boards in the account
+        """
+        all_boards = []
+        page = 1
+
+        print(f"🔍 Fetching boards from Monday.com...")
+
+        while True:
+            query = f"""
+            {{
+                boards(limit: {limit}, page: {page}) {{
+                    id
+                    name
+                    description
+                    state
+                    board_kind
+                }}
+            }}
+            """
+            result = self._execute_query(query=query)
+            boards = result['data']['boards']
+
+            if not boards:
+                # No more boards to fetch
+                break
+
+            all_boards.extend(boards)
+            print(f"  Page {page}: Retrieved {len(boards)} boards (total: {len(all_boards)})")
+
+            # If we got fewer boards than the limit, we've reached the end
+            if len(boards) < limit:
+                break
+
+            page += 1
+
+        print(f"✅ Total boards retrieved: {len(all_boards)}")
+        return all_boards
 
     def list_groups(self, board_id: int) -> List[Dict]:
         """List all groups in a board."""
