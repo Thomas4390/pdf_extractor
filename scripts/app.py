@@ -85,6 +85,62 @@ def init_session_state():
 # UTILITY FUNCTIONS
 # =============================================================================
 
+def sort_and_filter_boards(boards: list, search_query: str = "") -> list:
+    """
+    Sort boards with priority keywords first and filter by search query.
+
+    Priority order:
+    1. Boards containing "paiement" or "historique" (case-insensitive)
+    2. Boards containing "vente" or "production" (case-insensitive)
+    3. All other boards (alphabetically)
+
+    Args:
+        boards: List of board dictionaries with 'name' and 'id' keys
+        search_query: Optional search string to filter boards by name
+
+    Returns:
+        Sorted and filtered list of boards
+    """
+    if not boards:
+        return []
+
+    # Filter by search query if provided
+    filtered_boards = boards
+    if search_query and search_query.strip():
+        search_lower = search_query.lower().strip()
+        filtered_boards = [
+            b for b in boards
+            if search_lower in b['name'].lower()
+        ]
+
+    # Define priority keywords
+    priority_1_keywords = ['paiement', 'historique']
+    priority_2_keywords = ['vente', 'production']
+
+    def get_priority(board_name: str) -> tuple:
+        """
+        Return a tuple for sorting: (priority_level, board_name_lower)
+        Lower priority_level = higher priority (appears first)
+        """
+        name_lower = board_name.lower()
+
+        # Priority 1: paiement/historique
+        if any(kw in name_lower for kw in priority_1_keywords):
+            return (0, name_lower)
+
+        # Priority 2: vente/production
+        if any(kw in name_lower for kw in priority_2_keywords):
+            return (1, name_lower)
+
+        # Priority 3: all others (alphabetically)
+        return (2, name_lower)
+
+    # Sort boards by priority then alphabetically
+    sorted_boards = sorted(filtered_boards, key=lambda b: get_priority(b['name']))
+
+    return sorted_boards
+
+
 def save_uploaded_file(uploaded_file) -> str:
     """
     Save uploaded file to a temporary location and return the path.
@@ -245,6 +301,16 @@ def render_stage_1():
             key="pdf_board_mode"
         )
 
+        # Search box for boards (outside form for reactivity) - only show for existing board mode
+        if board_mode == "Utiliser un board existant" and st.session_state.monday_boards:
+            st.text_input(
+                "🔍 Rechercher un board",
+                value="",
+                placeholder="Tapez pour filtrer les boards par nom...",
+                help="Filtrez la liste des boards par nom (la recherche est instantanée)",
+                key="pdf_board_search"
+            )
+
         st.markdown("---")
 
         with st.form("pdf_extraction_form"):
@@ -324,32 +390,57 @@ def render_stage_1():
                 if st.session_state.monday_boards is not None and len(st.session_state.monday_boards) > 0:
                     st.success(f"✅ {len(st.session_state.monday_boards)} boards disponibles pour sélection")
 
-                    # Create options with board name and ID
-                    board_options = {
-                        f"{board['name']} (ID: {board['id']})": board['id']
-                        for board in st.session_state.monday_boards
-                    }
+                    # Search box for filtering boards (outside form for reactivity)
+                    st.caption("🔍 **Rechercher un board par nom:**")
 
-                    selected_board_option = st.selectbox(
-                        "Sélectionnez le board où uploader les données",
-                        options=list(board_options.keys()),
-                        help="Choisissez le board où les données PDF seront uploadées",
-                        key="pdf_selected_board"
+                    # Note: This search is inside the form, so it will filter on form rerun
+                    # For better UX, we store the search in session state
+                    if 'pdf_board_search' not in st.session_state:
+                        st.session_state.pdf_board_search = ""
+
+                    # Sort and filter boards with priority and search
+                    sorted_boards = sort_and_filter_boards(
+                        st.session_state.monday_boards,
+                        search_query=st.session_state.get('pdf_board_search', '')
                     )
 
-                    # Get the board ID and name from selection
-                    selected_board_id_pdf = board_options[selected_board_option]
+                    # Show filter info
+                    if st.session_state.get('pdf_board_search', ''):
+                        st.info(f"🔎 {len(sorted_boards)} boards trouvés pour \"{st.session_state.pdf_board_search}\"")
+                    else:
+                        st.caption("ℹ️ Les boards \"Paiements Historiques\" et \"Ventes/Production\" sont affichés en premier")
 
-                    # Extract board name from the selected board
-                    selected_board = next(b for b in st.session_state.monday_boards if b['id'] == selected_board_id_pdf)
-                    board_name_input = selected_board['name']
+                    if sorted_boards:
+                        # Create options with board name and ID
+                        board_options = {
+                            f"{board['name']} (ID: {board['id']})": board['id']
+                            for board in sorted_boards
+                        }
 
-                    # Show board info in an expander
-                    with st.expander("ℹ️ Détails du board sélectionné", expanded=False):
-                        st.write(f"**Nom du board:** {board_name_input}")
-                        st.write(f"**ID du board:** {selected_board_id_pdf}")
-                        st.write(f"**Type:** {selected_board.get('board_kind', 'N/A')}")
-                        st.write(f"**État:** {selected_board.get('state', 'N/A')}")
+                        selected_board_option = st.selectbox(
+                            "Sélectionnez le board où uploader les données",
+                            options=list(board_options.keys()),
+                            help="Choisissez le board où les données PDF seront uploadées",
+                            key="pdf_selected_board"
+                        )
+
+                        # Get the board ID and name from selection
+                        selected_board_id_pdf = board_options[selected_board_option]
+
+                        # Extract board name from the selected board
+                        selected_board = next(b for b in st.session_state.monday_boards if b['id'] == selected_board_id_pdf)
+                        board_name_input = selected_board['name']
+
+                        # Show board info in an expander
+                        with st.expander("ℹ️ Détails du board sélectionné", expanded=False):
+                            st.write(f"**Nom du board:** {board_name_input}")
+                            st.write(f"**ID du board:** {selected_board_id_pdf}")
+                            st.write(f"**Type:** {selected_board.get('board_kind', 'N/A')}")
+                            st.write(f"**État:** {selected_board.get('state', 'N/A')}")
+                    else:
+                        st.warning(f"⚠️ Aucun board trouvé pour \"{st.session_state.get('pdf_board_search', '')}\"")
+                        selected_board_id_pdf = None
+                        board_name_input = None
 
                     # Force reuse_board and reuse_group to True for existing boards
                     reuse_board = True
@@ -585,29 +676,56 @@ def render_stage_1():
 
         st.markdown("---")
 
+        # Search box for legacy boards (outside form for reactivity)
+        if st.session_state.monday_boards:
+            st.text_input(
+                "🔍 Rechercher un board source",
+                value="",
+                placeholder="Tapez pour filtrer les boards par nom...",
+                help="Filtrez la liste des boards par nom (la recherche est instantanée)",
+                key="legacy_board_search"
+            )
+
         with st.form("monday_conversion_form"):
             # Source Board Configuration
             st.subheader("2️⃣ Board à Convertir")
 
             # Board selection dropdown
             if st.session_state.monday_boards is not None and len(st.session_state.monday_boards) > 0:
-                # Create options with board name and ID
-                board_options = {
-                    f"{board['name']} (ID: {board['id']})": board['id']
-                    for board in st.session_state.monday_boards
-                }
-
-                selected_board_option = st.selectbox(
-                    "Sélectionnez le board à convertir",
-                    options=list(board_options.keys()),
-                    help="Choisissez le board contenant les données à convertir (ancien format)"
+                # Sort and filter boards with priority and search
+                sorted_boards = sort_and_filter_boards(
+                    st.session_state.monday_boards,
+                    search_query=st.session_state.get('legacy_board_search', '')
                 )
 
-                # Get the board ID from selection
-                source_board_id = board_options[selected_board_option]
+                # Show filter info
+                if st.session_state.get('legacy_board_search', ''):
+                    st.info(f"🔎 {len(sorted_boards)} boards trouvés pour \"{st.session_state.legacy_board_search}\"")
+                else:
+                    st.caption("ℹ️ Les boards \"Paiements Historiques\" et \"Ventes/Production\" sont affichés en premier")
 
-                # Show board info
-                st.caption(f"📋 Board sélectionné - ID: **{source_board_id}**")
+                if sorted_boards:
+                    # Create options with board name and ID
+                    board_options = {
+                        f"{board['name']} (ID: {board['id']})": board['id']
+                        for board in sorted_boards
+                    }
+
+                    selected_board_option = st.selectbox(
+                        "Sélectionnez le board à convertir",
+                        options=list(board_options.keys()),
+                        help="Choisissez le board contenant les données à convertir (ancien format)"
+                    )
+
+                    # Get the board ID from selection
+                    source_board_id = board_options[selected_board_option]
+                else:
+                    st.warning(f"⚠️ Aucun board trouvé pour \"{st.session_state.get('legacy_board_search', '')}\"")
+                    source_board_id = None
+
+                # Show board info only if a board is selected
+                if source_board_id:
+                    st.caption(f"📋 Board sélectionné - ID: **{source_board_id}**")
 
             else:
                 st.warning("⚠️ Veuillez d'abord charger vos boards avec le bouton ci-dessus")
