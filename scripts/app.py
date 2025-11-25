@@ -578,7 +578,7 @@ def render_stage_1():
                             month_group=month_group if month_group else None,
                             board_name=final_board_name,
                             monday_api_key=monday_api_key,
-                            output_dir="./results",
+                            output_dir="../results",
                             reuse_board=final_reuse_board,
                             reuse_group=final_reuse_group,
                             aggregate_by_contract=aggregate_by_contract,
@@ -823,7 +823,7 @@ def render_stage_1():
                             month_group=None,  # Groups are preserved from source board
                             board_name=final_board_name,
                             monday_api_key=api_key_from_state,
-                            output_dir="./results/monday_legacy",
+                            output_dir="../results/monday_legacy",
                             reuse_board=reuse_board_legacy,
                             reuse_group=reuse_group_legacy,
                             aggregate_by_contract=aggregate_by_contract_legacy,

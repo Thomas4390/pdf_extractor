@@ -80,7 +80,7 @@ class BoardType(Enum):
 
 PDF_PATHS = {
     'UV': "../pdf/rappportremun_21622_2025-10-20.pdf",
-    'IDC': "../pdf/Rapport des propositions soumises.20251017_1517.pdf",
+    'IDC': "../pdf/Rapport des propositions soumises.20251124_1641.pdf",
     'ASSOMPTION': "../pdf/Remuneration (61).pdf"
 }
 
@@ -458,6 +458,8 @@ class CommissionDataUnifier:
         standard_df['product_type'] = df['Type de régime'].astype(str)
         standard_df['contract_number'] = df['Police'].astype(str)
         standard_df['policy_status'] = df['Statut'].astype(str)
+        # Also map to 'status' for FINAL_COLUMNS compatibility
+        standard_df['status'] = df['Statut'].astype(str)
         standard_df['effective_date'] = df['Date'].apply(self._parse_date)
         # Map 'Date' to 'report_date' and format uniformly as YYYY-MM-DD
         standard_df['report_date'] = df['Date'].apply(lambda x: self._format_date_uniform(self._parse_date(x)))
@@ -470,11 +472,10 @@ class CommissionDataUnifier:
         standard_df['commissionable_premium'] = df['Part prime comm.'].apply(self._clean_currency)
         standard_df['total_commission'] = df['Comm.'].apply(self._clean_currency)
 
-        # For IDC, bonus_rate is not available in the data
-        standard_df['bonus_rate'] = None
-        standard_df['bonus_amount'] = None
+        # For IDC, bonus_rate is constant at 175% (1.75)
+        standard_df['bonus_rate'] = 1.75
 
-        # Calculate commissions using helper method
+        # Calculate commissions using helper method (will calculate bonus_amount)
         standard_df = self._calculate_commissions(standard_df)
 
         # Round float columns using helper method
