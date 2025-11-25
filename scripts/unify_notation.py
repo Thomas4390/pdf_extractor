@@ -80,7 +80,7 @@ class BoardType(Enum):
 
 PDF_PATHS = {
     'UV': "../pdf/rappportremun_21622_2025-10-20.pdf",
-    'IDC': "../pdf/Rapport des propositions soumises.20251124_1641.pdf",
+    'IDC': "../pdf/Rapport des propositions soumises.20251124_1638.pdf",
     'ASSOMPTION': "../pdf/Remuneration (61).pdf"
 }
 

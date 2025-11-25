@@ -127,6 +127,25 @@ class PDFPropositionParser:
         """Check if token is a date in YYYY-MM-DD format."""
         return bool(re.match(r'^\d{4}-\d{2}-\d{2}$', token))
 
+    def _is_policy_number_token(self, token: str) -> bool:
+        """
+        Check if token is part of a policy number.
+
+        Policy numbers contain digits (e.g., "1014157", "ABC123", "12-345").
+        Status text is pure alphabetic words (e.g., "Approved", "Inforce", "Pending").
+
+        Args:
+            token: Token to check
+
+        Returns:
+            True if token contains digits (likely policy number part)
+        """
+        # Policy numbers contain at least one digit
+        # Single uppercase letters are also part of policy numbers (suffix like "A", "B")
+        if len(token) == 1 and token.isupper() and token.isalpha():
+            return True
+        return any(c.isdigit() for c in token)
+
     def _is_uppercase_word(self, token: str) -> bool:
         """Check if token is all uppercase."""
         return bool(re.match(r'^[A-ZÀ-Ÿ\-\']+$', token))
@@ -356,16 +375,33 @@ class PDFPropositionParser:
             _, tokens_consumed, _ = self._is_regime_type_at(regime_idx)
             idx = regime_idx + tokens_consumed
 
-            # Policy number (may have suffix letter)
-            policy_parts = [self.tokens[idx]]
-            idx += 1
-            if (idx < len(self.tokens) and
-                    len(self.tokens[idx]) == 1 and
-                    self.tokens[idx].isupper() and
-                    self.tokens[idx].isalpha()):
-                policy_parts.append(self.tokens[idx])
-                idx += 1
-            policy = ' '.join(policy_parts)
+            # Policy number (may span up to 2 lines, collect all tokens with digits)
+            # Policy numbers contain digits; Status is pure text (e.g., "Approved", "Inforce")
+            policy_parts = []
+            max_policy_tokens = 4  # Safety limit: policy number shouldn't exceed 4 tokens
+            tokens_checked = 0
+
+            while idx < len(self.tokens) and tokens_checked < max_policy_tokens:
+                token = self.tokens[idx]
+
+                # Stop if we hit a date (shouldn't happen but safety check)
+                if self._is_date(token):
+                    break
+
+                # Check if this token is part of the policy number
+                if self._is_policy_number_token(token):
+                    policy_parts.append(token)
+                    idx += 1
+                    tokens_checked += 1
+                else:
+                    # This token is pure text (status), stop collecting policy parts
+                    break
+
+            if not policy_parts:
+                raise ValueError(f"Could not find policy number after regime at {regime_idx}")
+
+            # Concatenate without spaces (policy numbers should be continuous)
+            policy = ''.join(policy_parts)
 
             # Status (until date)
             status, idx = self._consume_until_date(idx)
@@ -448,7 +484,7 @@ class PDFPropositionParser:
 
 
 if __name__ == "__main__":
-    pdf_path = "../pdf/Rapport des propositions soumises.20251124_1641.pdf"
+    pdf_path = "../pdf/Rapport des propositions soumises.20251124_1638.pdf"
 
     parser = PDFPropositionParser(pdf_path)
     df = parser.parse()
