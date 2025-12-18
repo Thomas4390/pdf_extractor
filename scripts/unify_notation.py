@@ -1109,8 +1109,16 @@ class CommissionDataUnifier:
         # Create a copy for modification
         result_df = df.copy()
 
-        # For Sales Production, calculate 'Total Reçu' and 'Paie' if not present
+        # For Sales Production, calculate 'Total', 'Total Reçu' and 'Paie' if not present
         if board_type == BoardType.SALES_PRODUCTION:
+            # Total = Com + Boni + Sur-Com (commission + bonus_amount + on_commission)
+            # Always recalculate to ensure consistency
+            result_df['total'] = (
+                result_df.get('commission', pd.Series(0, index=result_df.index)).fillna(0) +
+                result_df.get('bonus_amount', pd.Series(0, index=result_df.index)).fillna(0) +
+                result_df.get('on_commission', pd.Series(0, index=result_df.index)).fillna(0)
+            )
+
             # Total Reçu = sum of all receipt columns (Reçu 1 + Reçu 2 + Reçu 3)
             if 'total_received' not in result_df.columns:
                 result_df['total_received'] = (
@@ -1122,7 +1130,7 @@ class CommissionDataUnifier:
             # Paie = Total - Total Reçu (remaining amount to be paid)
             if 'payment' not in result_df.columns:
                 result_df['payment'] = (
-                    result_df.get('total', pd.Series(0, index=result_df.index)).fillna(0) -
+                    result_df['total'].fillna(0) -
                     result_df['total_received'].fillna(0)
                 )
 
