@@ -159,53 +159,77 @@ class CommissionDataUnifier:
     ]
 
     # Final columns for Historical Payments (Paiements historiques)
+    # French column names matching Monday.com board
     FINAL_COLUMNS_HISTORICAL_PAYMENTS = [
-        'contract_number',
-        'insured_name',
-        'insurer_name',
-        'status',
-        'advisor_name',
-        'is_verified',
-        'policy_premium',
-        'sharing_rate',
-        'commission_rate',
-        'commission',
-        'bonus_rate',
-        'bonus_amount',
-        'on_commission_rate',
-        'on_commission',
-        'amount_received',
-        'report_date',
-        'comments'
+        '# de Police',
+        'Compagnie',
+        'Statut',
+        'Conseiller',
+        'Verifié',
+        'PA',
+        'Com',
+        'Boni',
+        'Sur-Com',
+        'Reçu',
+        'Date',
+        'Texte'
     ]
 
     # Final columns for Sales Production (Ventes et production)
+    # French column names matching Monday.com board
     FINAL_COLUMNS_SALES_PRODUCTION = [
-        'contract_number',
-        'insured_name',
-        'insurer_name',
-        'status',
-        'advisor_name',
-        'completion',
-        'policy_premium',
-        'sharing_rate',
-        'sharing_amount',
-        'commission_rate',
-        'commission',
-        'commission_receipt',
-        'bonus_rate',
-        'bonus_amount',
-        'bonus_amount_receipt',
-        'on_commission_rate',
-        'on_commission',
-        'on_commission_receipt',
-        'total',
-        'report_date',
-        'comments'
+        'Date',
+        '# de Police',
+        'Compagnie',
+        'Statut',
+        'Conseiller',
+        'Complet',
+        'PA',
+        'Partage',
+        'Com',
+        'Reçu 1',
+        'Boni',
+        'Reçu 2',
+        'Sur-Com',
+        'Reçu 3',
+        'Total',
+        'Total Reçu',
+        'Paie',
+        'Texte'
     ]
 
     # Keep FINAL_COLUMNS as alias for backward compatibility (defaults to Historical Payments)
     FINAL_COLUMNS = FINAL_COLUMNS_HISTORICAL_PAYMENTS
+
+    # Column mapping from internal English names to French output names
+    COLUMN_MAPPING_TO_FRENCH = {
+        # Common columns
+        'contract_number': '# de Police',
+        'insurer_name': 'Compagnie',
+        'status': 'Statut',
+        'advisor_name': 'Conseiller',
+        'policy_premium': 'PA',
+        'commission': 'Com',
+        'bonus_amount': 'Boni',
+        'on_commission': 'Sur-Com',
+        'report_date': 'Date',
+        'comments': 'Texte',
+        # Historical Payments specific
+        'is_verified': 'Verifié',
+        'amount_received': 'Reçu',
+        # Sales Production specific
+        'completion': 'Complet',
+        'sharing_amount': 'Partage',
+        'commission_receipt': 'Reçu 1',
+        'bonus_amount_receipt': 'Reçu 2',
+        'on_commission_receipt': 'Reçu 3',
+        'total': 'Total',
+        'total_received': 'Total Reçu',
+        'payment': 'Paie',
+    }
+
+    # Reverse mapping from French to English (for reading Monday.com data)
+    COLUMN_MAPPING_TO_ENGLISH = {v: k for k, v in COLUMN_MAPPING_TO_FRENCH.items()}
 
     def __init__(self, output_dir: str = "./unified_data"):
         """
@@ -799,6 +823,12 @@ class CommissionDataUnifier:
             if 'Total' in df.columns:
                 standard_df['total'] = pd.to_numeric(df['Total'], errors='coerce')
 
+            if 'Total Reçu' in df.columns:
+                standard_df['total_received'] = pd.to_numeric(df['Total Reçu'], errors='coerce')
+
+            if 'Paie' in df.columns:
+                standard_df['payment'] = pd.to_numeric(df['Paie'], errors='coerce')
+
         # =====================================================================
         # ADD CONSTANTS
         # =====================================================================
@@ -1037,14 +1067,20 @@ class CommissionDataUnifier:
 
     def filter_final_columns(self, df: pd.DataFrame, board_type: BoardType = None) -> pd.DataFrame:
         """
-        Filter DataFrame to keep only the final required columns.
+        Filter DataFrame to keep only the final required columns and rename to French.
+
+        This method:
+        1. Renames internal English column names to French output names
+        2. Calculates 'Total Reçu' and 'Paie' for Sales Production if needed
+        3. Filters to keep only the final columns for the board type
+        4. Reorders columns to match the expected order
 
         Args:
-            df: Standardized DataFrame
+            df: Standardized DataFrame (with English internal column names)
             board_type: Type of board (auto-detected from df.attrs if None)
 
         Returns:
-            DataFrame with only FINAL_COLUMNS (specific to board type)
+            DataFrame with French column names (specific to board type)
         """
         # Auto-detect board_type from DataFrame attributes if not provided
         if board_type is None and hasattr(df, 'attrs') and 'board_type' in df.attrs:
@@ -1060,11 +1096,34 @@ class CommissionDataUnifier:
         if df.empty:
             return pd.DataFrame(columns=final_columns)
 
-        # Keep only columns that exist in both final_columns and df
-        available_columns = [col for col in final_columns if col in df.columns]
+        # Create a copy for modification
+        result_df = df.copy()
 
-        # Create filtered dataframe
-        filtered_df = df[available_columns].copy()
+        # For Sales Production, calculate 'Total Reçu' and 'Paie' if not present
+        if board_type == BoardType.SALES_PRODUCTION:
+            # Total Reçu = sum of all receipt columns (Reçu 1 + Reçu 2 + Reçu 3)
+            if 'total_received' not in result_df.columns:
+                result_df['total_received'] = (
+                    result_df.get('commission_receipt', pd.Series(0, index=result_df.index)).fillna(0) +
+                    result_df.get('bonus_amount_receipt', pd.Series(0, index=result_df.index)).fillna(0) +
+                    result_df.get('on_commission_receipt', pd.Series(0, index=result_df.index)).fillna(0)
+                )
+
+            # Paie = Total - Total Reçu (remaining amount to be paid)
+            if 'payment' not in result_df.columns:
+                result_df['payment'] = (
+                    result_df.get('total', pd.Series(0, index=result_df.index)).fillna(0) -
+                    result_df['total_received'].fillna(0)
+                )
+
+        # Rename columns from English to French
+        result_df = result_df.rename(columns=self.COLUMN_MAPPING_TO_FRENCH)
+
+        # Keep only columns that exist in both final_columns and df
+        available_columns = [col for col in final_columns if col in result_df.columns]
+
+        # Filter to available columns
+        filtered_df = result_df[available_columns].copy()
 
         # Add missing columns with None
         for col in final_columns:
@@ -1072,13 +1131,13 @@ class CommissionDataUnifier:
                 filtered_df[col] = None
 
         # Reorder columns to match final_columns
-        result_df = filtered_df[final_columns]
+        filtered_df = filtered_df[final_columns]
 
         # Preserve board_type in attrs
         if board_type is not None:
-            result_df.attrs['board_type'] = board_type
+            filtered_df.attrs['board_type'] = board_type
 
-        return result_df
+        return filtered_df
 
     def _ensure_standard_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -1353,26 +1412,32 @@ class CommissionDataUnifier:
             records = len(df)
             total_records += records
 
-            commission_sum = df['total_commission'].sum()
-            if not pd.isna(commission_sum):
-                total_commission += commission_sum
+            # Use French column names: 'Total' for Sales Production, 'Com' for Historical Payments
+            commission_col = 'Total' if 'Total' in df.columns else 'Com'
+            if commission_col in df.columns:
+                commission_sum = df[commission_col].sum()
+                if not pd.isna(commission_sum):
+                    total_commission += commission_sum
+            else:
+                commission_sum = None
 
             report.append(f"\n{source}:")
             report.append(f"  📊 Records: {records:,}")
-            report.append(f"  💰 Total Commission: ${commission_sum:,.2f}" if not pd.isna(commission_sum) else "  💰 Total Commission: N/A")
+            if commission_sum is not None and not pd.isna(commission_sum):
+                report.append(f"  💰 Total Commission: ${commission_sum:,.2f}")
+            else:
+                report.append(f"  💰 Total Commission: N/A")
 
-            # Unique contracts
-            unique_contracts = df['contract_number'].nunique()
-            report.append(f"  📝 Unique Contracts: {unique_contracts:,}")
+            # Unique contracts (using French column name)
+            if '# de Police' in df.columns:
+                unique_contracts = df['# de Police'].nunique()
+                report.append(f"  📝 Unique Contracts: {unique_contracts:,}")
 
-            # Date range (if available)
-            date_cols = ['effective_date', 'issue_date', 'report_date']
-            for date_col in date_cols:
-                if date_col in df.columns:
-                    dates = pd.to_datetime(df[date_col], errors='coerce').dropna()
-                    if len(dates) > 0:
-                        report.append(f"  📅 Date Range ({date_col}): {dates.min().date()} to {dates.max().date()}")
-                        break
+            # Date range (using French column name)
+            if 'Date' in df.columns:
+                dates = pd.to_datetime(df['Date'], errors='coerce').dropna()
+                if len(dates) > 0:
+                    report.append(f"  📅 Date Range: {dates.min().date()} to {dates.max().date()}")
 
         report.append("\n" + "-" * 80)
         report.append(f"TOTAL ACROSS ALL SOURCES:")
@@ -1386,8 +1451,10 @@ class CommissionDataUnifier:
         """
         Validate data quality and return issues.
 
+        Uses French column names as they appear in the final DataFrame.
+
         Args:
-            df: DataFrame to validate
+            df: DataFrame to validate (with French column names)
             source_name: Name of the source
 
         Returns:
@@ -1403,8 +1470,8 @@ class CommissionDataUnifier:
             issues['errors'].append("DataFrame is empty")
             return issues
 
-        # Check for missing critical fields
-        critical_fields = ['contract_number', 'insured_name', 'total_commission']
+        # Check for missing critical fields (French column names)
+        critical_fields = ['# de Police', 'Compagnie', 'Com']
         for field in critical_fields:
             if field in df.columns:
                 missing_count = df[field].isna().sum()
@@ -1413,14 +1480,14 @@ class CommissionDataUnifier:
                     issues['warnings'].append(f"{field}: {missing_count} missing values ({pct:.1f}%)")
 
         # Check for negative commissions (unusual but not necessarily wrong)
-        if 'total_commission' in df.columns:
-            negative_count = (df['total_commission'] < 0).sum()
+        if 'Com' in df.columns:
+            negative_count = (df['Com'] < 0).sum()
             if negative_count > 0:
                 issues['warnings'].append(f"Found {negative_count} negative commission values")
 
         # Check for duplicate contracts
-        if 'contract_number' in df.columns:
-            duplicates = df['contract_number'].duplicated().sum()
+        if '# de Police' in df.columns:
+            duplicates = df['# de Police'].duplicated().sum()
             if duplicates > 0:
                 issues['warnings'].append(f"Found {duplicates} duplicate contract numbers (may be valid for multiple protections)")
 

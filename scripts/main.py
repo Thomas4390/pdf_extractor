@@ -376,12 +376,12 @@ class InsuranceCommissionPipeline:
             ColorPrint.success(f"Processing complete: {len(self.final_data)} final records")
             ColorPrint.info(f"Columns: {list(self.final_data.columns)}")
 
-            # Debug: Check report_date in final data
-            if 'report_date' in self.final_data.columns:
-                dates_final = self.final_data['report_date'].notna().sum()
-                ColorPrint.info(f"Report dates: {dates_final}/{len(self.final_data)} non-null values")
+            # Debug: Check Date in final data (French column name)
+            if 'Date' in self.final_data.columns:
+                dates_final = self.final_data['Date'].notna().sum()
+                ColorPrint.info(f"Dates: {dates_final}/{len(self.final_data)} non-null values")
                 if dates_final > 0:
-                    sample_dates = self.final_data['report_date'].dropna().head(3).tolist()
+                    sample_dates = self.final_data['Date'].dropna().head(3).tolist()
                     ColorPrint.info(f"Sample dates: {sample_dates}")
 
             # Display sample
@@ -566,13 +566,26 @@ class InsuranceCommissionPipeline:
                 ColorPrint.info(f"Found {len(data_columns)} data columns to create/map in Monday.com")
                 ColorPrint.info(f"Columns (in order): {data_columns}")
 
-                # Define column types based on data
+                # Define column types based on data (using French column names)
                 # Note: Dates are now treated as text/strings for simplicity
-                # Add new number columns for Sales Production
-                number_columns_set = {'policy_premium', 'sharing_rate', 'sharing_amount', 'commission_rate',
-                                     'commission', 'commission_receipt', 'bonus_rate', 'bonus_amount',
-                                     'bonus_amount_receipt', 'on_commission_rate', 'on_commission',
-                                     'on_commission_receipt', 'amount_received', 'total'}
+                # Number columns for both board types
+                number_columns_set = {
+                    # Common number columns
+                    'PA',           # policy_premium
+                    'Com',          # commission
+                    'Boni',         # bonus_amount
+                    'Sur-Com',      # on_commission
+                    # Historical Payments specific
+                    'Reçu',         # amount_received
+                    # Sales Production specific
+                    'Partage',      # sharing_amount
+                    'Reçu 1',       # commission_receipt
+                    'Reçu 2',       # bonus_amount_receipt
+                    'Reçu 3',       # on_commission_receipt
+                    'Total',        # total
+                    'Total Reçu',   # total_received
+                    'Paie',         # payment
+                }
 
                 # Get or create columns with appropriate types
                 # IMPORTANT: Create columns in order to preserve FINAL_COLUMNS order
@@ -600,11 +613,11 @@ class InsuranceCommissionPipeline:
                 for col_name, col_id in self.column_mapping.items():
                     ColorPrint.data(f"  - {col_name} -> {col_id}")
 
-                # Verify insured_name is in mapping
-                if 'insured_name' in self.column_mapping:
-                    ColorPrint.success("✓ insured_name column is mapped correctly")
+                # Verify key columns are in mapping
+                if '# de Police' in self.column_mapping:
+                    ColorPrint.success("✓ # de Police column is mapped correctly")
                 else:
-                    ColorPrint.error("✗ insured_name column is MISSING from mapping!")
+                    ColorPrint.warning("⚠️ # de Police column is MISSING from mapping!")
             else:
                 ColorPrint.warning("No data available for column setup")
                 self.column_mapping = {}
@@ -631,13 +644,13 @@ class InsuranceCommissionPipeline:
                 ColorPrint.error("No data to upload")
                 return False
 
-            # Filter out rows with empty/invalid contract numbers
+            # Filter out rows with empty/invalid contract numbers (using French column name)
             initial_count = len(self.final_data)
-            if 'contract_number' in self.final_data.columns:
+            if '# de Police' in self.final_data.columns:
                 self.final_data = self.final_data[
-                    self.final_data['contract_number'].notna() &
-                    (self.final_data['contract_number'] != '') &
-                    (self.final_data['contract_number'] != 'nan')
+                    self.final_data['# de Police'].notna() &
+                    (self.final_data['# de Police'] != '') &
+                    (self.final_data['# de Police'] != 'nan')
                 ].copy()
 
                 filtered_count = initial_count - len(self.final_data)
@@ -660,9 +673,9 @@ class InsuranceCommissionPipeline:
                         if not group_data.empty:
                             ColorPrint.info(f"\n  📂 Groupe: {group_title}")
                             ColorPrint.info(f"     → {len(group_data)} items")
-                            # Display first 5 item names (contract numbers)
-                            if 'contract_number' in group_data.columns:
-                                sample_items = group_data['contract_number'].head(5).tolist()
+                            # Display first 5 item names (contract numbers, using French column)
+                            if '# de Police' in group_data.columns:
+                                sample_items = group_data['# de Police'].head(5).tolist()
                                 ColorPrint.info(f"     → Exemples: {sample_items}")
                                 if len(group_data) > 5:
                                     ColorPrint.info(f"     → ... et {len(group_data) - 5} autres")
@@ -835,17 +848,17 @@ class InsuranceCommissionPipeline:
 
         ColorPrint.info(f"Preparing {len(df)} items with {len(column_mapping)} mapped columns...")
 
-        # Debug: Check report_date in DataFrame
-        if 'report_date' in df.columns:
-            non_null_dates = df['report_date'].notna().sum()
-            ColorPrint.info(f"Debug: report_date column found in DataFrame")
+        # Debug: Check Date in DataFrame (French column name)
+        if 'Date' in df.columns:
+            non_null_dates = df['Date'].notna().sum()
+            ColorPrint.info(f"Debug: Date column found in DataFrame")
             ColorPrint.info(f"       Non-null dates: {non_null_dates}/{len(df)}")
             if non_null_dates > 0:
-                sample_dates = df['report_date'].dropna().head(3).tolist()
+                sample_dates = df['Date'].dropna().head(3).tolist()
                 ColorPrint.info(f"       Sample dates: {sample_dates}")
                 ColorPrint.info(f"       Date types: {[type(d).__name__ for d in sample_dates]}")
         else:
-            ColorPrint.warning(f"Debug: report_date column NOT found in DataFrame!")
+            ColorPrint.warning(f"Debug: Date column NOT found in DataFrame!")
             ColorPrint.info(f"       Available columns: {list(df.columns)}")
 
         # Metadata columns to skip
@@ -855,7 +868,8 @@ class InsuranceCommissionPipeline:
 
         for idx, row in df.iterrows():
             # Create item name from contract number only (column "Élément" in Monday.com)
-            contract_num = str(row.get('contract_number', 'N/A'))
+            # Use French column name '# de Police'
+            contract_num = str(row.get('# de Police', 'N/A'))
             item_name = contract_num
 
             # Prepare column values - iterate in DataFrame column order
@@ -875,9 +889,9 @@ class InsuranceCommissionPipeline:
 
                 column_id = column_mapping[col_name]
 
-                # Debug for report_date on first row
-                if is_first_row and col_name == 'report_date':
-                    print(f"       DEBUG report_date:")
+                # Debug for Date on first row (French column name)
+                if is_first_row and col_name == 'Date':
+                    print(f"       DEBUG Date:")
                     print(f"         Raw value: {repr(col_value)}")
                     print(f"         Type: {type(col_value).__name__}")
                     print(f"         Is NA: {pd.isna(col_value)}")
@@ -886,7 +900,7 @@ class InsuranceCommissionPipeline:
 
                 # Handle empty/NaN values
                 if pd.isna(col_value) or col_value is None or col_value == '':
-                    if is_first_row and col_name == 'report_date':
+                    if is_first_row and col_name == 'Date':
                         print(f"         → SKIPPED: Empty/NaN value")
                     # Skip empty values entirely (don't send them)
                     continue
@@ -894,17 +908,17 @@ class InsuranceCommissionPipeline:
                 # Convert all values to string (including dates)
                 value_str = str(col_value)
 
-                # Debug for report_date on first row
-                if is_first_row and col_name == 'report_date':
+                # Debug for Date on first row
+                if is_first_row and col_name == 'Date':
                     print(f"         Converted to string: {repr(value_str)}")
 
                 # Skip if conversion resulted in "None" or "nan"
                 if value_str in ['None', 'nan', 'NaN', 'NaT']:
-                    if is_first_row and col_name == 'report_date':
+                    if is_first_row and col_name == 'Date':
                         print(f"         → SKIPPED: Invalid string value")
                     continue
 
-                if is_first_row and col_name == 'report_date':
+                if is_first_row and col_name == 'Date':
                     print(f"         → ADDED to column_values: {value_str}")
 
                 column_values[column_id] = value_str
@@ -930,15 +944,15 @@ class InsuranceCommissionPipeline:
                 for i, (col_id, col_val) in enumerate(list(items[0]['column_values'].items())[:5]):
                     ColorPrint.data(f"    - {col_id}: {col_val[:50]}..." if len(col_val) > 50 else f"    - {col_id}: {col_val}")
 
-                # Debug: Check if report_date is in the data
-                if 'report_date' in column_mapping:
-                    report_date_id = column_mapping['report_date']
-                    if report_date_id in items[0].get('column_values', {}):
-                        ColorPrint.success(f"  ✓ report_date found: {items[0]['column_values'][report_date_id]}")
+                # Debug: Check if Date is in the data (French column name)
+                if 'Date' in column_mapping:
+                    date_id = column_mapping['Date']
+                    if date_id in items[0].get('column_values', {}):
+                        ColorPrint.success(f"  ✓ Date found: {items[0]['column_values'][date_id]}")
                     else:
-                        ColorPrint.warning(f"  ⚠️  report_date column ID ({report_date_id}) not in column_values!")
+                        ColorPrint.warning(f"  ⚠️  Date column ID ({date_id}) not in column_values!")
                 else:
-                    ColorPrint.warning(f"  ⚠️  report_date not in column mapping!")
+                    ColorPrint.warning(f"  ⚠️  Date not in column mapping!")
 
         return items
 

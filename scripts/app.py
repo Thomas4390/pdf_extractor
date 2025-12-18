@@ -717,8 +717,8 @@ def render_stage_2():
     cols = st.columns(4)
     cols[0].metric("Lignes", len(df))
     cols[1].metric("Colonnes", len(df.columns))
-    if 'contract_number' in df.columns:
-        cols[2].metric("Contrats", df['contract_number'].notna().sum())
+    if '# de Police' in df.columns:
+        cols[2].metric("Contrats", df['# de Police'].notna().sum())
     cols[3].metric("Doublons", df.duplicated().sum())
 
     # Data preview
