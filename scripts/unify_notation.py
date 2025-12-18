@@ -952,8 +952,8 @@ class CommissionDataUnifier:
             unique_groups = standard_df['group_title'].dropna().unique()
             print(f"   ✓ Group metadata preserved: {len(unique_groups)} groups - {list(unique_groups)}")
 
-        # Store board_type as metadata for later use
-        standard_df.attrs['board_type'] = board_type
+        # Store board_type as metadata for later use (as string for JSON serialization)
+        standard_df.attrs['board_type'] = board_type.value if hasattr(board_type, 'value') else str(board_type)
 
         return self._ensure_standard_columns(standard_df)
 
@@ -1084,10 +1084,20 @@ class CommissionDataUnifier:
         """
         # Auto-detect board_type from DataFrame attributes if not provided
         if board_type is None and hasattr(df, 'attrs') and 'board_type' in df.attrs:
-            board_type = df.attrs['board_type']
+            stored_type = df.attrs['board_type']
+            # Handle both enum and string values
+            if isinstance(stored_type, str):
+                board_type = BoardType(stored_type) if stored_type in [bt.value for bt in BoardType] else None
+            else:
+                board_type = stored_type
 
         # Select appropriate final columns based on board type
-        if board_type == BoardType.SALES_PRODUCTION:
+        # Handle both enum comparison and string comparison
+        is_sales_production = (
+            board_type == BoardType.SALES_PRODUCTION or
+            (isinstance(board_type, str) and board_type == BoardType.SALES_PRODUCTION.value)
+        )
+        if is_sales_production:
             final_columns = self.FINAL_COLUMNS_SALES_PRODUCTION
         else:
             # Default to Historical Payments
@@ -1133,9 +1143,9 @@ class CommissionDataUnifier:
         # Reorder columns to match final_columns
         filtered_df = filtered_df[final_columns]
 
-        # Preserve board_type in attrs
+        # Preserve board_type in attrs (as string for JSON serialization compatibility)
         if board_type is not None:
-            filtered_df.attrs['board_type'] = board_type
+            filtered_df.attrs['board_type'] = board_type.value if hasattr(board_type, 'value') else str(board_type)
 
         return filtered_df
 
@@ -1303,8 +1313,8 @@ class CommissionDataUnifier:
         elif source == 'ASSOMPTION':
             standardized = self.convert_assomption_to_standard(raw_df)
 
-        # Store board_type in DataFrame attrs for later use
-        standardized.attrs['board_type'] = target_board_type
+        # Store board_type in DataFrame attrs for later use (as string for JSON serialization)
+        standardized.attrs['board_type'] = target_board_type.value if hasattr(target_board_type, 'value') else str(target_board_type)
 
         print(f"✅ Standardized to {len(standardized)} records")
 

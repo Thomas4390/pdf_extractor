@@ -545,16 +545,25 @@ class InsuranceCommissionPipeline:
                 # Detect board_type from DataFrame attributes or use config
                 board_type = None
                 if hasattr(self.final_data, 'attrs') and 'board_type' in self.final_data.attrs:
-                    board_type = self.final_data.attrs['board_type']
+                    stored_type = self.final_data.attrs['board_type']
+                    # Handle both enum and string values
+                    if isinstance(stored_type, str):
+                        board_type = BoardType(stored_type) if stored_type in [bt.value for bt in BoardType] else BoardType.HISTORICAL_PAYMENTS
+                    else:
+                        board_type = stored_type
                 elif self.config.target_board_type:
                     board_type = self.config.target_board_type
                 else:
                     board_type = BoardType.HISTORICAL_PAYMENTS  # Default
 
-                ColorPrint.info(f"Board type detected: {board_type.value}")
+                ColorPrint.info(f"Board type detected: {board_type.value if hasattr(board_type, 'value') else board_type}")
 
                 # Select appropriate FINAL_COLUMNS based on board type
-                if board_type == BoardType.SALES_PRODUCTION:
+                is_sales_production = (
+                    board_type == BoardType.SALES_PRODUCTION or
+                    (isinstance(board_type, str) and board_type == BoardType.SALES_PRODUCTION.value)
+                )
+                if is_sales_production:
                     FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS_SALES_PRODUCTION
                 else:
                     FINAL_COLUMNS = CommissionDataUnifier.FINAL_COLUMNS_HISTORICAL_PAYMENTS
