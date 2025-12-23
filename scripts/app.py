@@ -140,10 +140,104 @@ def init_session_state():
         'selected_board_id': None,
         'monday_api_key': None,
         'boards_loading': False,
+        'verification_tolerance': 10.0,  # Default tolerance percentage for Reçu vs Com verification
     }
     for key, default in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default
+
+
+# =============================================================================
+# VERIFICATION FUNCTIONS
+# =============================================================================
+
+def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.DataFrame:
+    """
+    Verify that Reçu is within tolerance range of calculated Com for each row.
+
+    The comparison uses a CALCULATED commission value based on the formula:
+        Com_calculée = ROUND((PA * 0.4) * 0.5, 2)
+
+    This is different from the 'Com' column which may contain other calculated values.
+    The original 'Com', 'Boni', 'Sur-Com' columns are preserved unchanged.
+
+    Args:
+        df: DataFrame with 'Reçu' and 'PA' columns
+        tolerance_pct: Tolerance percentage (default 10%)
+
+    Returns:
+        DataFrame with added columns:
+        - 'Com Calculée': The calculated commission for comparison
+        - 'Vérification': Status flag
+            - '✅ Bonus' if Reçu > Com_calculée * (1 + tolerance) - positive flag (good)
+            - '⚠️ Écart' if Reçu < Com_calculée * (1 - tolerance) - negative flag (problem)
+            - '✓ OK' if within tolerance range
+            - '-' if data is missing
+    """
+    result_df = df.copy()
+
+    # Check if required columns exist (need PA and Reçu for calculation)
+    if 'Reçu' not in result_df.columns or 'PA' not in result_df.columns:
+        return result_df
+
+    # Convert to numeric
+    recu = pd.to_numeric(result_df['Reçu'], errors='coerce')
+    pa = pd.to_numeric(result_df['PA'], errors='coerce')
+
+    # Calculate expected commission using formula: ROUND((PA * 0.4) * 0.5, 2)
+    # This represents: PA * sharing_rate(40%) * commission_rate(50%)
+    com_calculee = (pa * 0.4 * 0.5).round(2)
+
+    # Add calculated commission column for transparency
+    result_df['Com Calculée'] = com_calculee
+
+    # Calculate tolerance bounds based on calculated commission
+    tolerance = tolerance_pct / 100.0
+    lower_bound = com_calculee * (1 - tolerance)
+    upper_bound = com_calculee * (1 + tolerance)
+
+    # Calculate percentage difference for display
+    pct_diff = ((recu - com_calculee) / com_calculee * 100).round(1)
+
+    # Create verification column
+    verification = []
+    for i in range(len(result_df)):
+        r = recu.iloc[i]
+        c = com_calculee.iloc[i]
+        diff = pct_diff.iloc[i]
+
+        if pd.isna(r) or pd.isna(c) or c == 0:
+            verification.append('-')
+        elif r > upper_bound.iloc[i]:
+            verification.append(f'✅ +{diff}%')  # Positive flag (bonus/good)
+        elif r < lower_bound.iloc[i]:
+            verification.append(f'⚠️ {diff}%')  # Negative flag (problem)
+        else:
+            verification.append('✓ OK')
+
+    result_df['Vérification'] = verification
+
+    return result_df
+
+
+def get_verification_stats(df: pd.DataFrame) -> dict:
+    """
+    Get statistics about verification results.
+
+    Returns:
+        Dictionary with counts of each verification status
+    """
+    if 'Vérification' not in df.columns:
+        return {'ok': 0, 'bonus': 0, 'ecart': 0, 'na': 0}
+
+    verif = df['Vérification'].astype(str)
+
+    return {
+        'ok': verif.str.contains('OK', na=False).sum(),
+        'bonus': verif.str.contains('✅', na=False).sum(),
+        'ecart': verif.str.contains('⚠️', na=False).sum(),
+        'na': (verif == '-').sum()
+    }
 
 
 # =============================================================================
@@ -721,8 +815,55 @@ def render_stage_2():
         cols[2].metric("Contrats", df['# de Police'].notna().sum())
     cols[3].metric("Doublons", df.duplicated().sum())
 
-    # Data preview
-    st.dataframe(df, use_container_width=True, height=350)
+    # Verification section - only if Reçu and PA columns exist (PA needed for formula)
+    has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
+
+    if has_verification_cols:
+        st.markdown("### 🔍 Vérification Reçu vs Commission")
+        st.caption("Formule: `Com Calculée = ROUND((PA × 0.4) × 0.5, 2)`")
+
+        # Tolerance slider
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            tolerance = st.slider(
+                "Tolérance (%)",
+                min_value=1.0,
+                max_value=50.0,
+                value=st.session_state.verification_tolerance,
+                step=1.0,
+                help="Écart acceptable entre Reçu et Com",
+                key="tolerance_slider"
+            )
+            st.session_state.verification_tolerance = tolerance
+
+        # Apply verification
+        df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
+        stats = get_verification_stats(df_verified)
+
+        with col2:
+            # Display verification stats
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("✓ OK", stats['ok'], help="Reçu dans la tolérance de Com Calculée")
+            stat_cols[1].metric("✅ Bonus", stats['bonus'], help=f"Reçu > Com Calculée + {tolerance}%")
+            stat_cols[2].metric("⚠️ Écart", stats['ecart'], help=f"Reçu < Com Calculée - {tolerance}%")
+            stat_cols[3].metric("- N/A", stats['na'], help="PA ou Reçu manquant")
+
+        # Show warnings if there are issues
+        if stats['ecart'] > 0:
+            st.warning(f"⚠️ **{stats['ecart']} ligne(s)** ont un écart négatif (Reçu inférieur à la commission attendue)")
+
+        if stats['bonus'] > 0:
+            st.success(f"✅ **{stats['bonus']} ligne(s)** ont un bonus (Reçu supérieur à la commission attendue)")
+
+        # Data preview with verification column
+        st.dataframe(df_verified, use_container_width=True, height=350)
+
+        # Store verified data for potential use
+        df_display = df_verified
+    else:
+        # Data preview without verification
+        st.dataframe(df, use_container_width=True, height=350)
+        df_display = df
 
     # Actions row
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])

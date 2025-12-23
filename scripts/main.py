@@ -596,6 +596,20 @@ class InsuranceCommissionPipeline:
                     'Paie',         # payment
                 }
 
+                # Status columns (for colored labels/tags)
+                # These use Monday.com status type with automatic label creation
+                # All columns that should have colored labels in Monday.com
+                status_columns_set = {
+                    # Common status columns (both board types)
+                    'Compagnie',    # insurer_name - labels: "UV Inc", "UV Perso", "IDC", "Assomption", etc.
+                    'Statut',       # status - policy status labels
+                    'Conseiller',   # advisor_name - advisor labels
+                    # Historical Payments specific
+                    'Verifié',      # is_verified - verification status labels (Oui/Non, etc.)
+                    # Sales Production specific
+                    'Complet',      # completion - completion status labels
+                }
+
                 # Get or create columns with appropriate types
                 # IMPORTANT: Create columns in order to preserve FINAL_COLUMNS order
                 self.column_mapping = {}
@@ -605,7 +619,12 @@ class InsuranceCommissionPipeline:
                 # Create columns one by one in the order of data_columns (which follows FINAL_COLUMNS)
                 for col_name in data_columns:
                     # Determine column type
-                    col_type = "numbers" if col_name in number_columns_set else "text"
+                    if col_name in number_columns_set:
+                        col_type = "numbers"
+                    elif col_name in status_columns_set:
+                        col_type = "status"
+                    else:
+                        col_type = "text"
 
                     # Create or get this single column
                     col_mapping = self.monday_client.get_or_create_columns(
@@ -876,16 +895,32 @@ class InsuranceCommissionPipeline:
                            'parent_item_id', 'parent_item_name']
 
         for idx, row in df.iterrows():
-            # Create item name from contract number only (column "Élément" in Monday.com)
-            # Use French column name '# de Police'
-            contract_num = str(row.get('# de Police', 'N/A'))
-            item_name = contract_num
+            # Create item name from client name (column "Élément" in Monday.com)
+            # Use French column name 'Nom Client' which contains the client's full name
+            # When multiple clients share the same policy, their names are joined with ' & '
+            client_name = str(row.get('Nom Client', ''))
+
+            # Fallback to contract number if client name is empty
+            if not client_name or client_name in ['', 'nan', 'None', 'N/A']:
+                client_name = str(row.get('# de Police', 'N/A'))
+
+            item_name = client_name
 
             # Prepare column values - iterate in DataFrame column order
             column_values = {}
 
             # Debug for first row only
             is_first_row = (idx == df.index[0])
+
+            # Status columns that need special formatting {"label": "value"}
+            # These correspond to status_columns_set in _step3_setup_monday_board
+            status_columns = {
+                'Compagnie',    # insurer_name
+                'Statut',       # status
+                'Conseiller',   # advisor_name
+                'Verifié',      # is_verified (Historical Payments)
+                'Complet',      # completion (Sales Production)
+            }
 
             for col_name, col_value in row.items():
                 # Skip metadata columns
@@ -897,6 +932,14 @@ class InsuranceCommissionPipeline:
                     continue
 
                 column_id = column_mapping[col_name]
+
+                # Skip formula columns - they are auto-calculated by Monday.com
+                # and cannot receive values via API
+                # Formula column IDs start with "formula_"
+                if column_id.startswith('formula'):
+                    if is_first_row:
+                        print(f"       SKIP {col_name}: Formula column (auto-calculated)")
+                    continue
 
                 # Debug for Date on first row (French column name)
                 if is_first_row and col_name == 'Date':
@@ -929,6 +972,30 @@ class InsuranceCommissionPipeline:
 
                 if is_first_row and col_name == 'Date':
                     print(f"         → ADDED to column_values: {value_str}")
+
+                # Format status columns with {"label": "value"} structure
+                # This allows Monday.com to use colored labels/tags with create_labels_if_missing
+                if col_name in status_columns:
+                    column_values[column_id] = {"label": value_str}
+                    if is_first_row and col_name == 'Compagnie':
+                        print(f"       DEBUG Compagnie: formatted as label → {{'label': '{value_str}'}}")
+                    continue
+
+                # Format date columns with {"date": "YYYY-MM-DD"} structure
+                # Date column IDs start with "date_"
+                if column_id.startswith('date'):
+                    column_values[column_id] = {"date": value_str}
+                    if is_first_row and col_name == 'Date':
+                        print(f"       DEBUG Date: formatted as date → {{'date': '{value_str}'}}")
+                    continue
+
+                # Format color/status columns with {"label": "value"} structure
+                # Color column IDs start with "color_" (another type of status column)
+                if column_id.startswith('color'):
+                    column_values[column_id] = {"label": value_str}
+                    if is_first_row:
+                        print(f"       DEBUG {col_name}: formatted as label → {{'label': '{value_str}'}}")
+                    continue
 
                 column_values[column_id] = value_str
 

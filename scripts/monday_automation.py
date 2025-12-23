@@ -303,7 +303,8 @@ class MondayClient:
         board_id: int,
         item_name: str,
         group_id: Optional[str] = None,
-        column_values: Optional[Dict] = None
+        column_values: Optional[Dict] = None,
+        create_labels_if_missing: bool = True
     ) -> CreateItemResult:
         """
         Create a new item in a Monday.com board.
@@ -315,6 +316,8 @@ class MondayClient:
             column_values: Optional dictionary of column values
                           Keys should be column IDs, values should be properly formatted
                           according to the column type
+            create_labels_if_missing: If True, automatically create new labels for status/dropdown
+                                     columns if they don't already exist (default: True)
 
         Returns:
             CreateItemResult with item_id if successful
@@ -334,6 +337,9 @@ class MondayClient:
             # Double JSON encoding for Monday.com API
             column_values_json = json.dumps(json.dumps(column_values))
             optional_args.append(f'column_values: {column_values_json}')
+
+        # Add create_labels_if_missing parameter to automatically create new status/dropdown labels
+        optional_args.append(f'create_labels_if_missing: {str(create_labels_if_missing).lower()}')
 
         optional_args_str = ', ' + ', '.join(optional_args) if optional_args else ''
 

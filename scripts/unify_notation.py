@@ -160,8 +160,10 @@ class CommissionDataUnifier:
 
     # Final columns for Historical Payments (Paiements historiques)
     # French column names matching Monday.com board
+    # Note: 'Nom Client' is preserved separately for use as item_name (Élément column in Monday.com)
     FINAL_COLUMNS_HISTORICAL_PAYMENTS = [
         '# de Police',
+        'Nom Client',  # Added: Client name for Monday.com Élément column
         'Compagnie',
         'Statut',
         'Conseiller',
@@ -177,9 +179,11 @@ class CommissionDataUnifier:
 
     # Final columns for Sales Production (Ventes et production)
     # French column names matching Monday.com board
+    # Note: 'Nom Client' is preserved separately for use as item_name (Élément column in Monday.com)
     FINAL_COLUMNS_SALES_PRODUCTION = [
         'Date',
         '# de Police',
+        'Nom Client',  # Added: Client name for Monday.com Élément column
         'Compagnie',
         'Statut',
         'Conseiller',
@@ -205,6 +209,7 @@ class CommissionDataUnifier:
     COLUMN_MAPPING_TO_FRENCH = {
         # Common columns
         'contract_number': '# de Police',
+        'insured_name': 'Nom Client',  # Client name for Monday.com Élément column
         'insurer_name': 'Compagnie',
         'status': 'Statut',
         'advisor_name': 'Conseiller',
@@ -405,6 +410,27 @@ class CommissionDataUnifier:
         except (ValueError, AttributeError):
             return None
 
+    def _is_corporate_advisor(self, advisor_name: str) -> bool:
+        """
+        Detect if the advisor name represents a corporation (Inc) rather than a person.
+
+        A corporate advisor name typically contains digits (like "9491-1377 QUEBEC INC").
+        Personal advisor names are typically just names without digits.
+
+        Args:
+            advisor_name: The name of the advisor from the report
+
+        Returns:
+            True if the advisor appears to be a corporation, False if personal
+        """
+        if not advisor_name or pd.isna(advisor_name):
+            return False
+
+        # Check if the name contains any digits - corporations typically have numbers
+        # like "9491-1377 QUEBEC INC" or "123456 CANADA INC"
+        import re
+        return bool(re.search(r'\d', str(advisor_name)))
+
     def convert_uv_to_standard(self, df: pd.DataFrame, metadata: Dict = None) -> pd.DataFrame:
         """
         Convert UV Assurance data to standard schema.
@@ -436,7 +462,9 @@ class CommissionDataUnifier:
         standard_df['result_amount'] = df['Résultat'].apply(self._clean_currency)
         standard_df['commission_type'] = df['Type'].astype(str)
         standard_df['bonus_rate'] = df['Taux de Boni'].apply(self._clean_percentage) / 100
-        standard_df['total_commission'] = df['Rémunération'].apply(self._clean_currency)
+        # Map 'Rémunération' to 'amount_received' (Reçu column in final output)
+        # This represents the actual amount received from UV
+        standard_df['amount_received'] = df['Rémunération'].apply(self._clean_currency)
 
         # Calculate commissions using helper method
         standard_df = self._calculate_commissions(standard_df)
@@ -444,8 +472,25 @@ class CommissionDataUnifier:
         # Round float columns using helper method
         standard_df = self._round_float_columns(standard_df)
 
-        # Add insurer_name AFTER creating the DataFrame with data
-        standard_df['insurer_name'] = np.repeat('UV', n_rows)
+        # Determine insurer_name based on advisor type (UV Inc vs UV Perso)
+        # UV Inc: when advisor name contains digits (corporation name like "9491-1377 QUEBEC INC")
+        # UV Perso: when advisor name is a personal name without digits
+        if metadata:
+            advisor_name = metadata.get('nom_conseiller', '')
+            is_corporate = self._is_corporate_advisor(advisor_name)
+
+            if is_corporate:
+                insurer_label = 'UV Inc'
+                print(f"   ✓ Detected corporate advisor: '{advisor_name}' → UV Inc")
+            else:
+                insurer_label = 'UV Perso'
+                print(f"   ✓ Detected personal advisor: '{advisor_name}' → UV Perso")
+        else:
+            # Default to UV Perso if no metadata
+            insurer_label = 'UV Perso'
+            print(f"   ⚠️  No advisor metadata - defaulting to UV Perso")
+
+        standard_df['insurer_name'] = np.repeat(insurer_label, n_rows)
 
         # Add metadata if provided - format date uniformly as YYYY-MM-DD
         if metadata:
@@ -546,7 +591,9 @@ class CommissionDataUnifier:
         standard_df['sharing_rate'] = 0.4  # Constant value for Assomption
         # Convert commission_rate to float (0.0-1.0): divide percentage by 100
         standard_df['commission_rate'] = df['Taux Commission'].apply(self._clean_percentage) / 100
-        standard_df['base_commission'] = pd.to_numeric(df['Commissions'], errors='coerce')
+        # Map 'Commissions' to 'amount_received' (Reçu column in final output)
+        # This represents the actual amount received from Assomption
+        standard_df['amount_received'] = pd.to_numeric(df['Commissions'], errors='coerce')
 
         # Handle bonus columns (may or may not exist)
         if 'Taux Boni' in df.columns:
@@ -560,12 +607,6 @@ class CommissionDataUnifier:
 
         # Round float columns using helper method
         standard_df = self._round_float_columns(standard_df)
-
-        # Calculate total commission (base + bonus)
-        standard_df['total_commission'] = (
-            standard_df['base_commission'].fillna(0) +
-            standard_df.get('bonus_amount', pd.Series(0, index=df.index)).fillna(0)
-        )
 
         # Add insurer_name AFTER creating the DataFrame with data
         standard_df['insurer_name'] = np.repeat('Assomption', n_rows)
@@ -1027,8 +1068,8 @@ class CommissionDataUnifier:
                 # Group by column, no aggregation needed
                 continue
             elif col == 'insured_name':
-                # Join names with semicolons
-                agg_rules[col] = lambda x: '; '.join(x.dropna().astype(str).unique())
+                # Join names with ampersand (&) for different clients with same policy number
+                agg_rules[col] = lambda x: ' & '.join(x.dropna().astype(str).unique())
             elif col in ['policy_premium', 'bonus_amount', 'on_commission']:
                 # Sum numeric columns
                 agg_rules[col] = lambda x: x.sum() if x.notna().any() else None
@@ -1133,6 +1174,71 @@ class CommissionDataUnifier:
                     result_df['total'].fillna(0) -
                     result_df['total_received'].fillna(0)
                 )
+
+        # For Historical Payments: Set status based on amount_received (Reçu)
+        # - If Reçu > 0 → "Payé" (paid)
+        # - If Reçu < 0 → "Charge back" (chargeback/refund)
+        # - If Reçu = 0 or None → keep existing status or None
+        if not is_sales_production and 'amount_received' in result_df.columns:
+            # Convert to numeric to handle any string values
+            amount_received = pd.to_numeric(result_df['amount_received'], errors='coerce')
+
+            # Create status based on amount_received
+            conditions = [
+                amount_received > 0,
+                amount_received < 0
+            ]
+            choices = ['Payé', 'Charge back']
+
+            # Apply conditions - only update where amount_received is not null/zero
+            new_status = np.select(conditions, choices, default=None)
+
+            # Update status column (create if doesn't exist)
+            if 'status' not in result_df.columns:
+                result_df['status'] = None
+
+            # Only update rows where we have a valid amount_received
+            mask = amount_received.notna() & (amount_received != 0)
+            result_df.loc[mask, 'status'] = np.array(new_status)[mask]
+
+            # Count updates for logging
+            paid_count = (amount_received > 0).sum()
+            chargeback_count = (amount_received < 0).sum()
+            print(f"   ✓ Status auto-set: {paid_count} 'Payé', {chargeback_count} 'Charge back'")
+
+        # For Historical Payments: Set is_verified based on Reçu vs Com Calculée
+        # Formula: Com Calculée = ROUND((PA * 0.4) * 0.5, 2)
+        # - If Reçu < 0.9 * Com Calculée → "Pas Verifié"
+        # - Otherwise → "Verifié"
+        if not is_sales_production and 'amount_received' in result_df.columns and 'policy_premium' in result_df.columns:
+            # Convert to numeric
+            amount_received = pd.to_numeric(result_df['amount_received'], errors='coerce')
+            policy_premium = pd.to_numeric(result_df['policy_premium'], errors='coerce')
+
+            # Calculate expected commission: ROUND((PA * 0.4) * 0.5, 2)
+            com_calculee = (policy_premium * 0.4 * 0.5).round(2)
+
+            # Calculate threshold: 90% of calculated commission
+            threshold = com_calculee * 0.9
+
+            # Create is_verified column
+            if 'is_verified' not in result_df.columns:
+                result_df['is_verified'] = None
+
+            # Apply verification logic
+            # "Pas Verifié" if Reçu < 90% of Com Calculée
+            # "Verifié" otherwise (including when Reçu >= 90% of Com Calculée)
+            mask_valid = amount_received.notna() & com_calculee.notna() & (com_calculee != 0)
+            mask_not_verified = mask_valid & (amount_received < threshold)
+            mask_verified = mask_valid & (amount_received >= threshold)
+
+            result_df.loc[mask_not_verified, 'is_verified'] = 'Pas Verifié'
+            result_df.loc[mask_verified, 'is_verified'] = 'Verifié'
+
+            # Count updates for logging
+            verified_count = mask_verified.sum()
+            not_verified_count = mask_not_verified.sum()
+            print(f"   ✓ Verification auto-set: {verified_count} 'Verifié', {not_verified_count} 'Pas Verifié'")
 
         # Rename columns from English to French
         result_df = result_df.rename(columns=self.COLUMN_MAPPING_TO_FRENCH)
