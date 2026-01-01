@@ -484,7 +484,7 @@ class PDFPropositionParser:
 
 
 if __name__ == "__main__":
-    pdf_path = "../pdf/Rapport des propositions soumises.20251124_1638.pdf"
+    pdf_path = "../pdf/idc/Rapport des propositions soumises.20251124_1638.pdf"
 
     parser = PDFPropositionParser(pdf_path)
     df = parser.parse()

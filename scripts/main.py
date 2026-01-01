@@ -19,12 +19,16 @@ Version: 1.1.0 (avec support colonnes Monday.com)
 
 import sys
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 import pandas as pd
+
+# Project root directory (parent of scripts/)
+PROJECT_ROOT = Path(__file__).parent.parent
 
 # Load environment variables from .env file if available
 try:
@@ -180,7 +184,7 @@ class PipelineConfig:
     monday_api_key: str = ""
 
     # Processing configuration
-    output_dir: str = "./results"
+    output_dir: str = None  # Defaults to PROJECT_ROOT/results in __post_init__
     reuse_board: bool = True
     reuse_group: bool = True
     aggregate_by_contract: bool = True
@@ -213,6 +217,10 @@ class PipelineConfig:
         # Validate Monday.com API key
         if not self.monday_api_key:
             raise ValueError("Monday.com API key is required")
+
+        # Set default output directory if not specified
+        if self.output_dir is None:
+            self.output_dir = str(PROJECT_ROOT / "results")
 
         # Create output directory if it doesn't exist
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
@@ -984,9 +992,17 @@ class InsuranceCommissionPipeline:
                 # Format date columns with {"date": "YYYY-MM-DD"} structure
                 # Date column IDs start with "date_"
                 if column_id.startswith('date'):
-                    column_values[column_id] = {"date": value_str}
-                    if is_first_row and col_name == 'Date':
-                        print(f"       DEBUG Date: formatted as date → {{'date': '{value_str}'}}")
+                    # Validate that the value looks like a date (YYYY-MM-DD format)
+                    # Skip if the value is numeric (type mismatch - column is date but value is number)
+                    date_pattern = r'^\d{4}-\d{2}-\d{2}$'
+                    if re.match(date_pattern, value_str):
+                        column_values[column_id] = {"date": value_str}
+                        if is_first_row and col_name == 'Date':
+                            print(f"       DEBUG Date: formatted as date → {{'date': '{value_str}'}}")
+                    else:
+                        # Value is not a valid date format - skip this column
+                        if is_first_row:
+                            print(f"       SKIP {col_name}: Column is date type but value '{value_str}' is not a date")
                     continue
 
                 # Format color/status columns with {"label": "value"} structure
@@ -1042,11 +1058,11 @@ def create_uv_config(api_key: str) -> PipelineConfig:
     """Create configuration for UV Assurance processing."""
     return PipelineConfig(
         source=InsuranceSource.UV,
-        pdf_path="../pdf/rappportremun_21622_2025-10-20.pdf",
+        pdf_path=str(PROJECT_ROOT / "pdf/uv/rappportremun_21622_2025-10-20.pdf"),
         month_group="Octobre 2025",
         board_name="Commissions UV Assurance",
         monday_api_key=api_key,
-        output_dir="./results/uv"
+        output_dir=str(PROJECT_ROOT / "results/uv")
     )
 
 
@@ -1054,11 +1070,11 @@ def create_idc_config(api_key: str) -> PipelineConfig:
     """Create configuration for IDC processing."""
     return PipelineConfig(
         source=InsuranceSource.IDC,
-        pdf_path="../pdf/Rapport des propositions soumises.20251017_1517.pdf",
+        pdf_path=str(PROJECT_ROOT / "pdf/idc/Rapport des propositions soumises.20251017_1517.pdf"),
         month_group="Octobre 2025",
         board_name="Commissions IDC",
         monday_api_key=api_key,
-        output_dir="./results/idc"
+        output_dir=str(PROJECT_ROOT / "results/idc")
     )
 
 
@@ -1066,11 +1082,11 @@ def create_assomption_config(api_key: str) -> PipelineConfig:
     """Create configuration for Assomption Vie processing."""
     return PipelineConfig(
         source=InsuranceSource.ASSOMPTION,
-        pdf_path="../pdf/Remuneration (61).pdf",
+        pdf_path=str(PROJECT_ROOT / "pdf/assomption/Remuneration (61).pdf"),
         month_group="Octobre 2025",
         board_name="Commissions Assomption",
         monday_api_key=api_key,
-        output_dir="./results/assomption"
+        output_dir=str(PROJECT_ROOT / "results/assomption")
     )
 
 
@@ -1078,11 +1094,11 @@ def create_idc_statement_config(api_key: str) -> PipelineConfig:
     """Create configuration for IDC Statement (trailing fees) processing."""
     return PipelineConfig(
         source=InsuranceSource.IDC_STATEMENT,
-        pdf_path="../pdf/Statements (8).pdf",
+        pdf_path=str(PROJECT_ROOT / "pdf/idc_statement/Statements (8).pdf"),
         month_group="Octobre 2025",
         board_name="Frais de suivi IDC",
         monday_api_key=api_key,
-        output_dir="./results/idc_statement"
+        output_dir=str(PROJECT_ROOT / "results/idc_statement")
     )
 
 
@@ -1112,7 +1128,7 @@ def create_monday_legacy_config(
         month_group=month_group,
         board_name=target_board_name,
         monday_api_key=api_key,
-        output_dir="./results/monday_legacy",
+        output_dir=str(PROJECT_ROOT / "results/monday_legacy"),
         source_board_id=source_board_id,
         source_group_id=source_group_id,
         reuse_board=True,

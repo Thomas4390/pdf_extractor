@@ -34,6 +34,9 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+# Project root directory (parent of scripts/)
+PROJECT_ROOT = Path(__file__).parent.parent
+
 # Import source-specific extractors
 try:
     from uv_extractor import RemunerationReportExtractor
@@ -79,12 +82,12 @@ class BoardType(Enum):
 # =============================================================================
 
 PDF_PATHS = {
-    'UV': "../pdf/rappportremun_21622_2025-10-20.pdf",
-    'IDC': "../pdf/Rapport des propositions soumises.20251124_1638.pdf",
-    'ASSOMPTION': "../pdf/Remuneration (61).pdf"
+    'UV': str(PROJECT_ROOT / "pdf/uv/rappportremun_21622_2025-10-20.pdf"),
+    'IDC': str(PROJECT_ROOT / "pdf/idc/Rapport des propositions soumises.20251124_1638.pdf"),
+    'ASSOMPTION': str(PROJECT_ROOT / "pdf/assomption/Remuneration (61).pdf")
 }
 
-OUTPUT_DIRECTORY = "../results/"
+OUTPUT_DIRECTORY = str(PROJECT_ROOT / "results") + "/"
 
 
 class CommissionDataUnifier:
@@ -151,7 +154,7 @@ class CommissionDataUnifier:
 
         # Additional fields for Monday.com integration - Sales Production
         'completion',
-        'sharing_amount',
+        'sharing_type',  # Type de partage (Lead, etc.)
         'commission_receipt',
         'bonus_amount_receipt',
         'on_commission_receipt',
@@ -224,7 +227,7 @@ class CommissionDataUnifier:
         'amount_received': 'Reçu',
         # Sales Production specific
         'completion': 'Complet',
-        'sharing_amount': 'Partage',
+        'sharing_type': 'Partage',  # Type de partage (Lead par défaut)
         'commission_receipt': 'Reçu 1',
         'bonus_amount_receipt': 'Reçu 2',
         'on_commission_receipt': 'Reçu 3',
@@ -236,16 +239,174 @@ class CommissionDataUnifier:
     # Reverse mapping from French to English (for reading Monday.com data)
     COLUMN_MAPPING_TO_ENGLISH = {v: k for k, v in COLUMN_MAPPING_TO_FRENCH.items()}
 
-    def __init__(self, output_dir: str = "./unified_data"):
+    # Advisor name mapping patterns
+    # Each entry: (compiled_regex_pattern, simplified_name)
+    # Patterns are tested in order, first match wins
+    ADVISOR_PATTERNS = None  # Will be initialized in __init__
+
+    def __init__(self, output_dir: str = None):
         """
         Initialize the unifier.
 
         Args:
-            output_dir: Directory to save unified data files
+            output_dir: Directory to save unified data files (defaults to PROJECT_ROOT/unified_data)
         """
-        self.output_dir = Path(output_dir)
+        if output_dir is None:
+            self.output_dir = PROJECT_ROOT / "unified_data"
+        else:
+            self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        # Initialize advisor name patterns (compiled regex for performance)
+        self._init_advisor_patterns()
+
+    def _init_advisor_patterns(self):
+        """Initialize compiled regex patterns for advisor name mapping."""
+        import re
+
+        # Define patterns for each advisor
+        # Format: (pattern, simplified_name)
+        # Patterns use re.IGNORECASE for case-insensitive matching
+        pattern_definitions = [
+            # Brandeen David Legrand - most complex, many variations
+            # Matches: Brandeen, David Legrand, Brandeen David Legrand, Brandeen DL,
+            # David Legrand B, B. David Legrand, DL Brandeen, etc.
+            (r'\bbrandeen\b', 'Brandeen'),
+            (r'\bdavid\s+legrand\b', 'Brandeen'),
+            (r'\blegrand\s*,?\s*david\b', 'Brandeen'),
+            (r'\bd\.?\s*legrand\b', 'Brandeen'),
+            (r'\blegrand\s*,?\s*d\.?\b', 'Brandeen'),
+            (r'\bdl\s+brandeen\b', 'Brandeen'),
+            (r'\bbrandeen\s+dl\b', 'Brandeen'),
+
+            # Mohammed Fayçal/Faycal Guennouni
+            (r'\bfay[cç]al\b', 'Faycal'),
+            (r'\bfayÃ§al\b', 'Faycal'),  # UTF-8 encoding issue variant
+            (r'\bguennouni\b', 'Faycal'),
+            (r'\bmohammed\s+f', 'Faycal'),
+
+            # Mathieu Poirier (check before Derek Poirier)
+            (r'\bmathieu\s+poirier\b', 'Mathieu'),
+            (r'\bpoirier\s*,?\s*mathieu\b', 'Mathieu'),
+            (r'\bm\.?\s+poirier\b', 'Mathieu'),
+
+            # Derek Poirier
+            (r'\bderek\s+poirier\b', 'Derek'),
+            (r'\bpoirier\s*,?\s*derek\b', 'Derek'),
+            (r'\bd\.?\s+poirier\b(?!\s*m)', 'Derek'),  # D. Poirier but not if followed by M
+
+            # Thomas Lussier
+            (r'\bthomas\s+lussier\b', 'Thomas'),
+            (r'\blussier\s*,?\s*thomas\b', 'Thomas'),
+            (r'\bt\.?\s+lussier\b', 'Thomas'),
+            (r'\blussier\s*,?\s*t\.?\b', 'Thomas'),
+
+            # Ayoub Chamoumi
+            (r'\bayoub\s+chamoumi\b', 'Ayoub'),
+            (r'\bchamoumi\b', 'Ayoub'),
+
+            # Said Vital -> Ayoub (special case)
+            (r'\bsaid\s+vital\b', 'Ayoub'),
+            (r'\bvital\s*,?\s*said\b', 'Ayoub'),
+            (r'\bs\.?\s+vital\b', 'Ayoub'),
+
+            # Alexis Bourassa
+            (r'\balexis\s+bourassa\b', 'Alexis'),
+            (r'\bbourassa\s*,?\s*alexis\b', 'Alexis'),
+            (r'\bbourassa\b', 'Alexis'),
+
+            # Jad Senhaji
+            (r'\bjad\s+senhaji\b', 'Jad'),
+            (r'\bsenhaji\b', 'Jad'),
+
+            # Igor Velicico
+            (r'\bigor\s+velicico\b', 'Igor'),
+            (r'\bvelicico\b', 'Igor'),
+
+            # Robinson Viaud
+            (r'\brobinson\s+viaud\b', 'Robinson'),
+            (r'\bviaud\b', 'Robinson'),
+
+            # Benoît/Benoit Méthot/Methot
+            (r'\bbeno[iî]t\s+m[eé]thot\b', 'Benoit'),
+            (r'\bm[eé]thot\s*,?\s*beno[iî]t\b', 'Benoit'),
+            (r'\bm[eé]thot\b', 'Benoit'),
+
+            # Anthony Guay
+            (r'\banthony\s+guay\b', 'Anthony'),
+            (r'\bguay\s*,?\s*anthony\b', 'Anthony'),
+            (r'\bguay\b', 'Anthony'),
+
+            # Guillaume St-Pierre
+            (r'\bguillaume\s+st[\-\.]?\s*pierre\b', 'Guillaume'),
+            (r'\bst[\-\.]?\s*pierre\s*,?\s*guillaume\b', 'Guillaume'),
+            (r'\bst[\-\.]?\s*pierre\b', 'Guillaume'),
+        ]
+
+        # Compile patterns
+        self.ADVISOR_PATTERNS = [
+            (re.compile(pattern, re.IGNORECASE), name)
+            for pattern, name in pattern_definitions
+        ]
+
+    def _normalize_advisor_name(self, advisor_name) -> str:
+        """
+        Normalize advisor name to simplified version.
+
+        Uses regex patterns to match various name formats and map them
+        to simplified names.
+
+        Args:
+            advisor_name: The original advisor name
+
+        Returns:
+            Simplified advisor name, or original if no match found
+        """
+        if pd.isna(advisor_name) or advisor_name is None:
+            return None
+
+        name_str = str(advisor_name).strip()
+        if not name_str or name_str in ['None', 'nan', 'NaN']:
+            return None
+
+        # Test each pattern
+        for pattern, simplified_name in self.ADVISOR_PATTERNS:
+            if pattern.search(name_str):
+                return simplified_name
+
+        # No match found, return original name
+        return name_str
+
+    def _normalize_advisor_column(self, df: pd.DataFrame, column_name: str = 'advisor_name') -> pd.DataFrame:
+        """
+        Normalize all advisor names in a DataFrame column.
+
+        Args:
+            df: DataFrame containing advisor names
+            column_name: Name of the column containing advisor names
+
+        Returns:
+            DataFrame with normalized advisor names
+        """
+        if column_name not in df.columns:
+            return df
+
+        original_values = df[column_name].copy()
+        df[column_name] = df[column_name].apply(self._normalize_advisor_name)
+
+        # Log normalization results
+        changed_mask = (original_values != df[column_name]) & original_values.notna()
+        if changed_mask.any():
+            changed_count = changed_mask.sum()
+            print(f"   ✓ Normalized {changed_count} advisor names")
+            # Show unique mappings
+            unique_mappings = df.loc[changed_mask, [column_name]].drop_duplicates()
+            for _, row in unique_mappings.iterrows():
+                orig = original_values[unique_mappings.index[0]]
+                print(f"      '{orig}' → '{row[column_name]}'")
+
+        return df
 
     def _calculate_commissions(self, df: pd.DataFrame, on_commission_rate: float = 0.75) -> pd.DataFrame:
         """
@@ -526,9 +687,13 @@ class CommissionDataUnifier:
         standard_df['insured_name'] = df['Client'].astype(str)
         standard_df['product_type'] = df['Type de régime'].astype(str)
         standard_df['contract_number'] = df['Police'].astype(str)
-        standard_df['policy_status'] = df['Statut'].astype(str)
+        # Transform status: 'Approved' → 'Approuvé', anything else → 'En attente'
+        status_transformed = df['Statut'].apply(
+            lambda x: 'Approuvé' if str(x).strip() == 'Approved' else 'En attente'
+        )
+        standard_df['policy_status'] = status_transformed
         # Also map to 'status' for FINAL_COLUMNS compatibility
-        standard_df['status'] = df['Statut'].astype(str)
+        standard_df['status'] = status_transformed
         standard_df['effective_date'] = df['Date'].apply(self._parse_date)
         # Map 'Date' to 'report_date' and format uniformly as YYYY-MM-DD
         standard_df['report_date'] = df['Date'].apply(lambda x: self._format_date_uniform(self._parse_date(x)))
@@ -638,7 +803,8 @@ class CommissionDataUnifier:
         standard_df = pd.DataFrame(index=df.index)
 
         # Map columns from IDC Statement format
-        standard_df['insured_name'] = df['Nom du client'].astype(str)
+        # Note: 'Nom du client' is NOT mapped to insured_name to maintain uniformity with other tables
+        # IDC Statement focuses on contract/account numbers, not client names
         standard_df['contract_number'] = df['Numéro de compte'].astype(str)
         standard_df['insurer_name'] = df['Compagnie'].astype(str)
 
@@ -849,8 +1015,8 @@ class CommissionDataUnifier:
             if 'Complet' in df.columns:
                 standard_df['completion'] = df['Complet'].astype(str)
 
-            if 'Partage' in df.columns:
-                standard_df['sharing_amount'] = pd.to_numeric(df['Partage'], errors='coerce')
+            # Note: 'Partage' column is now always 'Lead' (sharing_type), set in filter_final_columns
+            # Legacy 'Partage' values are ignored
 
             if 'Reçu 1' in df.columns:
                 standard_df['commission_receipt'] = pd.to_numeric(df['Reçu 1'], errors='coerce')
@@ -933,23 +1099,7 @@ class CommissionDataUnifier:
             # SALES PRODUCTION SPECIFIC CALCULATIONS
             # =====================================================================
             if board_type == BoardType.SALES_PRODUCTION:
-                # Calculate sharing_amount if missing: sharing_rate × policy_premium
-                if 'sharing_amount' in standard_df.columns:
-                    sharing_missing = standard_df['sharing_amount'].isna().sum()
-                    if sharing_missing > 0:
-                        mask = standard_df['sharing_amount'].isna()
-                        standard_df.loc[mask, 'sharing_amount'] = (
-                            standard_df.loc[mask, 'sharing_rate'] *
-                            standard_df.loc[mask, 'policy_premium']
-                        )
-                        calculated = standard_df.loc[mask, 'sharing_amount'].notna().sum()
-                        print(f"      ✓ Calculated {calculated} sharing_amount values")
-                else:
-                    # Create sharing_amount column
-                    standard_df['sharing_amount'] = (
-                        standard_df['sharing_rate'] * standard_df['policy_premium']
-                    )
-                    print(f"      ✓ Created sharing_amount column")
+                # Note: 'sharing_type' is always 'Lead', set in filter_final_columns
 
                 # Calculate total if missing: commission + bonus_amount + on_commission
                 if 'total' in standard_df.columns:
@@ -1150,6 +1300,10 @@ class CommissionDataUnifier:
         # Create a copy for modification
         result_df = df.copy()
 
+        # For Sales Production, set 'sharing_type' to 'Lead' by default
+        if board_type == BoardType.SALES_PRODUCTION:
+            result_df['sharing_type'] = 'Lead'
+
         # For Sales Production, calculate 'Total', 'Total Reçu' and 'Paie' if not present
         if board_type == BoardType.SALES_PRODUCTION:
             # Total = Com + Boni + Sur-Com (commission + bonus_amount + on_commission)
@@ -1239,6 +1393,10 @@ class CommissionDataUnifier:
             verified_count = mask_verified.sum()
             not_verified_count = mask_not_verified.sum()
             print(f"   ✓ Verification auto-set: {verified_count} 'Verifié', {not_verified_count} 'Pas Verifié'")
+
+        # Normalize advisor names (before renaming to French)
+        if 'advisor_name' in result_df.columns:
+            result_df = self._normalize_advisor_column(result_df, 'advisor_name')
 
         # Rename columns from English to French
         result_df = result_df.rename(columns=self.COLUMN_MAPPING_TO_FRENCH)

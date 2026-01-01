@@ -494,7 +494,7 @@ class RemunerationReportExtractor:
 
 if __name__ == "__main__":
     # Path to PDF file
-    pdf_path = "../pdf/rappportremun_21622_2025-10-20.pdf"
+    pdf_path = "../pdf/uv/rappportremun_21622_2025-10-20.pdf"
 
     # Create extractor
     extractor = RemunerationReportExtractor(pdf_path)

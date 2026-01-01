@@ -15,6 +15,9 @@ import pandas as pd
 import os
 from pathlib import Path
 
+# Project root directory (parent of scripts/)
+PROJECT_ROOT = Path(__file__).parent.parent
+
 # Import pipeline components
 from main import (
     InsuranceCommissionPipeline,
@@ -215,7 +218,8 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
         else:
             verification.append('✓ OK')
 
-    result_df['Vérification'] = verification
+    # Column name includes tolerance to show user which tolerance is applied
+    result_df[f'Vérification (±{tolerance_pct:.0f}%)'] = verification
 
     return result_df
 
@@ -227,10 +231,12 @@ def get_verification_stats(df: pd.DataFrame) -> dict:
     Returns:
         Dictionary with counts of each verification status
     """
-    if 'Vérification' not in df.columns:
+    # Find verification column (name includes tolerance percentage)
+    verif_cols = [col for col in df.columns if col.startswith('Vérification')]
+    if not verif_cols:
         return {'ok': 0, 'bonus': 0, 'ecart': 0, 'na': 0}
 
-    verif = df['Vérification'].astype(str)
+    verif = df[verif_cols[0]].astype(str)
 
     return {
         'ok': verif.str.contains('OK', na=False).sum(),
@@ -468,6 +474,84 @@ def render_stage_1():
         render_monday_migration_tab()
 
 
+def detect_board_type_from_name(board_name: str) -> str:
+    """
+    Detect the board type based on regex patterns in the board name.
+
+    Uses regex to match common variations of keywords for each board type.
+
+    Args:
+        board_name: Name of the board
+
+    Returns:
+        "Ventes et Production" or "Paiements Historiques"
+    """
+    import re
+
+    if not board_name:
+        return "Paiements Historiques"
+
+    name_lower = board_name.lower()
+
+    # Regex patterns for Sales/Production (more flexible matching)
+    sales_patterns = [
+        r'vente[s]?',           # vente, ventes
+        r'production[s]?',      # production, productions
+        r'sales?',              # sale, sales
+        r'prod\b',              # prod (abbreviation)
+        r'commercial',          # commercial
+        r'soumis',              # soumissions
+        r'proposition[s]?',     # proposition, propositions
+    ]
+
+    # Regex patterns for Historical Payments
+    payment_patterns = [
+        r'paiement[s]?',        # paiement, paiements
+        r'historique[s]?',      # historique, historiques
+        r'payment[s]?',         # payment, payments
+        r'history',             # history
+        r'hist\b',              # hist (abbreviation)
+        r'reçu[s]?',            # reçu, reçus
+        r'commission[s]?',      # commission, commissions (often payment related)
+        r'statement[s]?',       # statement, statements
+    ]
+
+    # Check for sales/production patterns first
+    for pattern in sales_patterns:
+        if re.search(pattern, name_lower):
+            return "Ventes et Production"
+
+    # Check for payment patterns
+    for pattern in payment_patterns:
+        if re.search(pattern, name_lower):
+            return "Paiements Historiques"
+
+    # Default to Historical Payments
+    return "Paiements Historiques"
+
+
+def on_board_select_change():
+    """Callback when board selection changes - auto-detect and update target type."""
+    if 'pdf_board_select' in st.session_state:
+        board_name = st.session_state.pdf_board_select
+        detected_type = detect_board_type_from_name(board_name)
+        # Store detected type - will be used to set the selectbox index
+        st.session_state._detected_board_type = detected_type
+        # Also update aggregate checkbox based on detected type
+        st.session_state.pdf_aggregate = detected_type == "Ventes et Production"
+        # Force the target type widget to update by deleting its key
+        # This allows the index parameter to take effect on next render
+        if 'pdf_target_type' in st.session_state:
+            del st.session_state.pdf_target_type
+
+
+def on_target_type_change():
+    """Callback when target type changes - update aggregate checkbox accordingly."""
+    if 'pdf_target_type' in st.session_state:
+        # Coché pour Ventes et Production, décoché pour Paiements Historiques
+        st.session_state.pdf_aggregate = st.session_state.pdf_target_type == "Ventes et Production"
+
+
 def render_pdf_extraction_tab():
     """Render PDF extraction tab with simplified flow."""
 
@@ -534,16 +618,25 @@ def render_pdf_extraction_tab():
                 selected_name = st.selectbox(
                     "Board",
                     options=list(board_options.keys()),
-                    key="pdf_board_select"
+                    key="pdf_board_select",
+                    on_change=on_board_select_change
                 )
                 selected_board_id = board_options[selected_name]
                 board_name = selected_name
 
+                # Auto-detect board type on first load (when no callback has been triggered yet)
+                if 'pdf_target_type' not in st.session_state:
+                    detected_type = detect_board_type_from_name(selected_name)
+                    st.session_state.pdf_target_type = detected_type
+                    st.session_state.pdf_aggregate = detected_type == "Ventes et Production"
+
                 st.caption(f"ID: {selected_board_id}")
             else:
                 st.warning("Aucun board trouvé.")
+                board_name = None  # No board selected
         else:
             st.warning("Chargez d'abord vos boards via la barre latérale.")
+            board_name = None  # No boards loaded
     else:
         board_name = st.text_input(
             "Nom du nouveau board",
@@ -559,35 +652,52 @@ def render_pdf_extraction_tab():
         with col2:
             reuse_group = st.checkbox("Réutiliser groupe", value=True, key="pdf_reuse_group")
 
-    # Step 3: Advanced options in expander
-    with st.expander("⚙️ Options avancées", expanded=False):
-        col1, col2 = st.columns(2)
+    # Step 3: Configuration options
+    st.markdown("### ⚙️ Configuration")
 
-        with col1:
-            month_group = st.text_input(
-                "Groupe (optionnel)",
-                placeholder="Ex: Novembre 2025",
-                key="pdf_month_group"
-            )
+    # Determine current type - prioritize detected type from callback, then widget value, then default
+    type_options = ["Paiements Historiques", "Ventes et Production"]
 
-            target_type = st.selectbox(
-                "Type de table",
-                options=["Paiements Historiques", "Ventes et Production"],
-                key="pdf_target_type"
-            )
+    # Use detected type if available (from board selection callback), otherwise use widget state
+    if '_detected_board_type' in st.session_state:
+        current_type = st.session_state._detected_board_type
+    elif 'pdf_target_type' in st.session_state:
+        current_type = st.session_state.pdf_target_type
+    else:
+        current_type = 'Paiements Historiques'
 
-        with col2:
-            aggregate = st.checkbox(
-                "Agréger par contrat",
-                value=True,
-                help="Combine les lignes avec le même numéro de contrat",
-                key="pdf_aggregate"
-            )
+    current_index = type_options.index(current_type) if current_type in type_options else 0
 
-            st.caption("")
-            st.caption("**Types de tables:**")
-            st.caption("• Paiements: suivi des paiements reçus")
-            st.caption("• Ventes: suivi de complétion")
+    # Groupe (optionnel)
+    month_group = st.text_input(
+        "Groupe (optionnel)",
+        placeholder="Ex: Novembre 2025",
+        key="pdf_month_group"
+    )
+
+    # Type de table avec détection automatique
+    if board_name:
+        detected = detect_board_type_from_name(board_name)
+        st.caption(f"🔍 Type détecté automatiquement: **{detected}**")
+
+    target_type = st.selectbox(
+        "Type de table",
+        options=type_options,
+        index=current_index,
+        key="pdf_target_type",
+        on_change=on_target_type_change
+    )
+
+    # Sync detected type with actual widget value after render
+    st.session_state._detected_board_type = target_type
+
+    # Agrégation
+    aggregate = st.checkbox(
+        "Agréger par contrat",
+        value=st.session_state.get('pdf_aggregate', False),
+        help="Combine les lignes avec le même numéro de contrat",
+        key="pdf_aggregate"
+    )
 
     st.divider()
 
@@ -617,7 +727,7 @@ def render_pdf_extraction_tab():
                     month_group=month_group if month_group else None,
                     board_name=board_name,
                     monday_api_key=st.session_state.monday_api_key,
-                    output_dir="../results",
+                    output_dir=str(PROJECT_ROOT / "results"),
                     reuse_board=reuse_board,
                     reuse_group=reuse_group,
                     aggregate_by_contract=aggregate,
@@ -722,7 +832,7 @@ def render_monday_migration_tab():
                     month_group=None,
                     board_name=target_name.strip(),
                     monday_api_key=st.session_state.monday_api_key,
-                    output_dir="../results/monday_legacy",
+                    output_dir=str(PROJECT_ROOT / "results/monday_legacy"),
                     reuse_board=reuse_board,
                     reuse_group=reuse_group,
                     aggregate_by_contract=aggregate,
@@ -825,15 +935,21 @@ def render_stage_2():
         # Tolerance slider
         col1, col2 = st.columns([2, 3])
         with col1:
+            # Use on_change to ensure state is updated before verification
+            if 'verification_tolerance' not in st.session_state:
+                st.session_state.verification_tolerance = 10.0
+
             tolerance = st.slider(
                 "Tolérance (%)",
                 min_value=1.0,
                 max_value=50.0,
                 value=st.session_state.verification_tolerance,
                 step=1.0,
-                help="Écart acceptable entre Reçu et Com",
-                key="tolerance_slider"
+                help="Écart acceptable entre Reçu et Com. Le pourcentage affiché est l'écart réel entre Reçu et Com Calculée.",
+                key="tolerance_slider",
+                on_change=lambda: setattr(st.session_state, 'verification_tolerance', st.session_state.tolerance_slider)
             )
+            # Sync state
             st.session_state.verification_tolerance = tolerance
 
         # Apply verification
@@ -854,6 +970,10 @@ def render_stage_2():
 
         if stats['bonus'] > 0:
             st.success(f"✅ **{stats['bonus']} ligne(s)** ont un bonus (Reçu supérieur à la commission attendue)")
+
+        # Explanation of verification column
+        st.caption(f"📌 **Colonne Vérification (±{tolerance:.0f}%)**: Le pourcentage affiché est l'écart réel entre Reçu et Com Calculée. "
+                   f"Les valeurs hors tolérance (±{tolerance:.0f}%) sont marquées ✅ (bonus) ou ⚠️ (écart).")
 
         # Data preview with verification column
         st.dataframe(df_verified, use_container_width=True, height=350)

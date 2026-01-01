@@ -447,7 +447,7 @@ def main() -> None:
     3. Save to CSV file
     """
     # Configuration
-    pdf_path = "../pdf/Remuneration (61).pdf"
+    pdf_path = "../pdf/assomption/Remuneration (61).pdf"
     output_file = "../results/assomption_data.csv"
 
     print("=" * 80)

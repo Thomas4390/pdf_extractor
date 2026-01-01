@@ -23,6 +23,210 @@ pd.set_option('display.width', 1000)
 pd.set_option('display.max_rows', None)
 
 
+# =============================================================================
+# ADVISOR NAME NORMALIZATION
+# =============================================================================
+
+# Compiled regex patterns for advisor name mapping
+# Format: (compiled_regex, simplified_first_name)
+_ADVISOR_PATTERNS = None
+
+
+def _init_advisor_patterns():
+    """Initialize compiled regex patterns for advisor name mapping."""
+    global _ADVISOR_PATTERNS
+    if _ADVISOR_PATTERNS is not None:
+        return
+
+    # Define patterns for each advisor
+    # Patterns use re.IGNORECASE for case-insensitive matching
+    pattern_definitions = [
+        # Brandeen David Legrand - most complex, many variations
+        (r'\bbrandeen\b', 'Brandeen'),
+        (r'\bdavid\s+legrand\b', 'Brandeen'),
+        (r'\blegrand\s*,?\s*david\b', 'Brandeen'),
+        (r'\bd\.?\s*legrand\b', 'Brandeen'),
+        (r'\blegrand\s*,?\s*d\.?\b', 'Brandeen'),
+        (r'\bdl\s+brandeen\b', 'Brandeen'),
+        (r'\bbrandeen\s+dl\b', 'Brandeen'),
+
+        # Mohammed Fayçal/Faycal Guennouni
+        (r'\bfay[cç]al\b', 'Faycal'),
+        (r'\bfayÃ§al\b', 'Faycal'),  # UTF-8 encoding issue variant
+        (r'\bguennouni\b', 'Faycal'),
+        (r'\bmohammed\s+f', 'Faycal'),
+
+        # Mathieu Poirier (check before Derek Poirier)
+        (r'\bmathieu\s+poirier\b', 'Mathieu'),
+        (r'\bpoirier\s*,?\s*mathieu\b', 'Mathieu'),
+        (r'\bm\.?\s+poirier\b', 'Mathieu'),
+
+        # Derek Poirier
+        (r'\bderek\s+poirier\b', 'Derek'),
+        (r'\bpoirier\s*,?\s*derek\b', 'Derek'),
+        (r'\bd\.?\s+poirier\b(?!\s*m)', 'Derek'),  # D. Poirier but not if followed by M
+
+        # Thomas Lussier
+        (r'\bthomas\s+lussier\b', 'Thomas'),
+        (r'\blussier\s*,?\s*thomas\b', 'Thomas'),
+        (r'\bt\.?\s+lussier\b', 'Thomas'),
+        (r'\blussier\s*,?\s*t\.?\b', 'Thomas'),
+        (r'\blussier\b', 'Thomas'),  # Lussier alone -> Thomas
+
+        # Ayoub Chamoumi
+        (r'\bayoub\s+chamoumi\b', 'Ayoub'),
+        (r'\bchamoumi\b', 'Ayoub'),
+
+        # Said Vital -> Ayoub (special case)
+        (r'\bsaid\s+vital\b', 'Ayoub'),
+        (r'\bvital\s*,?\s*said\b', 'Ayoub'),
+        (r'\bs\.?\s+vital\b', 'Ayoub'),
+
+        # Alexis Bourassa
+        (r'\balexis\s+bourassa\b', 'Alexis'),
+        (r'\bbourassa\s*,?\s*alexis\b', 'Alexis'),
+        (r'\bbourassa\b', 'Alexis'),
+
+        # Jad Senhaji
+        (r'\bjad\s+senhaji\b', 'Jad'),
+        (r'\bsenhaji\b', 'Jad'),
+
+        # Igor Velicico
+        (r'\bigor\s+velicico\b', 'Igor'),
+        (r'\bvelicico\b', 'Igor'),
+
+        # Robinson Viaud
+        (r'\brobinson\s+viaud\b', 'Robinson'),
+        (r'\bviaud\b', 'Robinson'),
+
+        # Benoît/Benoit Méthot/Methot
+        (r'\bbeno[iî]t\s+m[eé]thot\b', 'Benoit'),
+        (r'\bm[eé]thot\s*,?\s*beno[iî]t\b', 'Benoit'),
+        (r'\bm[eé]thot\b', 'Benoit'),
+
+        # Anthony Guay
+        (r'\banthony\s+guay\b', 'Anthony'),
+        (r'\bguay\s*,?\s*anthony\b', 'Anthony'),
+        (r'\bguay\b', 'Anthony'),
+
+        # Guillaume St-Pierre
+        (r'\bguillaume\s+st[\-\.]?\s*pierre\b', 'Guillaume'),
+        (r'\bst[\-\.]?\s*pierre\s*,?\s*guillaume\b', 'Guillaume'),
+        (r'\bst[\-\.]?\s*pierre\b', 'Guillaume'),
+    ]
+
+    # Compile patterns
+    _ADVISOR_PATTERNS = [
+        (re.compile(pattern, re.IGNORECASE), name)
+        for pattern, name in pattern_definitions
+    ]
+
+
+def normalize_advisor_name(advisor_name: str) -> str:
+    """
+    Normalize advisor name to simplified first name.
+
+    Uses regex patterns to match various name formats and map them
+    to simplified first names.
+
+    Args:
+        advisor_name: The original advisor name (can be full name, abbreviation, etc.)
+
+    Returns:
+        Simplified first name, or original if no match found
+    """
+    # Initialize patterns if not already done
+    _init_advisor_patterns()
+
+    if pd.isna(advisor_name) or advisor_name is None:
+        return None
+
+    name_str = str(advisor_name).strip()
+    if not name_str or name_str in ['None', 'nan', 'NaN']:
+        return None
+
+    # Test each pattern
+    for pattern, simplified_name in _ADVISOR_PATTERNS:
+        if pattern.search(name_str):
+            return simplified_name
+
+    # No match found, return original name
+    return name_str
+
+
+# =============================================================================
+# COMPANY NAME NORMALIZATION
+# =============================================================================
+
+# Mapping of company name variations to normalized names
+_COMPANY_NAME_MAPPING = {
+    # UV Insurance variants
+    'uv insurance': 'UV',
+    'uv assurance': 'UV',
+    'uv': 'UV',
+    # Assomption variants
+    'assomption': 'Assomption',
+    'asomption': 'Assomption',
+    'assomption vie': 'Assomption',
+    # IA / Industrielle Alliance variants
+    'industrielle alliance': 'IA',
+    'industrielle': 'IA',
+    'ia': 'IA',
+    # Beneva variants
+    'beneva': 'Beneva',
+    # Manuvie variants
+    'manuvie': 'Manuvie',
+    'manulife': 'Manuvie',
+    # RBC variants
+    'rbc': 'RBC',
+    'rbc assurance': 'RBC',
+    'rbc insurance': 'RBC',
+    # SSQ variants
+    'ssq': 'SSQ',
+    'ssq assurance': 'SSQ',
+    # Desjardins variants
+    'desjardins': 'Desjardins',
+    'desjardins assurance': 'Desjardins',
+    # Empire variants
+    'empire': 'Empire',
+    'empire vie': 'Empire',
+    'empire life': 'Empire',
+    # Ivari variants
+    'ivari': 'Ivari',
+}
+
+
+def normalize_company_name(company_name: str) -> str:
+    """
+    Normalize company name to simplified standard name.
+
+    Args:
+        company_name: The original company name
+
+    Returns:
+        Normalized company name, or original if no match found
+    """
+    if pd.isna(company_name) or company_name is None:
+        return None
+
+    name_str = str(company_name).strip()
+    if not name_str or name_str in ['None', 'nan', 'NaN']:
+        return None
+
+    # Try exact match first (case-insensitive)
+    name_lower = name_str.lower()
+    if name_lower in _COMPANY_NAME_MAPPING:
+        return _COMPANY_NAME_MAPPING[name_lower]
+
+    # Try partial matching for compound names
+    for pattern, normalized in _COMPANY_NAME_MAPPING.items():
+        if pattern in name_lower:
+            return normalized
+
+    # No match found, return original name
+    return name_str
+
+
 @dataclass
 class PageTokens:
     """Data class to hold tokens for a single page."""
@@ -1135,6 +1339,15 @@ class PDFStatementParser:
         ]
 
         df = pd.DataFrame(records, columns=columns)
+
+        # Normalize advisor names to first names only
+        if 'Nom du conseiller' in df.columns:
+            df['Nom du conseiller'] = df['Nom du conseiller'].apply(normalize_advisor_name)
+
+        # Normalize company names (e.g., "UV Insurance" -> "UV")
+        if 'Compagnie' in df.columns:
+            df['Compagnie'] = df['Compagnie'].apply(normalize_company_name)
+
         return df
 
     def print_page_tokens(self, page_number: int = None, max_tokens: int = None):
@@ -1215,7 +1428,7 @@ class PDFStatementParser:
 
 if __name__ == "__main__":
     # Example usage - modify the path to your actual PDF
-    pdf_path = "../pdf/Statements (5).pdf"
+    pdf_path = "../pdf/idc_statement/Statements (5).pdf"
 
     if not os.path.exists(pdf_path):
         print(f"Error: PDF file not found at {pdf_path}")
