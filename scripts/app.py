@@ -440,12 +440,10 @@ def render_sidebar():
                 reset_pipeline()
                 st.rerun()
 
-        if st.session_state.monday_api_key and st.session_state.monday_boards is None:
-            if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
-                load_boards_async()
-                st.rerun()
-
-        if st.session_state.monday_boards:
+        # Show loading status or refresh button
+        if st.session_state.boards_loading:
+            st.info("⏳ Chargement des boards...")
+        elif st.session_state.monday_boards:
             if st.button("🔄 Rafraîchir boards", use_container_width=True):
                 st.session_state.monday_boards = None
                 load_boards_async()
@@ -484,12 +482,10 @@ def render_stage_1():
         st.warning("👈 Veuillez d'abord configurer votre clé API Monday.com dans la barre latérale.")
         return
 
-    # Auto-load boards
-    if st.session_state.monday_boards is None:
-        load_boards_async()
-        if st.session_state.boards_loading:
-            st.info("⏳ Chargement des boards en cours...")
-            return
+    # Show loading message if boards are still loading
+    if st.session_state.boards_loading:
+        st.info("⏳ Chargement des boards en cours...")
+        return
 
     # Tabs for different workflows
     tab1, tab2, tab3 = st.tabs(["📄 Extraction PDF", "🔄 Migration Monday.com", "👥 Gestion Conseillers"])
@@ -674,7 +670,7 @@ def render_pdf_extraction_tab():
                 st.warning("Aucun board trouvé.")
                 board_name = None  # No board selected
         else:
-            st.warning("Chargez d'abord vos boards via la barre latérale.")
+            st.warning("⏳ Les boards sont en cours de chargement...")
             board_name = None  # No boards loaded
     else:
         board_name = st.text_input(
@@ -793,7 +789,7 @@ def render_monday_migration_tab():
     """)
 
     if not st.session_state.monday_boards:
-        st.warning("Chargez d'abord vos boards via la barre latérale.")
+        st.warning("⏳ Les boards sont en cours de chargement ou non disponibles. Vérifiez votre connexion API.")
         return
 
     # Source board selection
@@ -1507,6 +1503,10 @@ def render_upload_results():
 def main():
     """Main application entry point."""
     init_session_state()
+
+    # Auto-load boards at startup if API key is available
+    load_boards_async()
+
     render_sidebar()
 
     if st.session_state.stage == 1:

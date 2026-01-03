@@ -829,8 +829,8 @@ class CommissionDataUnifier:
         standard_df = pd.DataFrame(index=df.index)
 
         # Map columns from IDC Statement format
-        # Note: 'Nom du client' is NOT mapped to insured_name to maintain uniformity with other tables
-        # IDC Statement focuses on contract/account numbers, not client names
+        # 'Nom du client' is mapped to insured_name for the "Élément" column in Monday.com
+        standard_df['insured_name'] = df['Nom du client'].astype(str)
         standard_df['contract_number'] = df['Numéro de compte'].astype(str)
         standard_df['insurer_name'] = df['Compagnie'].astype(str)
 
