@@ -169,6 +169,7 @@ def init_session_state():
         'selected_board_id': None,
         'monday_api_key': monday_api_key,  # Auto-load from secrets if available
         'boards_loading': False,
+        'boards_error': None,
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -275,19 +276,23 @@ def get_verification_stats(df: pd.DataFrame) -> dict:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def load_boards_async():
+def load_boards_async(force_rerun: bool = False):
     """Load Monday.com boards automatically when API key is set."""
     if (st.session_state.monday_api_key and
         st.session_state.monday_boards is None and
         not st.session_state.boards_loading):
         try:
             st.session_state.boards_loading = True
+            st.session_state.boards_error = None
             from monday_automation import MondayClient
             client = MondayClient(api_key=st.session_state.monday_api_key)
             st.session_state.monday_boards = client.list_boards()
             st.session_state.boards_loading = False
-        except Exception:
+            if force_rerun:
+                st.rerun()
+        except Exception as e:
             st.session_state.boards_loading = False
+            st.session_state.boards_error = str(e)
 
 
 def sort_and_filter_boards(boards: list, search_query: str = "") -> list:
@@ -440,14 +445,24 @@ def render_sidebar():
                 reset_pipeline()
                 st.rerun()
 
-        # Show loading status or refresh button
+        # Show loading status, error, or refresh button
         if st.session_state.boards_loading:
             st.info("⏳ Chargement des boards...")
+        elif st.session_state.get('boards_error'):
+            st.error(f"❌ Erreur: {st.session_state.boards_error}")
+            if st.button("🔄 Réessayer", use_container_width=True, type="primary"):
+                st.session_state.boards_error = None
+                st.session_state.monday_boards = None
+                load_boards_async(force_rerun=True)
         elif st.session_state.monday_boards:
+            st.success(f"✅ {len(st.session_state.monday_boards)} boards chargés")
             if st.button("🔄 Rafraîchir boards", use_container_width=True):
                 st.session_state.monday_boards = None
-                load_boards_async()
-                st.rerun()
+                load_boards_async(force_rerun=True)
+        elif st.session_state.monday_api_key:
+            # API key present but boards not loaded - try loading
+            if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
+                load_boards_async(force_rerun=True)
 
         st.divider()
 
