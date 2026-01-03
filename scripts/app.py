@@ -25,6 +25,7 @@ from main import (
     InsuranceSource,
 )
 from unify_notation import BoardType
+from advisor_matcher import AdvisorMatcher, Advisor
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -128,8 +129,33 @@ st.markdown("""
 # SESSION STATE INITIALIZATION
 # =============================================================================
 
+def get_secret(key: str, default: str = None) -> str:
+    """
+    Get a secret value from multiple sources (priority order):
+    1. Streamlit secrets
+    2. Environment variables
+    3. Default value
+    """
+    # Try Streamlit secrets first
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+
+    # Fallback to environment variable
+    value = os.environ.get(key)
+    if value:
+        return value
+
+    return default
+
+
 def init_session_state():
     """Initialize session state variables."""
+    # Try to load Monday API key from secrets
+    monday_api_key = get_secret('MONDAY_API_KEY')
+
     defaults = {
         'stage': 1,
         'pdf_file': None,
@@ -141,9 +167,8 @@ def init_session_state():
         'data_modified': False,
         'monday_boards': None,
         'selected_board_id': None,
-        'monday_api_key': None,
+        'monday_api_key': monday_api_key,  # Auto-load from secrets if available
         'boards_loading': False,
-        'verification_tolerance': 10.0,  # Default tolerance percentage for Reçu vs Com verification
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -371,16 +396,23 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("## 🔑 Configuration")
 
+        # Check if API key comes from secrets
+        api_from_secrets = get_secret('MONDAY_API_KEY') is not None
+
         # API Key section - compact
         if st.session_state.monday_api_key:
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.success("API connectée", icon="✅")
+                if api_from_secrets:
+                    st.success("API (secrets)", icon="🔐")
+                else:
+                    st.success("API connectée", icon="✅")
             with col2:
-                if st.button("✏️", help="Modifier la clé API"):
-                    st.session_state.monday_api_key = None
-                    st.session_state.monday_boards = None
-                    st.rerun()
+                if not api_from_secrets:
+                    if st.button("✏️", help="Modifier la clé API"):
+                        st.session_state.monday_api_key = None
+                        st.session_state.monday_boards = None
+                        st.rerun()
 
             # Show boards count
             if st.session_state.monday_boards:
@@ -390,7 +422,8 @@ def render_sidebar():
                 "Clé API Monday.com",
                 type="password",
                 placeholder="Entrez votre clé API...",
-                key="sidebar_api_key"
+                key="sidebar_api_key",
+                help="Ou configurez MONDAY_API_KEY dans .streamlit/secrets.toml"
             )
             if api_key:
                 if st.button("Connecter", type="primary", use_container_width=True):
@@ -459,7 +492,7 @@ def render_stage_1():
             return
 
     # Tabs for different workflows
-    tab1, tab2 = st.tabs(["📄 Extraction PDF", "🔄 Migration Monday.com"])
+    tab1, tab2, tab3 = st.tabs(["📄 Extraction PDF", "🔄 Migration Monday.com", "👥 Gestion Conseillers"])
 
     # =========================================================================
     # TAB 1: PDF EXTRACTION
@@ -472,6 +505,12 @@ def render_stage_1():
     # =========================================================================
     with tab2:
         render_monday_migration_tab()
+
+    # =========================================================================
+    # TAB 3: ADVISOR MANAGEMENT
+    # =========================================================================
+    with tab3:
+        render_advisor_management_tab()
 
 
 def detect_board_type_from_name(board_name: str) -> str:
@@ -847,6 +886,238 @@ def render_monday_migration_tab():
 
 
 # =============================================================================
+# ADVISOR MANAGEMENT TAB
+# =============================================================================
+
+def render_advisor_management_tab():
+    """Render advisor management interface."""
+    st.markdown("### 👥 Gestion des Conseillers")
+
+    st.info("""
+    **Gestion des noms de conseillers**
+
+    Cette section permet de gérer les conseillers et leurs variations de noms.
+    Le système utilise ces données pour normaliser automatiquement les noms
+    lors de l'extraction des données PDF.
+
+    **Format de sortie:** Prénom + Première lettre du nom (ex: "Thomas L.")
+
+    **Stockage cloud (optionnel):** Configurez les variables d'environnement
+    `GOOGLE_SHEETS_CREDENTIALS_FILE` et `GOOGLE_SHEETS_SPREADSHEET_ID` pour
+    synchroniser les données avec Google Sheets.
+    """)
+
+    # Initialize session state for advisor management
+    if 'advisor_matcher' not in st.session_state:
+        st.session_state.advisor_matcher = AdvisorMatcher()
+
+    if 'editing_advisor_idx' not in st.session_state:
+        st.session_state.editing_advisor_idx = None
+
+    if 'adding_advisor' not in st.session_state:
+        st.session_state.adding_advisor = False
+
+    matcher = st.session_state.advisor_matcher
+
+    st.divider()
+
+    # Statistics
+    stats = matcher.export_statistics()
+    cols = st.columns(4)
+    cols[0].metric("Conseillers", stats['total_advisors'])
+    cols[1].metric("Variations totales", stats['total_variations'])
+
+    # Storage backend indicator
+    backend = stats.get('storage_backend', 'local')
+    if backend == 'google_sheets':
+        cols[2].metric("Stockage", "☁️ Google Sheets")
+    else:
+        cols[2].metric("Stockage", "💾 Local (JSON)")
+
+    # Sync options
+    with cols[3]:
+        if backend == 'google_sheets':
+            st.caption("Synchronisation")
+            sync_col1, sync_col2 = st.columns(2)
+            with sync_col1:
+                if st.button("⬆️ Vers cloud", help="Envoyer les données locales vers Google Sheets"):
+                    try:
+                        synced, errors = matcher.sync_to_gsheets()
+                        if errors == 0:
+                            st.success(f"✅ {synced} conseillers synchronisés")
+                            st.session_state.advisor_matcher = AdvisorMatcher()
+                            st.rerun()
+                        else:
+                            st.error("❌ Erreur de synchronisation")
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+            with sync_col2:
+                if st.button("⬇️ Vers local", help="Télécharger les données de Google Sheets"):
+                    try:
+                        synced, errors = matcher.sync_from_gsheets()
+                        if errors == 0:
+                            st.success(f"✅ {synced} conseillers sauvegardés")
+                        else:
+                            st.error("❌ Erreur de synchronisation")
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+        else:
+            st.caption("Mode hors-ligne")
+            st.info("Configurer GOOGLE_SHEETS_* pour le cloud", icon="ℹ️")
+
+    st.divider()
+
+    # Add new advisor section
+    st.markdown("#### ➕ Ajouter un conseiller")
+
+    with st.form("add_advisor_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            new_first_name = st.text_input(
+                "Prénom",
+                placeholder="Ex: Thomas",
+                key="new_advisor_first_name"
+            )
+
+        with col2:
+            new_last_name = st.text_input(
+                "Nom de famille",
+                placeholder="Ex: Lussier",
+                key="new_advisor_last_name"
+            )
+
+        new_variations = st.text_input(
+            "Variations (séparées par des virgules)",
+            placeholder="Ex: Tom, T. Lussier, Tommy",
+            help="Entrez les différentes façons dont ce nom peut apparaître dans les rapports",
+            key="new_advisor_variations"
+        )
+
+        submitted = st.form_submit_button("➕ Ajouter le conseiller", type="primary")
+
+        if submitted:
+            if new_first_name and new_last_name:
+                # Parse variations
+                variations = []
+                if new_variations:
+                    variations = [v.strip() for v in new_variations.split(',') if v.strip()]
+
+                # Check if advisor already exists
+                existing = matcher.find_advisor_by_name(new_first_name, new_last_name)
+                if existing:
+                    st.error(f"❌ Ce conseiller existe déjà: {existing[1].display_name}")
+                else:
+                    advisor = matcher.add_advisor(new_first_name, new_last_name, variations)
+                    st.success(f"✅ Conseiller ajouté: {advisor.display_name}")
+                    # Refresh matcher in session state
+                    st.session_state.advisor_matcher = AdvisorMatcher()
+                    st.rerun()
+            else:
+                st.error("❌ Veuillez entrer le prénom et le nom de famille")
+
+    st.divider()
+
+    # List of existing advisors
+    st.markdown("#### 📋 Conseillers existants")
+
+    if not matcher.advisors:
+        st.info("Aucun conseiller enregistré. Ajoutez-en un ci-dessus.")
+    else:
+        for idx, advisor in enumerate(matcher.advisors):
+            with st.expander(f"**{advisor.display_name}** ({advisor.full_name})", expanded=False):
+                # Show current info
+                st.markdown(f"**Prénom:** {advisor.first_name}")
+                st.markdown(f"**Nom:** {advisor.last_name}")
+                st.markdown(f"**Nom affiché:** {advisor.display_name}")
+
+                # Variations section
+                st.markdown("**Variations:**")
+                if advisor.variations:
+                    for var_idx, variation in enumerate(advisor.variations):
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            st.text(f"  • {variation}")
+                        with col2:
+                            if st.button("🗑️", key=f"del_var_{idx}_{var_idx}",
+                                       help="Supprimer cette variation"):
+                                matcher.remove_variation(idx, var_idx)
+                                st.session_state.advisor_matcher = AdvisorMatcher()
+                                st.rerun()
+                else:
+                    st.caption("Aucune variation définie")
+
+                # Add variation
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    new_var = st.text_input(
+                        "Nouvelle variation",
+                        placeholder="Ex: Tommy",
+                        key=f"new_var_{idx}",
+                        label_visibility="collapsed"
+                    )
+                with col2:
+                    if st.button("➕", key=f"add_var_{idx}", help="Ajouter variation"):
+                        if new_var:
+                            matcher.add_variation(idx, new_var)
+                            st.session_state.advisor_matcher = AdvisorMatcher()
+                            st.rerun()
+
+                st.divider()
+
+                # Edit advisor
+                st.markdown("**Modifier le conseiller:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    edit_first = st.text_input(
+                        "Prénom",
+                        value=advisor.first_name,
+                        key=f"edit_first_{idx}"
+                    )
+                with col2:
+                    edit_last = st.text_input(
+                        "Nom",
+                        value=advisor.last_name,
+                        key=f"edit_last_{idx}"
+                    )
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("💾 Sauvegarder", key=f"save_{idx}", type="primary"):
+                        if edit_first and edit_last:
+                            matcher.update_advisor(idx, edit_first, edit_last)
+                            st.session_state.advisor_matcher = AdvisorMatcher()
+                            st.success("✅ Conseiller mis à jour")
+                            st.rerun()
+
+                with col2:
+                    if st.button("🗑️ Supprimer", key=f"delete_{idx}", type="secondary"):
+                        matcher.delete_advisor(idx)
+                        st.session_state.advisor_matcher = AdvisorMatcher()
+                        st.warning(f"Conseiller supprimé")
+                        st.rerun()
+
+    st.divider()
+
+    # Test matching section
+    st.markdown("#### 🔍 Tester la correspondance")
+
+    test_name = st.text_input(
+        "Entrez un nom à tester",
+        placeholder="Ex: Thomas Lussier, Lussier Thomas, T. Lussier...",
+        key="test_name_input"
+    )
+
+    if test_name:
+        result = matcher.match(test_name)
+        if result:
+            st.success(f"✅ Correspondance trouvée: **{result}**")
+        else:
+            st.warning(f"⚠️ Aucune correspondance pour: \"{test_name}\"")
+            st.caption("Le nom original sera conservé tel quel.")
+
+
+# =============================================================================
 # STAGE 2: PREVIEW - CLEANER LAYOUT
 # =============================================================================
 
@@ -932,27 +1203,20 @@ def render_stage_2():
         st.markdown("### 🔍 Vérification Reçu vs Commission")
         st.caption("Formule: `Com Calculée = ROUND((PA × 0.4) × 0.5, 2)`")
 
-        # Tolerance slider
+        # Tolerance slider - simple direct usage without complex callbacks
         col1, col2 = st.columns([2, 3])
         with col1:
-            # Use on_change to ensure state is updated before verification
-            if 'verification_tolerance' not in st.session_state:
-                st.session_state.verification_tolerance = 10.0
-
             tolerance = st.slider(
                 "Tolérance (%)",
                 min_value=1.0,
                 max_value=50.0,
-                value=st.session_state.verification_tolerance,
+                value=10.0,
                 step=1.0,
                 help="Écart acceptable entre Reçu et Com. Le pourcentage affiché est l'écart réel entre Reçu et Com Calculée.",
-                key="tolerance_slider",
-                on_change=lambda: setattr(st.session_state, 'verification_tolerance', st.session_state.tolerance_slider)
+                key="verification_tolerance_slider"
             )
-            # Sync state
-            st.session_state.verification_tolerance = tolerance
 
-        # Apply verification
+        # Apply verification with current slider value
         df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
         stats = get_verification_stats(df_verified)
 

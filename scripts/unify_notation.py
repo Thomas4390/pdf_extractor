@@ -46,6 +46,13 @@ except ImportError:
     UV_AVAILABLE = False
 
 try:
+    from advisor_matcher import AdvisorMatcher
+    ADVISOR_MATCHER_AVAILABLE = True
+except ImportError:
+    print("⚠️  Warning: advisor_matcher.py not found - using legacy patterns")
+    ADVISOR_MATCHER_AVAILABLE = False
+
+try:
     from idc_extractor import PDFPropositionParser
     IDC_AVAILABLE = True
 except ImportError:
@@ -192,7 +199,7 @@ class CommissionDataUnifier:
         'Conseiller',
         'Complet',
         'PA',
-        'Partage',
+        'Lead/MC',  # Type de partage - toujours 'Lead' (anciennement 'Partage')
         'Com',
         'Reçu 1',
         'Boni',
@@ -227,7 +234,7 @@ class CommissionDataUnifier:
         'amount_received': 'Reçu',
         # Sales Production specific
         'completion': 'Complet',
-        'sharing_type': 'Partage',  # Type de partage (Lead par défaut)
+        'sharing_type': 'Lead/MC',  # Type de partage - toujours 'Lead'
         'commission_receipt': 'Reçu 1',
         'bonus_amount_receipt': 'Reçu 2',
         'on_commission_receipt': 'Reçu 3',
@@ -258,90 +265,100 @@ class CommissionDataUnifier:
         self.output_dir.mkdir(exist_ok=True)
         self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        # Initialize advisor name patterns (compiled regex for performance)
-        self._init_advisor_patterns()
+        # Initialize advisor matcher (using new robust system or legacy patterns)
+        self._init_advisor_matcher()
 
-    def _init_advisor_patterns(self):
-        """Initialize compiled regex patterns for advisor name mapping."""
+    def _init_advisor_matcher(self):
+        """Initialize advisor name matching system."""
+        if ADVISOR_MATCHER_AVAILABLE:
+            # Use the new robust AdvisorMatcher
+            self.advisor_matcher = AdvisorMatcher()
+            self.ADVISOR_PATTERNS = None  # Not used with new system
+            print(f"   ✓ Using AdvisorMatcher with {len(self.advisor_matcher.advisors)} advisors")
+        else:
+            # Fallback to legacy regex patterns
+            self.advisor_matcher = None
+            self._init_legacy_advisor_patterns()
+
+    def _init_legacy_advisor_patterns(self):
+        """Initialize legacy compiled regex patterns for advisor name mapping."""
         import re
 
-        # Define patterns for each advisor
+        # Define patterns for each advisor (legacy fallback)
         # Format: (pattern, simplified_name)
         # Patterns use re.IGNORECASE for case-insensitive matching
         pattern_definitions = [
             # Brandeen David Legrand - most complex, many variations
-            # Matches: Brandeen, David Legrand, Brandeen David Legrand, Brandeen DL,
-            # David Legrand B, B. David Legrand, DL Brandeen, etc.
-            (r'\bbrandeen\b', 'Brandeen'),
-            (r'\bdavid\s+legrand\b', 'Brandeen'),
-            (r'\blegrand\s*,?\s*david\b', 'Brandeen'),
-            (r'\bd\.?\s*legrand\b', 'Brandeen'),
-            (r'\blegrand\s*,?\s*d\.?\b', 'Brandeen'),
-            (r'\bdl\s+brandeen\b', 'Brandeen'),
-            (r'\bbrandeen\s+dl\b', 'Brandeen'),
+            (r'\bbrandeen\b', 'Brandeen D.'),
+            (r'\bdavid\s+legrand\b', 'Brandeen D.'),
+            (r'\blegrand\s*,?\s*david\b', 'Brandeen D.'),
+            (r'\bd\.?\s*legrand\b', 'Brandeen D.'),
+            (r'\blegrand\s*,?\s*d\.?\b', 'Brandeen D.'),
+            (r'\bdl\s+brandeen\b', 'Brandeen D.'),
+            (r'\bbrandeen\s+dl\b', 'Brandeen D.'),
 
             # Mohammed Fayçal/Faycal Guennouni
-            (r'\bfay[cç]al\b', 'Faycal'),
-            (r'\bfayÃ§al\b', 'Faycal'),  # UTF-8 encoding issue variant
-            (r'\bguennouni\b', 'Faycal'),
-            (r'\bmohammed\s+f', 'Faycal'),
+            (r'\bfay[cç]al\b', 'Faycal G.'),
+            (r'\bfayÃ§al\b', 'Faycal G.'),
+            (r'\bguennouni\b', 'Faycal G.'),
+            (r'\bmohammed\s+f', 'Faycal G.'),
 
             # Mathieu Poirier (check before Derek Poirier)
-            (r'\bmathieu\s+poirier\b', 'Mathieu'),
-            (r'\bpoirier\s*,?\s*mathieu\b', 'Mathieu'),
-            (r'\bm\.?\s+poirier\b', 'Mathieu'),
+            (r'\bmathieu\s+poirier\b', 'Mathieu P.'),
+            (r'\bpoirier\s*,?\s*mathieu\b', 'Mathieu P.'),
+            (r'\bm\.?\s+poirier\b', 'Mathieu P.'),
 
             # Derek Poirier
-            (r'\bderek\s+poirier\b', 'Derek'),
-            (r'\bpoirier\s*,?\s*derek\b', 'Derek'),
-            (r'\bd\.?\s+poirier\b(?!\s*m)', 'Derek'),  # D. Poirier but not if followed by M
+            (r'\bderek\s+poirier\b', 'Derek P.'),
+            (r'\bpoirier\s*,?\s*derek\b', 'Derek P.'),
+            (r'\bd\.?\s+poirier\b(?!\s*m)', 'Derek P.'),
 
             # Thomas Lussier
-            (r'\bthomas\s+lussier\b', 'Thomas'),
-            (r'\blussier\s*,?\s*thomas\b', 'Thomas'),
-            (r'\bt\.?\s+lussier\b', 'Thomas'),
-            (r'\blussier\s*,?\s*t\.?\b', 'Thomas'),
+            (r'\bthomas\s+lussier\b', 'Thomas L.'),
+            (r'\blussier\s*,?\s*thomas\b', 'Thomas L.'),
+            (r'\bt\.?\s+lussier\b', 'Thomas L.'),
+            (r'\blussier\s*,?\s*t\.?\b', 'Thomas L.'),
 
             # Ayoub Chamoumi
-            (r'\bayoub\s+chamoumi\b', 'Ayoub'),
-            (r'\bchamoumi\b', 'Ayoub'),
+            (r'\bayoub\s+chamoumi\b', 'Ayoub C.'),
+            (r'\bchamoumi\b', 'Ayoub C.'),
 
             # Said Vital -> Ayoub (special case)
-            (r'\bsaid\s+vital\b', 'Ayoub'),
-            (r'\bvital\s*,?\s*said\b', 'Ayoub'),
-            (r'\bs\.?\s+vital\b', 'Ayoub'),
+            (r'\bsaid\s+vital\b', 'Ayoub C.'),
+            (r'\bvital\s*,?\s*said\b', 'Ayoub C.'),
+            (r'\bs\.?\s+vital\b', 'Ayoub C.'),
 
             # Alexis Bourassa
-            (r'\balexis\s+bourassa\b', 'Alexis'),
-            (r'\bbourassa\s*,?\s*alexis\b', 'Alexis'),
-            (r'\bbourassa\b', 'Alexis'),
+            (r'\balexis\s+bourassa\b', 'Alexis B.'),
+            (r'\bbourassa\s*,?\s*alexis\b', 'Alexis B.'),
+            (r'\bbourassa\b', 'Alexis B.'),
 
             # Jad Senhaji
-            (r'\bjad\s+senhaji\b', 'Jad'),
-            (r'\bsenhaji\b', 'Jad'),
+            (r'\bjad\s+senhaji\b', 'Jad S.'),
+            (r'\bsenhaji\b', 'Jad S.'),
 
             # Igor Velicico
-            (r'\bigor\s+velicico\b', 'Igor'),
-            (r'\bvelicico\b', 'Igor'),
+            (r'\bigor\s+velicico\b', 'Igor V.'),
+            (r'\bvelicico\b', 'Igor V.'),
 
             # Robinson Viaud
-            (r'\brobinson\s+viaud\b', 'Robinson'),
-            (r'\bviaud\b', 'Robinson'),
+            (r'\brobinson\s+viaud\b', 'Robinson V.'),
+            (r'\bviaud\b', 'Robinson V.'),
 
             # Benoît/Benoit Méthot/Methot
-            (r'\bbeno[iî]t\s+m[eé]thot\b', 'Benoit'),
-            (r'\bm[eé]thot\s*,?\s*beno[iî]t\b', 'Benoit'),
-            (r'\bm[eé]thot\b', 'Benoit'),
+            (r'\bbeno[iî]t\s+m[eé]thot\b', 'Benoit M.'),
+            (r'\bm[eé]thot\s*,?\s*beno[iî]t\b', 'Benoit M.'),
+            (r'\bm[eé]thot\b', 'Benoit M.'),
 
             # Anthony Guay
-            (r'\banthony\s+guay\b', 'Anthony'),
-            (r'\bguay\s*,?\s*anthony\b', 'Anthony'),
-            (r'\bguay\b', 'Anthony'),
+            (r'\banthony\s+guay\b', 'Anthony G.'),
+            (r'\bguay\s*,?\s*anthony\b', 'Anthony G.'),
+            (r'\bguay\b', 'Anthony G.'),
 
             # Guillaume St-Pierre
-            (r'\bguillaume\s+st[\-\.]?\s*pierre\b', 'Guillaume'),
-            (r'\bst[\-\.]?\s*pierre\s*,?\s*guillaume\b', 'Guillaume'),
-            (r'\bst[\-\.]?\s*pierre\b', 'Guillaume'),
+            (r'\bguillaume\s+st[\-\.]?\s*pierre\b', 'Guillaume S.'),
+            (r'\bst[\-\.]?\s*pierre\s*,?\s*guillaume\b', 'Guillaume S.'),
+            (r'\bst[\-\.]?\s*pierre\b', 'Guillaume S.'),
         ]
 
         # Compile patterns
@@ -354,14 +371,15 @@ class CommissionDataUnifier:
         """
         Normalize advisor name to simplified version.
 
-        Uses regex patterns to match various name formats and map them
-        to simplified names.
+        Uses the AdvisorMatcher for robust matching, or falls back to
+        regex patterns if AdvisorMatcher is not available.
 
         Args:
             advisor_name: The original advisor name
 
         Returns:
-            Simplified advisor name, or original if no match found
+            Simplified advisor name (Prénom + First letter of last name),
+            or original if no match found
         """
         if pd.isna(advisor_name) or advisor_name is None:
             return None
@@ -370,7 +388,15 @@ class CommissionDataUnifier:
         if not name_str or name_str in ['None', 'nan', 'NaN']:
             return None
 
-        # Test each pattern
+        # Use AdvisorMatcher if available
+        if self.advisor_matcher is not None:
+            result = self.advisor_matcher.match(name_str)
+            if result:
+                return result
+            # No match found, return original name
+            return name_str
+
+        # Fallback to legacy patterns
         for pattern, simplified_name in self.ADVISOR_PATTERNS:
             if pattern.search(name_str):
                 return simplified_name
@@ -811,8 +837,12 @@ class CommissionDataUnifier:
         # Parse and format dates
         standard_df['report_date'] = df['Date'].apply(lambda x: self._format_date_uniform(self._parse_date(x)))
 
-        # Parse trailing fees - Map 'Frais de suivi nets' to 'on_commission'
-        standard_df['on_commission'] = df['Frais de suivi nets'].apply(self._clean_currency)
+        # Parse trailing fees - Map 'Frais de suivi nets' to 'on_commission' AND 'amount_received'
+        # 'on_commission' → 'Sur-Com' column
+        # 'amount_received' → 'Reçu' column (used for status calculation: Payé/Charge back)
+        trailing_fee = df['Frais de suivi nets'].apply(self._clean_currency)
+        standard_df['on_commission'] = trailing_fee
+        standard_df['amount_received'] = trailing_fee  # For status calculation in filter_final_columns
 
         # Map advisor name and on-commission rate
         if 'Nom du conseiller' in df.columns:
