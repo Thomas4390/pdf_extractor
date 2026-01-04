@@ -87,9 +87,10 @@ def get_gcp_credentials():
         try:
             if 'gcp_service_account' in st.secrets:
                 creds_dict = dict(st.secrets['gcp_service_account'])
+                print(f"   ✓ Found gcp_service_account in Streamlit secrets")
                 return Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"   ⚠️ Error reading Streamlit secrets: {e}")
 
     # Fallback to file-based credentials
     credentials_file = get_secret('GOOGLE_SHEETS_CREDENTIALS_FILE')
