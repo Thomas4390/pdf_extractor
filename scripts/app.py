@@ -170,6 +170,14 @@ def init_session_state():
         'monday_api_key': monday_api_key,  # Auto-load from secrets if available
         'boards_loading': False,
         'boards_error': None,
+        # Batch processing state
+        'batch_mode': False,
+        'uploaded_files': [],
+        'extraction_results': {},  # {filename: {'success': bool, 'data': df, 'error': str, 'group': str}}
+        'combined_data': None,
+        'processing_progress': 0,
+        'current_processing_file': '',
+        'batch_configs': [],  # List of configs for each PDF
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -340,15 +348,159 @@ def cleanup_temp_file(file_path: str = None):
             pass
 
 
+def detect_date_from_filename(filename: str) -> str:
+    """
+    Détecte la date/mois à partir du nom de fichier PDF.
+
+    Patterns supportés:
+    - rappportremun_21622_2025-10-20.pdf -> "Octobre 2025"
+    - Rapport des propositions soumises.20251017_1517.pdf -> "Octobre 2025"
+    - 20251017_report.pdf -> "Octobre 2025"
+
+    Args:
+        filename: Nom du fichier PDF
+
+    Returns:
+        str: Nom du groupe (ex: "Octobre 2025") ou None si non détecté
+    """
+    import re
+    from datetime import datetime
+
+    months_fr = {
+        1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
+        5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août",
+        9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
+    }
+
+    # Patterns de date dans le nom de fichier
+    patterns = [
+        (r'(\d{4})-(\d{2})-(\d{2})', 1, 2),      # 2025-10-20 (year, month at pos 1, 2)
+        (r'\.(\d{4})(\d{2})(\d{2})_', 1, 2),     # .20251017_ (year, month at pos 1, 2)
+        (r'_(\d{4})(\d{2})(\d{2})', 1, 2),       # _20251017 (year, month at pos 1, 2)
+        (r'^(\d{4})(\d{2})(\d{2})', 1, 2),       # 20251017 at start
+    ]
+
+    for pattern, year_pos, month_pos in patterns:
+        match = re.search(pattern, filename)
+        if match:
+            try:
+                year = int(match.group(year_pos))
+                month = int(match.group(month_pos))
+                if 1 <= month <= 12 and 2020 <= year <= 2030:
+                    return f"{months_fr[month]} {year}"
+            except (ValueError, IndexError):
+                continue
+
+    # Fallback: date du jour
+    now = datetime.now()
+    return f"{months_fr[now.month]} {now.year}"
+
+
+def process_batch_pdfs(uploaded_files, source: str, board_name: str, api_key: str,
+                       target_board_type, aggregate: bool, reuse_board: bool,
+                       reuse_group: bool, progress_callback=None) -> dict:
+    """
+    Traite plusieurs PDFs séquentiellement avec gestion d'erreurs résiliente.
+
+    Args:
+        uploaded_files: Liste des fichiers uploadés
+        source: Type de source (UV, IDC, etc.)
+        board_name: Nom du board de destination
+        api_key: Clé API Monday.com
+        target_board_type: Type de board (HISTORICAL_PAYMENTS ou SALES_PRODUCTION)
+        aggregate: Agréger par contrat
+        reuse_board: Réutiliser le board si existe
+        reuse_group: Réutiliser le groupe si existe
+        progress_callback: Fonction de callback pour la progression
+
+    Returns:
+        {
+            'successful': [(filename, dataframe, detected_group), ...],
+            'failed': [(filename, error_message), ...],
+            'combined_df': DataFrame ou None
+        }
+    """
+    results = {'successful': [], 'failed': [], 'combined_df': None}
+
+    for i, pdf_file in enumerate(uploaded_files):
+        pdf_path = None
+        try:
+            # Callback de progression
+            if progress_callback:
+                progress_callback(i, len(uploaded_files), pdf_file.name, "Extraction...")
+
+            # Sauvegarder temporairement
+            pdf_path = save_uploaded_file(pdf_file)
+
+            # Détecter la date/groupe
+            detected_group = detect_date_from_filename(pdf_file.name)
+
+            # Créer config pour ce PDF
+            pdf_config = PipelineConfig(
+                source=InsuranceSource(source.replace(" ", "_").upper()),
+                pdf_path=pdf_path,
+                month_group=detected_group,
+                board_name=board_name,
+                monday_api_key=api_key,
+                output_dir=str(PROJECT_ROOT / "results"),
+                reuse_board=reuse_board,
+                reuse_group=reuse_group,
+                aggregate_by_contract=aggregate,
+                target_board_type=target_board_type
+            )
+
+            # Extraire les données
+            pipeline = InsuranceCommissionPipeline(pdf_config)
+            if not pipeline._step1_extract_data():
+                raise Exception("Échec de l'extraction des données")
+            if not pipeline._step2_process_data():
+                raise Exception("Échec du traitement des données")
+
+            # Ajouter colonnes source
+            df = pipeline.final_data.copy()
+            df['_source_file'] = pdf_file.name
+            df['_target_group'] = detected_group
+
+            results['successful'].append((pdf_file.name, df, detected_group))
+
+        except Exception as e:
+            results['failed'].append((pdf_file.name, str(e)))
+
+        finally:
+            if pdf_path:
+                cleanup_temp_file(pdf_path)
+
+    # Combiner les DataFrames
+    if results['successful']:
+        all_dfs = [item[1] for item in results['successful']]
+        results['combined_df'] = pd.concat(all_dfs, ignore_index=True)
+
+    return results
+
+
 def reset_pipeline():
     """Reset pipeline state to start over."""
     cleanup_temp_file()
     keys_to_reset = ['stage', 'pdf_file', 'pdf_path', 'extracted_data',
                      'pipeline', 'config', 'upload_results', 'data_modified',
-                     'monday_boards', 'selected_board_id']
+                     'monday_boards', 'selected_board_id',
+                     # Batch processing state
+                     'batch_mode', 'uploaded_files', 'extraction_results',
+                     'combined_data', 'processing_progress', 'current_processing_file',
+                     'batch_configs']
     for key in keys_to_reset:
         if key == 'stage':
             st.session_state[key] = 1
+        elif key == 'batch_mode':
+            st.session_state[key] = False
+        elif key in ['uploaded_files', 'batch_configs']:
+            st.session_state[key] = []
+        elif key == 'extraction_results':
+            st.session_state[key] = {}
+        elif key == 'processing_progress':
+            st.session_state[key] = 0
+        elif key == 'current_processing_file':
+            st.session_state[key] = ''
         else:
             st.session_state[key] = None
     st.session_state.data_modified = False
@@ -502,8 +654,8 @@ def render_stage_1():
         st.info("⏳ Chargement des boards en cours...")
         return
 
-    # Tabs for different workflows
-    tab1, tab2, tab3 = st.tabs(["📄 Extraction PDF", "🔄 Migration Monday.com", "👥 Gestion Conseillers"])
+    # Tabs for different workflows (Migration Monday.com removed - no longer used)
+    tab1, tab2 = st.tabs(["📄 Extraction PDF", "👥 Gestion Conseillers"])
 
     # =========================================================================
     # TAB 1: PDF EXTRACTION
@@ -512,15 +664,9 @@ def render_stage_1():
         render_pdf_extraction_tab()
 
     # =========================================================================
-    # TAB 2: MONDAY.COM MIGRATION
+    # TAB 2: ADVISOR MANAGEMENT
     # =========================================================================
     with tab2:
-        render_monday_migration_tab()
-
-    # =========================================================================
-    # TAB 3: ADVISOR MANAGEMENT
-    # =========================================================================
-    with tab3:
         render_advisor_management_tab()
 
 
@@ -603,34 +749,53 @@ def on_target_type_change():
 
 
 def render_pdf_extraction_tab():
-    """Render PDF extraction tab with simplified flow."""
+    """Render PDF extraction tab with batch processing support."""
 
-    # Step 1: Upload PDF first (most important action)
-    st.markdown("### 📤 Upload du fichier PDF")
+    # Step 1: Upload PDF(s) - supports multiple files
+    st.markdown("### 📤 Upload des fichiers PDF")
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        uploaded_file = st.file_uploader(
-            "Déposez votre fichier PDF ici",
+        uploaded_files = st.file_uploader(
+            "Déposez vos fichiers PDF ici",
             type=['pdf'],
-            help="Fichier PDF contenant les données de commissions",
+            accept_multiple_files=True,  # Enable batch upload
+            help="Sélectionnez un ou plusieurs fichiers PDF du même type",
             key="pdf_upload_main"
         )
 
-        if uploaded_file:
-            st.success(f"✅ Fichier chargé: {uploaded_file.name}")
+        # Display upload summary
+        if uploaded_files:
+            is_batch = len(uploaded_files) > 1
+            if is_batch:
+                st.success(f"✅ {len(uploaded_files)} fichiers chargés")
+            else:
+                st.success(f"✅ Fichier chargé: {uploaded_files[0].name}")
 
     with col2:
         source = st.selectbox(
             "Source",
             options=["UV", "IDC", "IDC Statement", "ASSOMPTION"],
-            help="Type de document PDF"
+            help="Type de document PDF (tous les fichiers doivent être du même type)"
         )
 
-    if not uploaded_file:
-        st.info("👆 Commencez par uploader un fichier PDF pour continuer.")
+    if not uploaded_files:
+        st.info("👆 Commencez par uploader un ou plusieurs fichiers PDF pour continuer.")
         return
+
+    # Show file details with detected dates for batch mode
+    is_batch = len(uploaded_files) > 1
+    if is_batch:
+        with st.expander(f"📁 Détail des {len(uploaded_files)} fichiers", expanded=True):
+            for i, f in enumerate(uploaded_files):
+                detected_group = detect_date_from_filename(f.name)
+                col_file, col_date = st.columns([3, 1])
+                with col_file:
+                    st.text(f"{i+1}. {f.name}")
+                with col_date:
+                    st.caption(f"→ {detected_group}")
+            st.info("💡 Les groupes sont détectés automatiquement à partir des noms de fichiers")
 
     st.divider()
 
@@ -718,12 +883,17 @@ def render_pdf_extraction_tab():
 
     current_index = type_options.index(current_type) if current_type in type_options else 0
 
-    # Groupe (optionnel)
-    month_group = st.text_input(
-        "Groupe (optionnel)",
-        placeholder="Ex: Novembre 2025",
-        key="pdf_month_group"
-    )
+    # Groupe (only for single file mode - batch uses auto-detection)
+    if not is_batch:
+        month_group = st.text_input(
+            "Groupe (optionnel)",
+            placeholder="Ex: Novembre 2025",
+            key="pdf_month_group",
+            help="Laissez vide pour détecter automatiquement à partir du nom du fichier"
+        )
+    else:
+        month_group = None  # Batch mode uses auto-detection
+        st.info("📅 En mode batch, les groupes sont détectés automatiquement depuis les noms de fichiers")
 
     # Type de table avec détection automatique
     if board_name:
@@ -751,10 +921,12 @@ def render_pdf_extraction_tab():
 
     st.divider()
 
-    # Submit button
+    # Submit button - adapted text for batch mode
+    button_text = f"🚀 Extraire {len(uploaded_files)} fichier{'s' if is_batch else ''}"
+
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🚀 Extraire les données", type="primary", use_container_width=True):
+        if st.button(button_text, type="primary", use_container_width=True):
             # Validation
             errors = []
             if board_mode == "Utiliser un board existant" and not selected_board_id:
@@ -764,33 +936,67 @@ def render_pdf_extraction_tab():
                 for e in errors:
                     st.error(e)
             else:
-                # Save file and create config
-                pdf_path = save_uploaded_file(uploaded_file)
-
                 target_board_type = (BoardType.SALES_PRODUCTION
                                     if target_type == "Ventes et Production"
                                     else BoardType.HISTORICAL_PAYMENTS)
 
-                config = PipelineConfig(
-                    source=InsuranceSource(source.replace(" ", "_").upper()),
-                    pdf_path=pdf_path,
-                    month_group=month_group if month_group else None,
-                    board_name=board_name,
-                    monday_api_key=st.session_state.monday_api_key,
-                    output_dir=str(PROJECT_ROOT / "results"),
-                    reuse_board=reuse_board,
-                    reuse_group=reuse_group,
-                    aggregate_by_contract=aggregate,
-                    source_board_id=None,
-                    source_group_id=None,
-                    target_board_type=target_board_type
-                )
+                if is_batch:
+                    # BATCH MODE: Process multiple PDFs
+                    st.session_state.batch_mode = True
+                    st.session_state.uploaded_files = uploaded_files
 
-                st.session_state.pdf_file = uploaded_file
-                st.session_state.pdf_path = pdf_path
-                st.session_state.config = config
-                st.session_state.stage = 2
-                st.rerun()
+                    # Create a placeholder config for stage 2 (will be updated per-file)
+                    config = PipelineConfig(
+                        source=InsuranceSource(source.replace(" ", "_").upper()),
+                        pdf_path=None,  # Will be set per-file
+                        month_group=None,  # Auto-detected per-file
+                        board_name=board_name,
+                        monday_api_key=st.session_state.monday_api_key,
+                        output_dir=str(PROJECT_ROOT / "results"),
+                        reuse_board=reuse_board,
+                        reuse_group=reuse_group,
+                        aggregate_by_contract=aggregate,
+                        source_board_id=None,
+                        source_group_id=None,
+                        target_board_type=target_board_type
+                    )
+
+                    st.session_state.config = config
+                    st.session_state.stage = 2
+                    st.rerun()
+                else:
+                    # SINGLE FILE MODE: Original behavior
+                    st.session_state.batch_mode = False
+                    uploaded_file = uploaded_files[0]
+
+                    # Use manual group if provided, otherwise auto-detect
+                    if month_group:
+                        final_group = month_group
+                    else:
+                        final_group = detect_date_from_filename(uploaded_file.name)
+
+                    pdf_path = save_uploaded_file(uploaded_file)
+
+                    config = PipelineConfig(
+                        source=InsuranceSource(source.replace(" ", "_").upper()),
+                        pdf_path=pdf_path,
+                        month_group=final_group,
+                        board_name=board_name,
+                        monday_api_key=st.session_state.monday_api_key,
+                        output_dir=str(PROJECT_ROOT / "results"),
+                        reuse_board=reuse_board,
+                        reuse_group=reuse_group,
+                        aggregate_by_contract=aggregate,
+                        source_board_id=None,
+                        source_group_id=None,
+                        target_board_type=target_board_type
+                    )
+
+                    st.session_state.pdf_file = uploaded_file
+                    st.session_state.pdf_path = pdf_path
+                    st.session_state.config = config
+                    st.session_state.stage = 2
+                    st.rerun()
 
 
 def render_monday_migration_tab():
@@ -1129,60 +1335,225 @@ def render_advisor_management_tab():
 
 
 # =============================================================================
-# STAGE 2: PREVIEW - CLEANER LAYOUT
+# BATCH PROCESSING HELPERS
+# =============================================================================
+
+def _process_batch_extraction(config):
+    """
+    Process batch PDF extraction with visual progress feedback.
+    Called from render_stage_2 when in batch mode.
+    """
+    uploaded_files = st.session_state.uploaded_files
+    total_files = len(uploaded_files)
+
+    st.markdown("### 🔄 Extraction en cours...")
+
+    # Progress container
+    progress_bar = st.progress(0)
+    status_container = st.empty()
+    details_container = st.empty()
+
+    results = {'successful': [], 'failed': []}
+
+    for i, pdf_file in enumerate(uploaded_files):
+        pdf_path = None
+        try:
+            # Update progress
+            progress = (i / total_files)
+            progress_bar.progress(progress)
+
+            status_container.markdown(f"""
+            <div style="background: #f8f9fa; padding: 1rem; border-radius: 10px; margin: 0.5rem 0;">
+                <strong>📄 Traitement du fichier {i+1}/{total_files}</strong><br>
+                <span style="color: #6c757d;">{pdf_file.name}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Save file temporarily
+            pdf_path = save_uploaded_file(pdf_file)
+
+            # Detect group from filename
+            detected_group = detect_date_from_filename(pdf_file.name)
+
+            # Create config for this PDF
+            pdf_config = PipelineConfig(
+                source=config.source,
+                pdf_path=pdf_path,
+                month_group=detected_group,
+                board_name=config.board_name,
+                monday_api_key=config.monday_api_key,
+                output_dir=config.output_dir,
+                reuse_board=config.reuse_board,
+                reuse_group=config.reuse_group,
+                aggregate_by_contract=config.aggregate_by_contract,
+                target_board_type=config.target_board_type
+            )
+
+            # Extract data
+            pipeline = InsuranceCommissionPipeline(pdf_config)
+            if not pipeline._step1_extract_data():
+                raise Exception("Échec de l'extraction des données")
+            if not pipeline._step2_process_data():
+                raise Exception("Échec du traitement des données")
+
+            # Add source metadata
+            df = pipeline.final_data.copy()
+            df['_source_file'] = pdf_file.name
+            df['_target_group'] = detected_group
+
+            results['successful'].append({
+                'filename': pdf_file.name,
+                'data': df,
+                'group': detected_group,
+                'pipeline': pipeline,
+                'config': pdf_config
+            })
+
+            # Show success in details
+            details_container.success(f"✅ {pdf_file.name} → {detected_group} ({len(df)} items)")
+
+        except Exception as e:
+            results['failed'].append({
+                'filename': pdf_file.name,
+                'error': str(e)
+            })
+            details_container.error(f"❌ {pdf_file.name}: {e}")
+
+        finally:
+            if pdf_path:
+                cleanup_temp_file(pdf_path)
+
+    # Complete progress
+    progress_bar.progress(1.0)
+    status_container.empty()
+
+    # Combine successful dataframes
+    if results['successful']:
+        all_dfs = [item['data'] for item in results['successful']]
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+
+        # Store results
+        st.session_state.extracted_data = combined_df
+        st.session_state.extraction_results = results
+
+        # Use the first successful pipeline as reference (for upload later)
+        st.session_state.pipeline = results['successful'][0]['pipeline']
+        st.session_state.batch_configs = [item['config'] for item in results['successful']]
+
+        st.rerun()
+    else:
+        st.error("❌ Aucun fichier n'a pu être traité avec succès")
+        if st.button("🔄 Recommencer"):
+            reset_pipeline()
+            st.rerun()
+
+
+def _render_batch_summary(results: dict):
+    """Render batch extraction results summary."""
+    successful = results.get('successful', [])
+    failed = results.get('failed', [])
+
+    total = len(successful) + len(failed)
+    success_count = len(successful)
+
+    # Summary metrics
+    st.markdown("### 📋 Résumé de l'extraction batch")
+
+    cols = st.columns(4)
+    cols[0].metric("Fichiers traités", f"{success_count}/{total}")
+    cols[1].metric("Succès", success_count, delta=None if success_count == total else f"-{len(failed)}")
+    cols[2].metric("Échecs", len(failed), delta_color="inverse" if failed else "off")
+
+    # Count unique groups
+    unique_groups = set(item['group'] for item in successful)
+    cols[3].metric("Groupes", len(unique_groups))
+
+    # Show failed files if any
+    if failed:
+        with st.expander("❌ Fichiers en erreur", expanded=True):
+            for item in failed:
+                st.error(f"**{item['filename']}**: {item['error']}")
+
+    # Show successful files breakdown
+    if successful:
+        with st.expander(f"✅ {success_count} fichiers traités avec succès", expanded=False):
+            for item in successful:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.text(item['filename'])
+                with col2:
+                    st.caption(f"→ {item['group']}")
+                with col3:
+                    st.caption(f"{len(item['data'])} items")
+
+    st.divider()
+
+
+# =============================================================================
+# STAGE 2: PREVIEW - CLEANER LAYOUT (with batch support)
 # =============================================================================
 
 def render_stage_2():
-    """Render data preview stage."""
+    """Render data preview stage with batch processing support."""
 
     st.markdown("## 📊 Pipeline de Commissions")
     render_stepper()
     st.write("")
 
     config = st.session_state.config
+    is_batch = st.session_state.get('batch_mode', False)
 
     # Config summary - compact
     with st.expander("📋 Configuration", expanded=False):
         cols = st.columns(4)
         cols[0].metric("Source", config.source.value)
         cols[1].metric("Board", config.board_name[:20] + "..." if len(config.board_name) > 20 else config.board_name)
-        cols[2].metric("Groupe", config.month_group or "Défaut")
+        if is_batch:
+            cols[2].metric("Mode", f"Batch ({len(st.session_state.uploaded_files)} fichiers)")
+        else:
+            cols[2].metric("Groupe", config.month_group or "Auto-détecté")
         cols[3].metric("Agrégation", "Oui" if config.aggregate_by_contract else "Non")
 
     # Extract data if not done
     if st.session_state.extracted_data is None:
-        source_type = "Monday.com" if config.source == InsuranceSource.MONDAY_LEGACY else "PDF"
+        if is_batch:
+            # BATCH MODE: Process multiple PDFs with progress
+            _process_batch_extraction(config)
+            return
+        else:
+            # SINGLE FILE MODE: Original behavior
+            source_type = "Monday.com" if config.source == InsuranceSource.MONDAY_LEGACY else "PDF"
 
-        with st.spinner(f"🔄 Extraction depuis {source_type}..."):
-            try:
-                pipeline = InsuranceCommissionPipeline(config)
+            with st.spinner(f"🔄 Extraction depuis {source_type}..."):
+                try:
+                    pipeline = InsuranceCommissionPipeline(config)
 
-                if not pipeline._step1_extract_data():
-                    st.error("❌ Échec de l'extraction")
-                    if st.button("🔄 Recommencer"):
-                        reset_pipeline()
-                        st.rerun()
-                    return
+                    if not pipeline._step1_extract_data():
+                        st.error("❌ Échec de l'extraction")
+                        if st.button("🔄 Recommencer"):
+                            reset_pipeline()
+                            st.rerun()
+                        return
 
-                if not pipeline._step2_process_data():
-                    st.error("❌ Échec du traitement")
-                    if st.button("🔄 Recommencer"):
-                        reset_pipeline()
-                        st.rerun()
-                    return
+                    if not pipeline._step2_process_data():
+                        st.error("❌ Échec du traitement")
+                        if st.button("🔄 Recommencer"):
+                            reset_pipeline()
+                            st.rerun()
+                        return
 
-                st.session_state.extracted_data = pipeline.final_data
-                st.session_state.pipeline = pipeline
-                st.rerun()
-
-            except Exception as e:
-                st.error(f"❌ Erreur: {e}")
-                with st.expander("Détails"):
-                    st.exception(e)
-                if st.button("🔄 Recommencer"):
-                    reset_pipeline()
+                    st.session_state.extracted_data = pipeline.final_data
+                    st.session_state.pipeline = pipeline
                     st.rerun()
-                return
+
+                except Exception as e:
+                    st.error(f"❌ Erreur: {e}")
+                    with st.expander("Détails"):
+                        st.exception(e)
+                    if st.button("🔄 Recommencer"):
+                        reset_pipeline()
+                        st.rerun()
+                    return
 
     df = st.session_state.extracted_data
 
@@ -1196,6 +1567,11 @@ def render_stage_2():
     # Modified data notice
     if st.session_state.data_modified:
         st.info("📝 Données modifiées (fichier uploadé)")
+
+    # Batch mode: show extraction results summary
+    if is_batch and st.session_state.get('extraction_results'):
+        results = st.session_state.extraction_results
+        _render_batch_summary(results)
 
     # Statistics - compact cards
     st.markdown("### 📊 Aperçu")
@@ -1345,11 +1721,11 @@ def render_stage_2():
 
 
 # =============================================================================
-# STAGE 3: UPLOAD - STREAMLINED
+# STAGE 3: UPLOAD - STREAMLINED (with batch support)
 # =============================================================================
 
 def render_stage_3():
-    """Render upload stage."""
+    """Render upload stage with batch support."""
 
     st.markdown("## 📊 Pipeline de Commissions")
     render_stepper()
@@ -1357,6 +1733,7 @@ def render_stage_3():
 
     df = st.session_state.extracted_data
     config = st.session_state.config
+    is_batch = st.session_state.get('batch_mode', False)
 
     if st.session_state.data_modified:
         st.warning("⚠️ Upload de données modifiées")
@@ -1364,16 +1741,36 @@ def render_stage_3():
     # Summary
     st.markdown("### 📋 Résumé de l'upload")
 
-    cols = st.columns(3)
-    cols[0].metric("Lignes", len(df))
-    cols[1].metric("Board", config.board_name[:25] + "..." if len(config.board_name) > 25 else config.board_name)
-    cols[2].metric("Groupe", config.month_group or "Défaut")
+    if is_batch:
+        # Batch mode summary
+        unique_groups = df['_target_group'].unique() if '_target_group' in df.columns else []
+        cols = st.columns(4)
+        cols[0].metric("Items total", len(df))
+        cols[1].metric("Board", config.board_name[:20] + "..." if len(config.board_name) > 20 else config.board_name)
+        cols[2].metric("Groupes", len(unique_groups))
+        cols[3].metric("Fichiers", len(st.session_state.get('extraction_results', {}).get('successful', [])))
+
+        # Show groups breakdown
+        if '_target_group' in df.columns:
+            with st.expander("📁 Détail par groupe", expanded=False):
+                for group in unique_groups:
+                    group_count = len(df[df['_target_group'] == group])
+                    st.markdown(f"**{group}**: {group_count} items")
+    else:
+        # Single file mode summary
+        cols = st.columns(3)
+        cols[0].metric("Lignes", len(df))
+        cols[1].metric("Board", config.board_name[:25] + "..." if len(config.board_name) > 25 else config.board_name)
+        cols[2].metric("Groupe", config.month_group or "Auto-détecté")
 
     st.divider()
 
     # Upload process
     if st.session_state.upload_results is None:
-        st.info("Les données vont être uploadées vers Monday.com.")
+        if is_batch:
+            st.info(f"Les données vont être uploadées vers Monday.com dans {len(df['_target_group'].unique()) if '_target_group' in df.columns else 1} groupe(s).")
+        else:
+            st.info("Les données vont être uploadées vers Monday.com.")
 
         col1, col2 = st.columns(2)
 
@@ -1384,7 +1781,10 @@ def render_stage_3():
 
         with col2:
             if st.button("🚀 Confirmer l'upload", type="primary", use_container_width=True):
-                execute_upload()
+                if is_batch:
+                    execute_batch_upload()
+                else:
+                    execute_upload()
     else:
         render_upload_results()
 
@@ -1463,35 +1863,211 @@ def execute_upload():
             st.exception(e)
 
 
+def execute_batch_upload():
+    """Execute batch upload to Monday.com with multiple groups."""
+    config = st.session_state.config
+    df = st.session_state.extracted_data
+
+    # Get unique groups from the combined DataFrame
+    if '_target_group' not in df.columns:
+        st.error("❌ Colonne '_target_group' manquante dans les données")
+        return
+
+    unique_groups = df['_target_group'].unique().tolist()
+    total_items = len(df)
+
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_container = st.empty()
+    details_container = st.container()
+
+    try:
+        pipeline = st.session_state.pipeline
+
+        # Step 1: Setup board (without creating groups yet)
+        status_container.markdown("⚙️ **Configuration du board...**")
+        progress_bar.progress(5)
+
+        # Setup the board using the first pipeline
+        if not pipeline._step3_setup_monday_board():
+            st.error("❌ Échec de la configuration du board")
+            return
+
+        progress_bar.progress(10)
+
+        # Step 2: Process each group
+        results_by_group = {}
+        all_results = []
+        items_uploaded = 0
+        items_failed = 0
+        groups_processed = 0
+
+        for group_idx, group_name in enumerate(unique_groups):
+            group_items = df[df['_target_group'] == group_name]
+            group_count = len(group_items)
+
+            status_container.markdown(f"📁 **Groupe {group_idx + 1}/{len(unique_groups)}:** {group_name} ({group_count} items)")
+
+            try:
+                # Create group
+                from monday_automation import MondayClient
+
+                group_result = pipeline.monday_client.create_group(
+                    board_id=pipeline.board_id,
+                    group_name=str(group_name),
+                    group_color="#0086c0",
+                    reuse_existing=config.reuse_group
+                )
+
+                if not group_result.success:
+                    with details_container:
+                        st.warning(f"⚠️ Impossible de créer le groupe '{group_name}': {group_result.error}")
+                    items_failed += group_count
+                    continue
+
+                group_id = group_result.group_id
+
+                # Prepare items for this group (exclude metadata columns)
+                group_df = group_items.drop(columns=['_source_file', '_target_group', '_extraction_order'], errors='ignore')
+                items = pipeline._prepare_monday_items(group_df)
+
+                # Upload items in batches
+                batch_size = 10
+                group_results = []
+
+                for i in range(0, len(items), batch_size):
+                    batch = items[i:i + batch_size]
+
+                    batch_results = pipeline.monday_client.create_items_batch(
+                        board_id=pipeline.board_id,
+                        items=batch,
+                        group_id=group_id
+                    )
+                    group_results.extend(batch_results)
+
+                    # Update progress
+                    items_done = items_uploaded + len(group_results)
+                    pct = 10 + int(85 * items_done / total_items)
+                    progress_bar.progress(min(pct, 95))
+
+                # Count results for this group
+                group_success = sum(1 for r in group_results if r.success)
+                group_fail = len(group_results) - group_success
+
+                items_uploaded += group_success
+                items_failed += group_fail
+                all_results.extend(group_results)
+
+                results_by_group[group_name] = {
+                    'success': group_success,
+                    'failed': group_fail,
+                    'group_id': group_id
+                }
+
+                groups_processed += 1
+
+                with details_container:
+                    if group_fail == 0:
+                        st.success(f"✅ {group_name}: {group_success} items uploadés")
+                    else:
+                        st.warning(f"⚠️ {group_name}: {group_success} uploadés, {group_fail} échecs")
+
+            except Exception as e:
+                items_failed += group_count
+                with details_container:
+                    st.error(f"❌ {group_name}: Erreur - {str(e)}")
+
+        progress_bar.progress(100)
+        status_container.empty()
+
+        # Save results
+        if items_uploaded > 0:
+            st.session_state.upload_results = {
+                'success': True,
+                'board_id': pipeline.board_id,
+                'group_id': None,  # Multiple groups
+                'items_uploaded': items_uploaded,
+                'items_failed': items_failed,
+                'is_batch': True,
+                'groups_processed': groups_processed,
+                'total_groups': len(unique_groups),
+                'results_by_group': results_by_group
+            }
+            st.rerun()
+        else:
+            st.error("❌ Aucun item uploadé")
+
+    except Exception as e:
+        st.error(f"❌ Erreur: {e}")
+        with st.expander("Détails"):
+            st.exception(e)
+
+
 def render_upload_results():
-    """Render upload results."""
+    """Render upload results with batch mode support."""
     results = st.session_state.upload_results
     config = st.session_state.config
+    is_batch = results.get('is_batch', False)
 
     if results['success']:
         st.balloons()
         st.success("✅ Upload terminé avec succès!")
 
-        cols = st.columns(4)
-        cols[0].metric("Items créés", results['items_uploaded'])
-        cols[1].metric("Échecs", results['items_failed'])
-        cols[2].metric("Board ID", results['board_id'])
-        cols[3].metric("Group ID", results['group_id'] or "Défaut")
+        if is_batch:
+            # Batch mode metrics
+            cols = st.columns(4)
+            cols[0].metric("Items créés", results['items_uploaded'])
+            cols[1].metric("Échecs", results['items_failed'])
+            cols[2].metric("Groupes", f"{results['groups_processed']}/{results['total_groups']}")
+            cols[3].metric("Board ID", results['board_id'])
 
-        st.divider()
+            st.divider()
 
-        if results['items_failed'] == 0:
-            st.info(f"""
-            🎉 **Upload réussi!**
+            # Show results by group
+            if results.get('results_by_group'):
+                with st.expander("📁 Détail par groupe", expanded=True):
+                    for group_name, group_data in results['results_by_group'].items():
+                        if group_data['failed'] == 0:
+                            st.success(f"✅ **{group_name}**: {group_data['success']} items")
+                        else:
+                            st.warning(f"⚠️ **{group_name}**: {group_data['success']} créés, {group_data['failed']} échecs")
 
-            **{results['items_uploaded']}** items créés dans le board **{config.board_name}**
-            """)
+            if results['items_failed'] == 0:
+                st.info(f"""
+                🎉 **Upload batch réussi!**
+
+                **{results['items_uploaded']}** items créés dans **{results['groups_processed']}** groupe(s)
+                dans le board **{config.board_name}**
+                """)
+            else:
+                st.warning(f"""
+                ⚠️ **Upload batch partiel**
+
+                {results['items_uploaded']} items créés, {results['items_failed']} échecs
+                dans {results['groups_processed']} groupe(s)
+                """)
         else:
-            st.warning(f"""
-            ⚠️ **Upload partiel**
+            # Single file mode metrics
+            cols = st.columns(4)
+            cols[0].metric("Items créés", results['items_uploaded'])
+            cols[1].metric("Échecs", results['items_failed'])
+            cols[2].metric("Board ID", results['board_id'])
+            cols[3].metric("Group ID", results['group_id'] or "Défaut")
 
-            {results['items_uploaded']} items créés, {results['items_failed']} échecs
-            """)
+            st.divider()
+
+            if results['items_failed'] == 0:
+                st.info(f"""
+                🎉 **Upload réussi!**
+
+                **{results['items_uploaded']}** items créés dans le board **{config.board_name}**
+                """)
+            else:
+                st.warning(f"""
+                ⚠️ **Upload partiel**
+
+                {results['items_uploaded']} items créés, {results['items_failed']} échecs
+                """)
 
         col1, col2 = st.columns(2)
 

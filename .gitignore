@@ -218,3 +218,6 @@ results/
 temp/
 .idea/
 .vscode/
+# Credentials
+service_account.json
+scripts/service_account.json
