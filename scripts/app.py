@@ -1252,10 +1252,14 @@ def render_pdf_extraction_tab():
         detected = detect_board_type_from_name(board_name)
         st.caption(f"🔍 Type détecté automatiquement: **{detected}**")
 
+    # Initialiser la valeur dans session_state si pas encore définie
+    # (évite le warning de conflit entre index et session_state)
+    if 'pdf_target_type' not in st.session_state:
+        st.session_state.pdf_target_type = type_options[current_index]
+
     target_type = st.selectbox(
         "Type de table",
         options=type_options,
-        index=current_index,
         key="pdf_target_type",
         on_change=on_target_type_change
     )
@@ -1264,9 +1268,12 @@ def render_pdf_extraction_tab():
     st.session_state._detected_board_type = target_type
 
     # Agrégation
+    # Initialiser la valeur si pas encore définie
+    if 'pdf_aggregate' not in st.session_state:
+        st.session_state.pdf_aggregate = False
+
     aggregate = st.checkbox(
         "Agréger par contrat",
-        value=st.session_state.get('pdf_aggregate', False),
         help="Combine les lignes avec le même numéro de contrat",
         key="pdf_aggregate"
     )
