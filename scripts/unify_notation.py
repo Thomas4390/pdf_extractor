@@ -559,18 +559,48 @@ class CommissionDataUnifier:
             if isinstance(value, pd.Timestamp):
                 return value
 
+            # If already a datetime, convert to Timestamp
+            from datetime import datetime
+            if isinstance(value, datetime):
+                return pd.Timestamp(value)
+
             # Convert to string
             date_str = str(value).strip()
 
-            # Try different formats
-            if format_hint == 'slash' or '/' in date_str:
-                # Format: YYYY/MM/DD
-                return pd.to_datetime(date_str, format='%Y/%m/%d')
-            else:
-                # Format: YYYY-MM-DD or let pandas infer
-                return pd.to_datetime(date_str)
+            # Try multiple formats in order of priority
+            formats_to_try = []
 
-        except (ValueError, AttributeError):
+            if format_hint == 'slash' or '/' in date_str:
+                # Prioritize slash formats
+                formats_to_try = [
+                    '%Y/%m/%d',  # 2025/10/20
+                    '%d/%m/%Y',  # 20/10/2025
+                    '%m/%d/%Y',  # 10/20/2025
+                ]
+            else:
+                # Prioritize dash formats
+                formats_to_try = [
+                    '%Y-%m-%d',  # 2025-10-20
+                    '%d-%m-%Y',  # 20-10-2025
+                    '%m-%d-%Y',  # 10-20-2025
+                ]
+
+            # Try each format
+            for fmt in formats_to_try:
+                try:
+                    return pd.to_datetime(date_str, format=fmt)
+                except (ValueError, AttributeError):
+                    continue
+
+            # Last resort: let pandas infer the format
+            try:
+                return pd.to_datetime(date_str, dayfirst=True)
+            except:
+                pass
+
+            return None
+
+        except (ValueError, AttributeError, Exception):
             return None
 
     def _format_date_uniform(self, date_value) -> Optional[str]:
