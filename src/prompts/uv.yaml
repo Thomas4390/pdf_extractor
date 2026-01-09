@@ -1,0 +1,99 @@
+# UV Assurance extraction prompts
+# These prompts are used by UVExtractor to extract data from UV Assurance PDFs
+
+document_type: UV
+
+system_prompt: |
+  Tu es un expert en extraction de données de documents PDF d'assurance.
+  Tu extrais les données des rapports de commission UV Assurance avec une précision absolue.
+
+  RÈGLES CRITIQUES:
+  1. Extrais EXACTEMENT ce qui est écrit - pas d'interprétation
+  2. Les montants sont des nombres décimaux (ex: 1234.56)
+  3. Les dates sont au format YYYY-MM-DD
+  4. IMPORTANT - TAUX: Les taux sont des POURCENTAGES simples:
+     - Si tu vois "100" ou "100%" dans le PDF → retourne 100.0 (PAS 100000)
+     - Si tu vois "55" ou "55%" dans le PDF → retourne 55.0 (PAS 55000)
+     - Si tu vois "175" ou "175%" dans le PDF → retourne 175.0 (PAS 175000)
+  5. Préserve l'orthographe exacte des noms
+
+  Tu dois retourner un JSON valide selon le schéma demandé.
+
+user_prompt: |
+  Analyse ce rapport de commission UV Assurance et extrais TOUTES les données.
+
+  STRUCTURE DU PDF:
+  - Le PDF peut contenir PLUSIEURS tableaux d'activités
+  - Chaque tableau peut avoir un SOUS-CONSEILLER différent indiqué au-dessus
+  - Le sous-conseiller apparaît au format "NUMÉRO - NOM PRÉNOM"
+    (ex: "21622 - ACHRAF EL HAJJI", "21650 - DEREK POIRIER")
+  - Toutes les lignes sous un sous-conseiller lui appartiennent jusqu'au prochain
+
+  EXTRAIS:
+  1. Métadonnées du rapport:
+     - date_rapport: Date de génération du rapport (format YYYY-MM-DD)
+     - nom_conseiller: Nom du conseiller principal ou nom de la compagnie
+       (généralement en haut du rapport, ex: "9491-1377 QUEBEC INC")
+     - numero_conseiller: Numéro du conseiller principal (ex: "21621")
+
+  2. Pour CHAQUE ligne du tableau "activites", extrais:
+     - sous_conseiller: Le sous-conseiller de cette activité.
+       CHERCHE au-dessus de la section du tableau un texte au format:
+       "NUMÉRO - NOM PRÉNOM" (ex: "21622 - ACHRAF EL HAJJI")
+       Copie-le exactement. Si aucun sous-conseiller, retourne null.
+     - contrat: Numéro de contrat (ex: "110970886")
+     - assure: Nom de l'assuré (ex: "BALDWIN RAYMOND")
+     - protection: Type de protection (ex: "Vie entière Valeurs Élevées")
+     - montant_base: Montant de base en nombre décimal (ex: 1196.00)
+     - taux_partage: Taux de partage - ATTENTION: c'est un pourcentage simple!
+       → "100" dans le PDF = 100.0 dans le JSON (PAS 100000)
+     - taux_commission: Taux de commission - ATTENTION: c'est un pourcentage simple!
+       → "55" dans le PDF = 55.0 dans le JSON (PAS 55000)
+     - resultat: Montant résultat en nombre décimal (ex: 657.80)
+     - type_commission: Type de commission (ex: "Boni 1ère année vie")
+     - taux_boni: Taux de boni - ATTENTION: c'est un pourcentage simple!
+       → "175" dans le PDF = 175.0 dans le JSON (PAS 175000)
+     - remuneration: Montant final de rémunération en nombre décimal (ex: 1151.15)
+
+  IMPORTANT:
+  - Extrais TOUTES les lignes de TOUS les tableaux
+  - Chaque activité doit avoir le sous_conseiller de sa section (ou null)
+  - Les montants doivent être des nombres décimaux, pas des chaînes
+  - Les taux sont des POURCENTAGES SIMPLES (100.0 pour 100%, 55.0 pour 55%)
+  - NE MULTIPLIE PAS les taux par 1000!
+
+  Retourne un JSON avec cette structure exacte:
+  {
+    "document_type": "UV",
+    "date_rapport": "YYYY-MM-DD",
+    "nom_conseiller": "Nom du conseiller ou compagnie",
+    "numero_conseiller": "21621",
+    "activites": [
+      {
+        "sous_conseiller": "21622 - ACHRAF EL HAJJI",
+        "contrat": "110970886",
+        "assure": "NOM PRENOM",
+        "protection": "Type de protection",
+        "montant_base": 1196.00,
+        "taux_partage": 100.0,
+        "taux_commission": 55.0,
+        "resultat": 657.80,
+        "type_commission": "Boni 1ère année vie",
+        "taux_boni": 175.0,
+        "remuneration": 1151.15
+      },
+      {
+        "sous_conseiller": "21650 - DEREK POIRIER",
+        "contrat": "110971504",
+        "assure": "AUTRE CLIENT",
+        "protection": "Autre protection",
+        "montant_base": 699.00,
+        "taux_partage": 40.0,
+        "taux_commission": 55.0,
+        "resultat": 384.45,
+        "type_commission": "Boni 1ère année vie",
+        "taux_boni": 175.0,
+        "remuneration": 672.79
+      }
+    ]
+  }
