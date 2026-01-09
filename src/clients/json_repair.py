@@ -251,6 +251,99 @@ def safe_json_parse(content: str, repair: bool = True) -> dict:
             return json.loads(repaired)
 
 
+def recover_partial_json(content: str) -> tuple[Optional[dict], int, Optional[str]]:
+    """
+    Attempt to recover valid partial JSON from truncated content.
+
+    When VLM output gets cut off mid-JSON, this function tries to
+    extract as much valid data as possible.
+
+    Args:
+        content: Raw JSON string (possibly truncated)
+
+    Returns:
+        Tuple of (recovered_dict, item_count, error_message)
+        - recovered_dict: The recovered JSON dict, or None if recovery failed
+        - item_count: Number of items in main list (trailing_fees, propositions, etc.)
+        - error_message: Description of what was truncated, or None if complete
+    """
+    # First clean up the content
+    cleaned = extract_json_from_response(content)
+
+    # Try direct parse - maybe it's actually valid
+    try:
+        result = json.loads(cleaned)
+        item_count = _count_main_items(result)
+        return result, item_count, None
+    except json.JSONDecodeError:
+        pass
+
+    # Try repair first
+    repaired = repair_json(cleaned)
+    try:
+        result = json.loads(repaired)
+        item_count = _count_main_items(result)
+        return result, item_count, "JSON repaired successfully"
+    except json.JSONDecodeError:
+        pass
+
+    # Progressive truncation - find longest valid JSON
+    best_result = None
+    best_length = 0
+    best_item_count = 0
+
+    # Try truncating from the end, step by step
+    for end_pos in range(len(repaired), 100, -50):
+        try:
+            truncated = repaired[:end_pos]
+
+            # Remove incomplete trailing content
+            # Find last complete item in array by looking for },
+            last_complete = truncated.rfind('},')
+            if last_complete > 0:
+                truncated = truncated[:last_complete + 1]
+
+            # Count and close brackets/braces
+            open_braces = truncated.count('{') - truncated.count('}')
+            open_brackets = truncated.count('[') - truncated.count(']')
+
+            # Remove trailing comma if present
+            truncated = re.sub(r',\s*$', '', truncated.rstrip())
+
+            # Close all open structures
+            truncated += ']' * open_brackets + '}' * open_braces
+
+            result = json.loads(truncated)
+            item_count = _count_main_items(result)
+
+            if len(truncated) > best_length:
+                best_result = result
+                best_length = len(truncated)
+                best_item_count = item_count
+
+                # If we have a substantial result, we can stop
+                if item_count >= 5:
+                    break
+
+        except (json.JSONDecodeError, Exception):
+            continue
+
+    if best_result is not None:
+        error_msg = f"Recovered {best_item_count} items from truncated JSON"
+        logger.warning(error_msg)
+        return best_result, best_item_count, error_msg
+
+    return None, 0, "Failed to recover any valid JSON"
+
+
+def _count_main_items(data: dict) -> int:
+    """Count items in main data list (trailing_fees, propositions, activities, etc.)."""
+    for key in ['trailing_fees', 'propositions', 'activities', 'commissions', 'records']:
+        if key in data and isinstance(data[key], list):
+            return len(data[key])
+    return 0
+
+
 def save_debug_json(
     content: str,
     error_type: str,

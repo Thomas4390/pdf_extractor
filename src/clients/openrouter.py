@@ -20,6 +20,7 @@ from .json_repair import (
     repair_json,
     extract_json_from_response,
     save_debug_json,
+    recover_partial_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -261,8 +262,7 @@ class OpenRouterClient:
             Parsed JSON response from the model
 
         Raises:
-            OpenRouterError: If all retries fail
-            json.JSONDecodeError: If response is not valid JSON
+            OpenRouterError: If all retries fail and no partial recovery possible
         """
         max_retries = max_retries or settings.vlm_max_retries
         temperature = temperature if temperature is not None else settings.vlm_temperature
@@ -271,6 +271,11 @@ class OpenRouterClient:
         messages = self._build_messages(system_prompt, user_prompt, images)
         last_error: Optional[Exception] = None
         last_content: Optional[str] = None
+
+        # Track best partial result across all attempts
+        best_partial: Optional[dict] = None
+        best_partial_count = 0
+        best_partial_msg: Optional[str] = None
 
         # Try primary model with retries
         for attempt in range(max_retries):
@@ -324,6 +329,15 @@ class OpenRouterClient:
                 print(f"💾 Saved to: {debug_path}")
                 print("=" * 70 + "\n")
 
+                # Try to recover partial JSON
+                if last_content:
+                    recovered, count, msg = recover_partial_json(last_content)
+                    if recovered and count > best_partial_count:
+                        best_partial = recovered
+                        best_partial_count = count
+                        best_partial_msg = msg
+                        print(f"🔧 Partial recovery: {count} items saved")
+
                 temperature = min(temperature + 0.1, 1.0)
                 await asyncio.sleep(2**attempt)
 
@@ -358,6 +372,14 @@ class OpenRouterClient:
                 )
                 print(f"💾 Saved to: {debug_path}")
 
+                # Try to recover partial JSON from fallback
+                recovered, count, msg = recover_partial_json(content)
+                if recovered and count > best_partial_count:
+                    best_partial = recovered
+                    best_partial_count = count
+                    best_partial_msg = msg
+                    print(f"🔧 Partial recovery from fallback: {count} items saved")
+
             last_error = error
 
         # Try secondary fallback model (e.g., text model)
@@ -381,7 +403,32 @@ class OpenRouterClient:
 
             logger.warning(f"Secondary fallback also failed: {error}")
             print(f"❌ Secondary fallback failed: {error}")
+
+            # Try to recover partial JSON from secondary
+            if isinstance(error, json.JSONDecodeError) and content:
+                recovered, count, msg = recover_partial_json(content)
+                if recovered and count > best_partial_count:
+                    best_partial = recovered
+                    best_partial_count = count
+                    best_partial_msg = msg
+                    print(f"🔧 Partial recovery from secondary: {count} items saved")
+
             last_error = error
+
+        # If we have a partial result, return it with a warning
+        if best_partial is not None and best_partial_count > 0:
+            print("\n" + "=" * 70)
+            print(f"⚠️  RETURNING PARTIAL RESULT: {best_partial_count} items recovered")
+            print(f"   Reason: {best_partial_msg}")
+            print("=" * 70 + "\n")
+            logger.warning(f"Returning partial result with {best_partial_count} items: {best_partial_msg}")
+
+            # Add metadata about partial extraction
+            best_partial["_partial_extraction"] = True
+            best_partial["_partial_item_count"] = best_partial_count
+            best_partial["_partial_reason"] = best_partial_msg
+
+            return best_partial
 
         raise OpenRouterError(
             f"Failed after {max_retries} attempts + fallbacks. Last error: {last_error}"

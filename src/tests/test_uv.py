@@ -77,7 +77,7 @@ async def test_extraction(pdf_path: str | None = None):
     start = time.time()
 
     try:
-        report = await extractor.extract(pdf_path)
+        report = await extractor.extract(pdf_path, force_refresh=True)
         elapsed = time.time() - start
 
         print(f"\n{'='*60}")

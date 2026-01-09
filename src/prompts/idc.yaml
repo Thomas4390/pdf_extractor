@@ -31,6 +31,17 @@ system_prompt: |
   - Not Taken
   - ...
 
+  MAPPING DES NOMS DE COMPAGNIES - TRÈS IMPORTANT:
+  Utilise TOUJOURS ces abréviations standardisées pour les assureurs:
+  - "Industrial Alliance" ou "Industrial Alliance Toronto" ou "IA Toronto" → "IA"
+  - "RBC INSURANCE" ou "RBC Insurance" ou "RBC Life" → "RBC"
+  - "Assomption Vie" ou "Assomption" → "Assomption"
+  - "Beneva" → "Beneva"
+  - "UV Assurance" ou "UV" → "UV"
+  - "Manuvie" ou "ManuVie" ou "Manulife" → "ManuVie"
+  - "Humania" → "Humania"
+  - Pour les autres compagnies, utilise le nom court le plus reconnaissable.
+
   Tu dois retourner un JSON valide selon le schéma demandé.
 
 user_prompt: |
@@ -42,10 +53,13 @@ user_prompt: |
      - vendeur: Nom du vendeur/courtier (format "Nom, Prénom") situé à la première ligne sous les colonnes à la première page
 
   2. Pour CHAQUE ligne de proposition dans le tableau, extrais:
-     - assureur: Nom de la compagnie d'assurance
+     - assureur: Nom de la compagnie d'assurance (UTILISE LES ABRÉVIATIONS STANDARDISÉES: IA, RBC, Assomption, Beneva, UV, ManuVie, Humania)
      - client: Nom du client (format "NOM, Initiale")
      - type_regime: Type de régime (Permanent, Term, Disability, Critical Illness, ...)
-     - police: Numéro de police
+     - police: Numéro de police (7 à 10 chiffres)
+       ATTENTION: Certains numéros de police ont 10 chiffres et le 10ème chiffre
+       peut se retrouver sur la ligne suivante dans le PDF. Reconstitue le numéro complet.
+       Exemples: "006942474", "0169280071" (10 chiffres), "N895549" (avec préfixe lettre)
      - statut: Statut de la proposition
      - date: Date (YYYY-MM-DD)
      - nombre: Quantité (nombre)

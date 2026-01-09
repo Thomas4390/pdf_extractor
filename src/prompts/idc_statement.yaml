@@ -131,7 +131,7 @@ system_prompt_direct: |
   - policy_date: Date au format YYYY-MM-DD
     → Peut apparaître après company_number OU après advisor_name (ex: Bourassa_2025-12-01-EZ)
     → Si date après advisor avec "-EZ", c'est la date de police
-  - commission_rate: Pourcentage converti en décimal (75% → 0.75, 115% → 1.15)
+  - commission_rate: Pourcentage (75% → 75.0, 115% → 115.0)
     → Chercher "boni X%" ou "_X%" ou "recu p X%" ou "recup X%"
     → "recu p" ou "recup" signifie récupération, le % suit
   - policy_number: Numéro de police (6-10 chiffres)
@@ -196,9 +196,9 @@ user_prompt_direct: |
      - company_number: Numéro de compagnie (4-6 chiffres après company_code)
      - policy_date: Date de police (YYYY-MM-DD)
        → Peut être après company_number OU à la fin avec advisor (ex: _2025-12-01-EZ)
-     - commission_rate: Taux converti en décimal
+     - commission_rate: Taux en pourcentage
        → Chercher "boni X%", "_X%", "recu p X%", ou "recup X%"
-       → 75% → 0.75, 115% → 1.15
+       → 75% → 75.0, 115% → 115.0
      - policy_number: Numéro de police (6-10 chiffres)
        → Après # OU avant -NomClient (ex: #1014289 ou 1014289-Shabani)
 
@@ -239,14 +239,14 @@ user_prompt_direct: |
   EXEMPLE 1 - Format avec "clt" explicite:
   Raw: "Â UV 7782 2025-11-17\nboni 75% #111011722 crt\nBourassa A clt Jeanny\nBreault-Therrien"
   → company_code: "UV", company_number: "7782", policy_date: "2025-11-17"
-  → commission_rate: 0.75, policy_number: "111011722"
+  → commission_rate: 75.0, policy_number: "111011722"
   → advisor_name: "Bourassa A" ← COPIE VERBATIM après "crt"!
   → client_first_name: "JEANNY", client_last_name: "BREAULT-THERRIEN" (MAJUSCULES!)
 
   EXEMPLE 2 - Format SANS "clt" (client entre policy et _crt):
   Raw: "Â Assomption_8055_75%\n#1014289-Mifoubdou_crt\nBourassa_2025-12-01-EZ"
   → company_code: "Assomption", company_number: "8055"
-  → commission_rate: 0.75, policy_number: "1014289"
+  → commission_rate: 75.0, policy_number: "1014289"
   → client_last_name: "MIFOUBDOU" (MAJUSCULES! entre "1014289-" et "_crt")
   → advisor_name: "Bourassa" ← COPIE VERBATIM après "_crt"!
   → policy_date: "2025-12-01"
@@ -254,7 +254,7 @@ user_prompt_direct: |
   EXEMPLE 3 - Format avec "recu p" et SANS "clt":
   Raw: "Â Assomption_8055_recu\np 115% 1014494-\nShabani_crt Ayoub_2025-\n12-01-EZ"
   → company_code: "Assomption", company_number: "8055"
-  → commission_rate: 1.15 (après "recu p"), policy_number: "1014494"
+  → commission_rate: 115.0 (après "recu p"), policy_number: "1014494"
   → client_last_name: "SHABANI" (MAJUSCULES! entre "1014494-" et "_crt")
   → advisor_name: "Ayoub" ← COPIE VERBATIM après "_crt"!
   → policy_date: "2025-12-01"
@@ -262,7 +262,7 @@ user_prompt_direct: |
   EXEMPLE 4 - Conseiller avec format "Nom,Initiale" - COPIE VERBATIM:
   Raw: "Â UV_7782_75%\n#1015126-Emissa_crt\nLussier,T_2025-12-01-EZ"
   → company_code: "UV", company_number: "7782"
-  → commission_rate: 0.75, policy_number: "1015126"
+  → commission_rate: 75.0, policy_number: "1015126"
   → client_last_name: "EMISSA" (MAJUSCULES!)
   → advisor_name: "Lussier,T" ← COPIE VERBATIM! PAS "Thomas", PAS "Thomas Lussier"!
   → policy_date: "2025-12-01"
@@ -303,7 +303,7 @@ user_prompt_direct: |
         "company_code": "UV",
         "company_number": "7782",
         "policy_date": "2025-12-01",
-        "commission_rate": 0.75,
+        "commission_rate": 75.0,
         "policy_number": "1015126",
         "advisor_name": "Lussier,T",
         "client_first_name": null,

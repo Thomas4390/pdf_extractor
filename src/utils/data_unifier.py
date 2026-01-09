@@ -18,7 +18,6 @@ from enum import Enum
 from typing import Optional, Union
 import re
 
-import numpy as np
 import pandas as pd
 
 from ..models.uv import UVReport
@@ -280,36 +279,59 @@ class DataUnifier:
         Convertit un rapport UV en DataFrame standardisé.
 
         UV Assurance → Board HISTORICAL_PAYMENTS
+
+        Mapping JSON → DataFrame:
+        - act.resultat → 'Com' (commission extraite du PDF)
+        - act.remuneration → 'Reçu' (total reçu incluant boni)
+        - act.montant_base → 'PA' (prime annualisée)
+
+        FILTRE: Conserve UNIQUEMENT les activités avec taux_partage != 100%
+        (exclut les lignes à 100% de partage)
         """
         if not report.activites:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
+        filtered_count = 0
+
         for act in report.activites:
+            # Filtrer les activités avec taux de partage == 100%
+            # On ne conserve QUE les lignes avec partage != 100%
+            sharing_rate = self._decimal_to_float(act.taux_partage)
+            if sharing_rate is None or sharing_rate == 100.0:
+                filtered_count += 1
+                continue  # Exclure les lignes à 100%
+
             # Déterminer le type d'assureur (Inc vs Perso)
             is_corporate = self._is_corporate_advisor(report.nom_conseiller)
             insurer_name = 'UV Inc' if is_corporate else 'UV Perso'
 
             # Extraire le nom du sous-conseiller si présent
             advisor_name = None
-            if report.sous_conseiller:
+            if act.sous_conseiller:
                 # Format: "21622 - ACHRAF EL HAJJI"
-                parts = report.sous_conseiller.split(' - ', 1)
-                advisor_name = parts[1] if len(parts) > 1 else report.sous_conseiller
+                parts = act.sous_conseiller.split(' - ', 1)
+                advisor_name = parts[1] if len(parts) > 1 else act.sous_conseiller
             else:
                 advisor_name = report.nom_conseiller
 
-            # Convertir les valeurs Decimal
+            # Convertir les valeurs Decimal - utiliser les valeurs EXTRAITES du PDF
             premium = self._decimal_to_float(act.montant_base)
-            sharing_rate = self._decimal_to_float(act.taux_partage) / 100 if act.taux_partage else None
-            commission_rate = self._decimal_to_float(act.taux_commission) / 100 if act.taux_commission else None
+            commission = self._decimal_to_float(act.resultat)  # Commission extraite du PDF
+            remuneration = self._decimal_to_float(act.remuneration)  # Total reçu
             bonus_rate = self._decimal_to_float(act.taux_boni) / 100 if act.taux_boni else None
-            remuneration = self._decimal_to_float(act.remuneration)
+            commission_rate = self._decimal_to_float(act.taux_commission)
 
-            # Calculer les commissions
-            commission = self._calculate_commission(premium, sharing_rate, commission_rate) if sharing_rate and commission_rate else None
+            # Calculer le boni basé sur la commission extraite
             bonus = round(commission * bonus_rate, 2) if commission and bonus_rate else None
-            on_commission = self._calculate_commission(premium, (1 - sharing_rate) if sharing_rate else 0, self.DEFAULT_ON_COMMISSION_RATE * commission_rate if commission_rate else 0)
+
+            # Sur-Com n'est pas directement disponible dans UV, on le met à None
+            on_commission = None
+
+            # Construire le texte avec taux de partage et taux de commission
+            sharing_rate_str = f"{int(sharing_rate)}%" if sharing_rate else "?"
+            commission_rate_str = f"{int(commission_rate)}%" if commission_rate else "?"
+            texte = f"{act.type_commission} (Partage: {sharing_rate_str}, Com: {commission_rate_str})"
 
             row = {
                 '# de Police': str(act.contrat),
@@ -319,53 +341,67 @@ class DataUnifier:
                 'Conseiller': advisor_name,
                 'Verifié': None,
                 'PA': premium,
-                'Com': commission,
+                'Com': commission,  # Utilise la commission extraite du JSON (act.resultat)
                 'Boni': bonus,
                 'Sur-Com': on_commission,
-                'Reçu': remuneration,  # Rémunération UV = montant reçu
+                'Reçu': remuneration,  # Utilise la rémunération extraite du JSON
                 'Date': self._format_date(report.date_rapport),
-                'Texte': act.type_commission,
+                'Texte': texte,
             }
             rows.append(row)
 
-        return pd.DataFrame(rows)
+        if filtered_count > 0:
+            print(f"  ℹ️  UV: {filtered_count} ligne(s) exclue(s) (taux de partage = 100%)")
+
+        df = pd.DataFrame(rows)
+
+        # Appliquer le ffill conditionnel du numéro de police par nom de client
+        df = self._ffill_policy_by_client(df)
+
+        return df
 
     def _convert_idc(self, report: IDCReport) -> pd.DataFrame:
         """
         Convertit un rapport IDC (Propositions) en DataFrame standardisé.
 
         IDC Propositions → Board SALES_PRODUCTION
+
+        Mapping JSON → DataFrame:
+        - prop.commission → 'Com' (commission extraite du PDF)
+        - prop.prime_police → 'PA' (prime annualisée)
+        - prop.taux_cpa → utilisé pour calculer Boni et Sur-Com
         """
         if not report.propositions:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
         rows = []
         for prop in report.propositions:
-            # Nettoyer le nom de l'assureur
-            insurer_name = prop.assureur
-            if 'Assumption Life' in insurer_name or 'ASSUMPTI ON' in insurer_name:
-                insurer_name = 'Assomption'
+            # Normaliser le nom de l'assureur vers les abréviations standardisées
+            insurer_name = self._normalize_insurer_name(prop.assureur)
 
-            # Convertir les valeurs
+            # Convertir les valeurs extraites du JSON
             premium = self._clean_currency(prop.prime_police)
-            sharing_rate = self._decimal_to_float(prop.nombre)  # Nombre est déjà 0.0-1.0
+            commission = self._clean_currency(prop.commission)  # Commission extraite directement du PDF
+
+            # Taux pour calculs dérivés
             commission_rate = self._clean_percentage(str(prop.taux_cpa) + '%') if prop.taux_cpa else None
-            commission_total = self._clean_currency(prop.commission)
 
-            # Statut: Approved → Approuvé, sinon En attente
-            status = 'Approuvé' if str(prop.statut).strip().lower() == 'approved' else 'En attente'
+            # Statut mapping
+            statut_lower = str(prop.statut).strip().lower()
+            if statut_lower in ['approved', 'inforce', 'issued']:
+                status = 'Approuvé'
+            elif statut_lower in ['not taken', 'declined']:
+                status = 'Refusé'
+            else:
+                status = 'En attente'
 
-            # Calculer les commissions avec formule standard
-            commission = self._calculate_commission(premium, sharing_rate, commission_rate) if sharing_rate and commission_rate else None
+            # Calculer Boni et Sur-Com basés sur la commission extraite
             bonus = round(commission * self.DEFAULT_BONUS_RATE, 2) if commission else None
-            on_commission = self._calculate_commission(
-                premium,
-                (1 - sharing_rate) if sharing_rate else 0,
-                self.DEFAULT_ON_COMMISSION_RATE * commission_rate if commission_rate else 0
-            ) if commission_rate else None
+            # Sur-Com = commission sur la part non-partagée (si applicable)
+            on_commission = None  # IDC ne fournit pas cette info directement
 
-            # Total
-            total = sum(filter(None, [commission, bonus, on_commission])) or None
+            # Total = Com + Boni
+            total = sum(filter(None, [commission, bonus])) or None
 
             row = {
                 'Date': self._format_date(prop.date),
@@ -377,7 +413,7 @@ class DataUnifier:
                 'Complet': None,
                 'PA': premium,
                 'Lead/MC': 'Lead',
-                'Com': commission,
+                'Com': commission,  # Utilise la commission extraite du JSON
                 'Reçu 1': None,
                 'Boni': bonus,
                 'Reçu 2': None,
@@ -455,45 +491,98 @@ class DataUnifier:
         """
         Parse le nom du client depuis raw_client_data.
 
-        Format typique: "... clt Jeanny\nBreault-Therrien"
+        Formats supportés:
+        - "... clt FLORA GOMOUE" (avec clt explicite)
+        - "... #111065553 crt Legrand DB clt FLORA GOMOUE" (format complet)
+        - "... 1014289-Mifoubdou_crt ..." (client entre police et _crt, sans clt)
+        - "Jean Dupont" (nom seul sans métadonnées)
         """
         if not raw_data:
             return None
-        # Chercher après "clt " ou à la fin
+
+        # Format 1: après "clt" explicite - le plus fiable
         match = re.search(r'clt\s+(.+?)(?:\n|$)', raw_data, re.IGNORECASE)
         if match:
-            # Prendre le reste jusqu'à la fin
-            parts = raw_data[match.start():].split('\n')
-            if len(parts) >= 2:
-                return f"{parts[0].replace('clt', '').strip()} {parts[1].strip()}"
-            return match.group(1).strip()
+            # Prendre tout après "clt" jusqu'à la fin de la ligne ou fin de texte
+            client_part = match.group(1).strip()
+            # Si multilignes, prendre les lignes qui suivent aussi
+            parts = raw_data[match.end():].split('\n')
+            if parts and parts[0].strip() and not any(kw in parts[0].lower() for kw in ['crt', 'boni', '%', 'recu']):
+                # La ligne suivante fait partie du nom
+                client_part = f"{client_part} {parts[0].strip()}"
+            return client_part.upper()
+
+        # Format 2: client entre numéro de police et "_crt" (ex: "1014289-Mifoubdou_crt")
+        match = re.search(r'#?\d{6,10}[-_]([A-Za-z]+(?:\s+[A-Za-z]+)*)(?:_crt|crt|\s+crt)', raw_data)
+        if match:
+            return match.group(1).strip().upper()
+
+        # Format 3: nom seul (pas de métadonnées - pas de %, pas de #, pas de crt)
+        if not any(marker in raw_data for marker in ['%', '#', 'crt', 'boni', 'recu', 'Â ']):
+            # C'est probablement juste un nom de client
+            return raw_data.strip().upper()
+
         return None
 
     def _parse_advisor_from_raw(self, raw_data: str) -> Optional[str]:
         """
         Parse le nom du conseiller depuis raw_client_data.
 
-        Format typique: "... Bourassa A clt ..."
+        Le conseiller est TOUJOURS après "crt".
+
+        Formats:
+        - "crt Bourassa A clt ..." → "Bourassa A"
+        - "crt Legrand DB clt ..." → "Legrand DB"
+        - "_crt Lussier,T_2025-12-01-EZ" → "Lussier,T"
+        - "crt\nBourassa_2025-12-01-EZ" → "Bourassa"
         """
         if not raw_data:
             return None
-        # Chercher un nom avant "clt"
-        match = re.search(r'([A-Za-z]+\s+[A-Z])\s+clt', raw_data)
-        if match:
-            return match.group(1).strip()
+
+        # Patterns pour trouver le conseiller après "crt"
+        patterns = [
+            # Format: "crt Nom Prénom clt ..."
+            r'crt\s+([A-Za-z,]+(?:\s+[A-Za-z])?)\s+clt',
+            # Format: "crt Nom Prénom\n" (fin de ligne)
+            r'crt\s+([A-Za-z,]+(?:\s+[A-Za-z])?)\s*\n',
+            # Format: "_crt Nom_date" ou "_crt Nom,I_date"
+            r'_crt\s*([A-Za-z,]+(?:\s*[A-Za-z])?)(?:_\d{4}|$)',
+            # Format: "crt Nom" suivi de date ou fin
+            r'crt\s+([A-Za-z,]+(?:\s+[A-Za-z]{1,2})?)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, raw_data, re.IGNORECASE)
+            if match:
+                advisor = match.group(1).strip()
+                # Nettoyer le suffixe de date si présent
+                advisor = re.sub(r'_\d{4}-\d{2}-\d{2}.*$', '', advisor)
+                if advisor:
+                    return advisor
+
         return None
 
     def _parse_policy_from_raw(self, raw_data: str) -> Optional[str]:
         """
         Parse le numéro de police depuis raw_client_data.
 
-        Format typique: "... #111011722 ..."
+        Formats:
+        - "#111011722 ..." → "111011722"
+        - "1014289-Nom_crt" → "1014289"
         """
         if not raw_data:
             return None
-        match = re.search(r'#(\d+)', raw_data)
+
+        # Format 1: après #
+        match = re.search(r'#(\d{6,10})', raw_data)
         if match:
             return match.group(1)
+
+        # Format 2: numéro suivi de tiret et nom (ex: "1014289-Mifoubdou")
+        match = re.search(r'(\d{6,10})[-_][A-Za-z]', raw_data)
+        if match:
+            return match.group(1)
+
         return None
 
     def _convert_assomption(self, report: AssomptionReport) -> pd.DataFrame:
@@ -501,33 +590,27 @@ class DataUnifier:
         Convertit un rapport Assomption Vie en DataFrame standardisé.
 
         Assomption Vie → Board HISTORICAL_PAYMENTS
+
+        Mapping JSON → DataFrame:
+        - comm.commission → 'Com' (commission extraite du PDF)
+        - comm.boni → 'Boni' (boni extrait du PDF)
+        - comm.prime → 'PA' (prime)
         """
         if not report.commissions:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
         for comm in report.commissions:
-            # Convertir les valeurs Decimal
+            # Convertir les valeurs Decimal - utiliser les valeurs EXTRAITES du PDF
             premium = self._decimal_to_float(comm.prime)
-            commission_rate = self._decimal_to_float(comm.taux_commission) / 100 if comm.taux_commission else None
-            commission_amount = self._decimal_to_float(comm.commission)
-            bonus_rate = self._decimal_to_float(comm.taux_boni) / 100 if comm.taux_boni else None
-            bonus_amount = self._decimal_to_float(comm.boni)
+            commission = self._decimal_to_float(comm.commission)  # Commission extraite du PDF
+            bonus = self._decimal_to_float(comm.boni)  # Boni extrait du PDF
 
-            # Assomption a un taux de partage fixe de 40%
-            sharing_rate = self.DEFAULT_SHARING_RATE
+            # Montant reçu = commission + bonus
+            received = sum(filter(None, [commission, bonus])) or None
 
-            # Calculer les commissions avec la formule standard
-            calculated_commission = self._calculate_commission(premium, sharing_rate, commission_rate) if commission_rate else None
-            calculated_bonus = round(calculated_commission * bonus_rate, 2) if calculated_commission and bonus_rate else None
-            on_commission = self._calculate_commission(
-                premium,
-                (1 - sharing_rate),
-                self.DEFAULT_ON_COMMISSION_RATE * commission_rate if commission_rate else 0
-            ) if commission_rate else None
-
-            # Montant reçu = commission + bonus de Assomption
-            received = sum(filter(None, [commission_amount, bonus_amount])) or None
+            # Sur-Com n'est pas directement disponible dans Assomption
+            on_commission = None
 
             row = {
                 '# de Police': str(comm.numero_police),
@@ -537,10 +620,10 @@ class DataUnifier:
                 'Conseiller': report.nom_courtier,
                 'Verifié': None,
                 'PA': premium,
-                'Com': calculated_commission,
-                'Boni': calculated_bonus,
+                'Com': commission,  # Utilise la commission extraite du JSON
+                'Boni': bonus,  # Utilise le boni extrait du JSON
                 'Sur-Com': on_commission,
-                'Reçu': received,  # Montant total reçu
+                'Reçu': received,  # Montant total reçu (commission + boni)
                 'Date': self._format_date(comm.date_emission),
                 'Texte': f"{comm.code} - {comm.produit} ({comm.frequence_paiement})",
             }
@@ -585,7 +668,9 @@ class DataUnifier:
                 df.loc[mask, 'Total Reçu'] = None
 
             # Paie = Total - Total Reçu
-            if 'Paie' not in df.columns or df['Paie'].isna().all():
+            # Note: On ne calcule Paie que si la colonne n'existe pas déjà.
+            # Si la source a explicitement mis Paie à None (comme IDC), on respecte ce choix.
+            if 'Paie' not in df.columns:
                 total = pd.to_numeric(df.get('Total', pd.Series(dtype=float)), errors='coerce').fillna(0)
                 total_recu = pd.to_numeric(df.get('Total Reçu', pd.Series(dtype=float)), errors='coerce').fillna(0)
                 df['Paie'] = total - total_recu
@@ -633,3 +718,126 @@ class DataUnifier:
         if board_type == BoardType.HISTORICAL_PAYMENTS:
             return self.FINAL_COLUMNS_HISTORICAL.copy()
         return self.FINAL_COLUMNS_SALES.copy()
+
+    def _normalize_insurer_name(self, name: str) -> str:
+        """
+        Normalise le nom de l'assureur vers les abréviations standardisées.
+
+        Mapping:
+        - Industrial Alliance / IA Toronto → IA
+        - RBC INSURANCE / RBC Life → RBC
+        - Assumption Life / Assomption Vie → Assomption
+        - Beneva → Beneva
+        - UV Assurance → UV
+        - Manuvie / Manulife → ManuVie
+        - Humania → Humania
+
+        Args:
+            name: Nom de l'assureur extrait du PDF
+
+        Returns:
+            Nom normalisé
+        """
+        if not name:
+            return name
+
+        name_upper = name.upper().strip()
+
+        # Industrial Alliance → IA
+        if 'INDUSTRIAL ALLIANCE' in name_upper or 'IA TORONTO' in name_upper:
+            return 'IA'
+
+        # RBC Insurance → RBC
+        if 'RBC' in name_upper:
+            return 'RBC'
+
+        # Assomption / Assumption Life → Assomption
+        if 'ASSOMPTION' in name_upper or 'ASSUMPTION' in name_upper or 'ASSUMPTI' in name_upper:
+            return 'Assomption'
+
+        # Beneva
+        if 'BENEVA' in name_upper:
+            return 'Beneva'
+
+        # UV Assurance → UV
+        if 'UV' in name_upper and ('ASSURANCE' in name_upper or len(name_upper) <= 5):
+            return 'UV'
+
+        # Manuvie / Manulife → ManuVie
+        if 'MANUVIE' in name_upper or 'MANULIFE' in name_upper or 'MANU' in name_upper:
+            return 'ManuVie'
+
+        # Humania
+        if 'HUMANIA' in name_upper:
+            return 'Humania'
+
+        # Autres compagnies connues - garder un nom court
+        if 'SUN LIFE' in name_upper or 'SUNLIFE' in name_upper:
+            return 'Sun Life'
+        if 'CANADA LIFE' in name_upper or 'CANADA-LIFE' in name_upper:
+            return 'Canada Life'
+        if 'DESJARDINS' in name_upper:
+            return 'Desjardins'
+        if 'EMPIRE' in name_upper:
+            return 'Empire'
+        if 'EQUITABLE' in name_upper:
+            return 'Equitable'
+
+        # Par défaut, retourner le nom original nettoyé
+        return name.strip()
+
+    def _ffill_policy_by_client(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Forward-fill conditionnel du numéro de police basé sur le nom du client.
+
+        Si une ligne n'a pas de numéro de police (vide, None, "None") mais que
+        le nom du client est identique à une ligne précédente qui a un numéro
+        de police, on remplit avec ce numéro.
+
+        Args:
+            df: DataFrame avec colonnes '# de Police' et 'Nom Client'
+
+        Returns:
+            DataFrame avec les numéros de police remplis
+        """
+        if df.empty or '# de Police' not in df.columns or 'Nom Client' not in df.columns:
+            return df
+
+        df = df.copy()
+
+        # Dictionnaire pour stocker le dernier numéro de police connu par client
+        client_policy_map: dict[str, str] = {}
+        filled_count = 0
+
+        for idx in df.index:
+            client_name = df.at[idx, 'Nom Client']
+            policy = df.at[idx, '# de Police']
+
+            # Normaliser le nom du client pour la comparaison
+            client_key = str(client_name).strip().upper() if pd.notna(client_name) else None
+
+            if not client_key:
+                continue
+
+            # Vérifier si le numéro de police est vide/invalide
+            policy_is_empty = (
+                pd.isna(policy) or
+                policy is None or
+                str(policy).strip() in ('', 'None', 'nan', 'NaN')
+            )
+
+            if policy_is_empty:
+                # Chercher si on a un numéro de police pour ce client
+                if client_key in client_policy_map:
+                    df.at[idx, '# de Police'] = client_policy_map[client_key]
+                    filled_count += 1
+            else:
+                # Enregistrer ce numéro de police pour ce client
+                policy_str = str(policy).strip()
+                if policy_str and policy_str not in ('None', 'nan', 'NaN'):
+                    client_policy_map[client_key] = policy_str
+
+        if filled_count > 0:
+            print(f"  ℹ️  UV: {filled_count} numéro(s) de police rempli(s) par ffill (même client)")
+
+        return df
