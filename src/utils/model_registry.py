@@ -161,6 +161,22 @@ def get_default_text_model() -> str:
     return DEFAULT_TEXT_MODEL
 
 
+# Available models for selection in UI
+AVAILABLE_MODELS: dict[str, str] = {
+    "google/gemini-3-flash-preview": "Gemini 3 Flash (Rapide, Économique)",
+    "google/gemini-3-pro-preview": "Gemini 3 Pro (Précis, Plus cher)",
+    "qwen/qwen3-vl-235b-a22b-instruct": "Qwen 3 VL 235B (Haute qualité)",
+    "qwen/qwen2.5-vl-72b-instruct": "Qwen 2.5 VL 72B (Legacy)",
+    "anthropic/claude-sonnet-4": "Claude Sonnet 4 (Vision avancée)",
+    "openai/gpt-4o": "GPT-4o (OpenAI Vision)",
+}
+
+
+def get_available_models() -> dict[str, str]:
+    """Get dictionary of available models for UI selection."""
+    return AVAILABLE_MODELS.copy()
+
+
 def get_pages_for_extraction(
     document_type: str,
     total_pages: int,

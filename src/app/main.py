@@ -35,6 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.pipeline import Pipeline, SourceType, BatchResult, UsageStats
 from src.utils.data_unifier import BoardType
+from src.utils.model_registry import get_available_models, get_model_config
 
 # Import UI modules
 from src.app.styles import apply_custom_styles
@@ -100,6 +101,8 @@ def init_session_state() -> None:
         "batch_result": None,
         "combined_data": None,
         "extraction_usage": None,  # UsageStats for cost/model tracking
+        "selected_model": None,  # Custom model override for extraction
+        "file_group_overrides": {},  # Per-file group overrides {filename: group_name}
 
         # Processing state
         "is_processing": False,
@@ -157,14 +160,14 @@ def reset_pipeline() -> None:
         'batch_result', 'combined_data', 'extraction_usage', 'is_processing', 'processing_progress',
         'current_file', 'selected_board_id', 'selected_group_id', 'monday_groups',
         'upload_result', 'is_uploading', 'selected_source', 'data_modified',
-        'show_columns', '_current_board_name'
+        'show_columns', '_current_board_name', 'selected_model', 'file_group_overrides'
     ]
     for key in keys_to_reset:
         if key == 'stage':
             st.session_state[key] = 1
         elif key in ['uploaded_files', 'temp_pdf_paths']:
             st.session_state[key] = []
-        elif key == 'extraction_results':
+        elif key in ['extraction_results', 'file_group_overrides']:
             st.session_state[key] = {}
         elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns']:
             st.session_state[key] = False
@@ -1024,6 +1027,30 @@ def run_extraction() -> None:
     st.session_state.extraction_results = {}
     st.session_state.combined_data = None
 
+    # Check if a custom model was selected
+    selected_model = st.session_state.get('selected_model')
+    if selected_model:
+        # Temporarily update the model registry for this extraction
+        from src.utils.model_registry import register_model, ModelConfig, ExtractionMode
+        source = st.session_state.selected_source
+        if source:
+            # Create a new config with the selected model
+            original_config = get_model_config(source)
+            new_config = ModelConfig(
+                model_id=selected_model,
+                mode=original_config.mode,
+                fallback_model_id=original_config.fallback_model_id,
+                fallback_mode=original_config.fallback_mode,
+                secondary_fallback_model_id=original_config.secondary_fallback_model_id,
+                secondary_fallback_mode=original_config.secondary_fallback_mode,
+                temperature=original_config.temperature,
+                max_tokens=original_config.max_tokens,
+                page_config=original_config.page_config,
+                ocr_engine=original_config.ocr_engine,
+                text_analysis_model=original_config.text_analysis_model,
+            )
+            register_model(source, new_config)
+
     pipeline = get_pipeline()
 
     # Progress containers
@@ -1088,6 +1115,8 @@ def run_extraction() -> None:
 
     finally:
         st.session_state.is_processing = False
+        st.session_state.selected_model = None  # Reset custom model after extraction
+        st.session_state.force_refresh = False  # Reset force refresh flag
         progress_bar.empty()
 
 
@@ -1246,8 +1275,138 @@ def render_stage_2() -> None:
 
         st.markdown("---")
 
-        # Multi-month detection
-        if '_target_group' in df.columns:
+        # ===========================================
+        # MODEL SELECTION & RE-EXTRACTION
+        # ===========================================
+        st.markdown("### 🤖 Modèle d'extraction")
+
+        # Show current model info
+        current_model = model_name if model_name else "Modèle par défaut"
+        st.markdown(f"**Modèle actuel:** `{current_model}`")
+        st.markdown(f"**Coût de l'extraction:** {cost_display}")
+
+        st.caption("Sélectionnez un autre modèle pour ré-extraire les données.")
+
+        available_models = get_available_models()
+        model_options = list(available_models.keys())
+        model_labels = [f"{v}" for v in available_models.values()]
+
+        # Create a mapping for display
+        model_display_map = dict(zip(model_labels, model_options))
+
+        col_model, col_btn = st.columns([3, 1])
+        with col_model:
+            selected_label = st.selectbox(
+                "Choisir un modèle",
+                options=model_labels,
+                index=0,
+                key="model_selector",
+                help="Sélectionnez un modèle VLM pour l'extraction"
+            )
+            selected_model_id = model_display_map[selected_label]
+
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔄 Ré-extraire", type="primary", use_container_width=True):
+                st.session_state.selected_model = selected_model_id
+                st.session_state.combined_data = None
+                st.session_state.extraction_results = {}
+                st.session_state.extraction_usage = None
+                st.session_state.force_refresh = True
+                st.rerun()
+
+        st.markdown("---")
+
+        # ===========================================
+        # PER-FILE GROUP ASSIGNMENT
+        # ===========================================
+        st.markdown("### 📁 Groupes de destination par fichier")
+
+        if '_source_file' in df.columns:
+            unique_files = df['_source_file'].unique().tolist()
+
+            if len(unique_files) > 1:
+                st.info(f"**{len(unique_files)} fichiers** - Vous pouvez assigner un groupe différent à chaque fichier.")
+
+            # Generate group options
+            months_fr = get_months_fr()
+            now = datetime.now()
+            group_options_list = []
+            for offset in range(-6, 7):
+                month = now.month + offset
+                year = now.year
+                if month < 1:
+                    month += 12
+                    year -= 1
+                elif month > 12:
+                    month -= 12
+                    year += 1
+                group_options_list.append(f"{months_fr[month]} {year}")
+
+            # Initialize file_group_overrides if not exists
+            if 'file_group_overrides' not in st.session_state:
+                st.session_state.file_group_overrides = {}
+
+            file_groups_changed = False
+            for filename in unique_files:
+                file_df = df[df['_source_file'] == filename]
+                current_group = file_df['_target_group'].iloc[0] if '_target_group' in file_df.columns else "Auto"
+                row_count = len(file_df)
+
+                col_file, col_group, col_manual = st.columns([2, 2, 2])
+
+                with col_file:
+                    # Truncate long filenames
+                    display_name = filename[:25] + "..." if len(filename) > 25 else filename
+                    st.markdown(f"**{display_name}**")
+                    st.caption(f"{row_count} lignes")
+
+                with col_group:
+                    # Get current override or detected group
+                    current_override = st.session_state.file_group_overrides.get(filename, current_group)
+
+                    # Find index of current group in options
+                    try:
+                        default_idx = group_options_list.index(current_override)
+                    except ValueError:
+                        default_idx = 6  # Middle of the list (current month)
+
+                    selected_group = st.selectbox(
+                        "Groupe",
+                        options=group_options_list,
+                        index=default_idx,
+                        key=f"group_select_{filename}",
+                        label_visibility="collapsed"
+                    )
+
+                    if selected_group != current_group:
+                        st.session_state.file_group_overrides[filename] = selected_group
+                        file_groups_changed = True
+
+                with col_manual:
+                    manual_input = st.text_input(
+                        "Groupe manuel",
+                        placeholder="Ex: Janvier 2026",
+                        key=f"manual_group_{filename}",
+                        label_visibility="collapsed"
+                    )
+                    if manual_input and manual_input.strip():
+                        st.session_state.file_group_overrides[filename] = manual_input.strip()
+                        file_groups_changed = True
+
+            # Apply button for group changes
+            if st.session_state.file_group_overrides:
+                st.markdown("---")
+                if st.button("✅ Appliquer les groupes", type="primary", use_container_width=True):
+                    # Update the dataframe with new groups
+                    for filename, new_group in st.session_state.file_group_overrides.items():
+                        df.loc[df['_source_file'] == filename, '_target_group'] = new_group
+                    st.session_state.combined_data = df
+                    st.success("Groupes mis à jour!")
+                    st.rerun()
+
+        elif '_target_group' in df.columns:
+            # Single file mode - show simple group override
             groups_info = analyze_groups_in_data(df)
 
             st.markdown("### Groupes Détectés")
@@ -1259,9 +1418,9 @@ def render_stage_2() -> None:
 
             st.markdown("---")
 
-            # Manual override
-            st.markdown("### Modifier le groupe manuellement")
-            st.caption("Remplacer la détection automatique si nécessaire.")
+            # Manual override with text input option
+            st.markdown("### Modifier le groupe")
+            st.caption("Sélectionnez ou entrez manuellement un groupe.")
 
             months_fr = get_months_fr()
             now = datetime.now()
@@ -1278,15 +1437,25 @@ def render_stage_2() -> None:
                     year += 1
                 group_options.append(f"{months_fr[month]} {year}")
 
-            col1, col2 = st.columns([3, 1])
+            col1, col2, col3 = st.columns([2, 2, 1])
             with col1:
-                manual_group = st.selectbox("Groupe manuel", group_options, key="manual_group_override")
+                manual_group = st.selectbox("Groupe prédéfini", group_options, key="manual_group_override")
             with col2:
-                if manual_group != "(Garder auto-détection)":
+                custom_group = st.text_input(
+                    "Ou entrez un groupe personnalisé",
+                    placeholder="Ex: Janvier 2026",
+                    key="custom_group_input"
+                )
+            with col3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                final_group = custom_group.strip() if custom_group and custom_group.strip() else (
+                    manual_group if manual_group != "(Garder auto-détection)" else None
+                )
+                if final_group:
                     if st.button("Appliquer", use_container_width=True, type="primary"):
-                        df['_target_group'] = manual_group
+                        df['_target_group'] = final_group
                         st.session_state.combined_data = df
-                        st.success(f"Groupe modifié: {manual_group}")
+                        st.success(f"Groupe modifié: {final_group}")
                         st.rerun()
 
         # Column info
