@@ -505,18 +505,16 @@ class OpenRouterClient:
 
             last_error = error
 
-        # Try secondary fallback model (e.g., text model)
+        # Try secondary fallback model (vision model like Gemini 3 Pro)
         if self.secondary_fallback_model and self.secondary_fallback_model != self.model:
             print("\n" + "=" * 70)
             print(f"🔄 FALLBACK FAILED - Trying secondary: {self.secondary_fallback_model}")
             print("=" * 70 + "\n")
             logger.info(f"Attempting secondary fallback: {self.secondary_fallback_model}")
 
-            # For text models, rebuild messages without images
-            text_messages = self._build_messages(system_prompt, user_prompt, images=None)
-
+            # Keep images for vision models (Gemini 3 Pro supports vision)
             result, error, content = await self._try_model_extraction(
-                text_messages, temperature, self.secondary_fallback_model, "secondary"
+                messages, temperature, self.secondary_fallback_model, "secondary", max_tokens=max_tokens
             )
 
             if result is not None:

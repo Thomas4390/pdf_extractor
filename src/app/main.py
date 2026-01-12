@@ -5,7 +5,7 @@ Multi-stage wizard application for extracting commission data from PDFs
 and uploading to Monday.com.
 
 Features:
-- Multi-stage wizard (Configuration → Preview → Upload)
+- Multi-stage wizard (Configuration -> Preview -> Upload)
 - Batch PDF processing with progress tracking
 - Advisor management tab with CRUD operations
 - Verification of Reçu vs calculated Commission
@@ -33,8 +33,19 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.pipeline import Pipeline, SourceType, BatchResult
+from src.pipeline import Pipeline, SourceType, BatchResult, UsageStats
 from src.utils.data_unifier import BoardType
+
+# Import UI modules
+from src.app.styles import apply_custom_styles
+from src.app.components import (
+    render_metrics_dashboard,
+    render_upload_dashboard,
+    render_success_box,
+    verify_recu_vs_com,
+    get_verification_stats,
+    reorder_columns_for_display,
+)
 
 
 # =============================================================================
@@ -50,88 +61,10 @@ st.set_page_config(
 
 
 # =============================================================================
-# CUSTOM CSS
+# CUSTOM CSS - Applied from styles module
 # =============================================================================
 
-st.markdown("""
-<style>
-    /* Modern button styling */
-    .stButton > button {
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }
-    .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    }
-
-    /* Main container */
-    .main .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 1.5rem;
-        max-width: 1200px;
-    }
-
-    /* Metric styling */
-    div[data-testid="stMetricValue"] {
-        font-size: 1.6rem;
-    }
-
-    /* Section headers */
-    .section-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 12px 20px;
-        border-radius: 10px;
-        margin-bottom: 1rem;
-    }
-
-    /* Card styling */
-    [data-testid="stExpander"] {
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-    }
-
-    /* Reduce spacing */
-    .element-container {
-        margin-bottom: 0.5rem;
-    }
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px 8px 0 0;
-        padding: 10px 20px;
-    }
-
-    /* Form styling */
-    [data-testid="stForm"] {
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        padding: 1.5rem;
-        background: #fafafa;
-    }
-
-    /* Success/warning boxes */
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        border: 1px solid #ffeeba;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
+apply_custom_styles()
 
 
 # =============================================================================
@@ -166,6 +99,7 @@ def init_session_state() -> None:
         "extraction_results": {},
         "batch_result": None,
         "combined_data": None,
+        "extraction_usage": None,  # UsageStats for cost/model tracking
 
         # Processing state
         "is_processing": False,
@@ -220,7 +154,7 @@ def reset_pipeline() -> None:
     """Reset pipeline state to start over."""
     keys_to_reset = [
         'stage', 'uploaded_files', 'temp_pdf_paths', 'extraction_results',
-        'batch_result', 'combined_data', 'is_processing', 'processing_progress',
+        'batch_result', 'combined_data', 'extraction_usage', 'is_processing', 'processing_progress',
         'current_file', 'selected_board_id', 'selected_group_id', 'monday_groups',
         'upload_result', 'is_uploading', 'selected_source', 'data_modified',
         'show_columns', '_current_board_name'
@@ -414,107 +348,6 @@ def analyze_groups_in_data(df: pd.DataFrame) -> dict:
     }
 
 
-def reorder_columns_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Réordonne les colonnes pour l'affichage:
-    1. Colonnes normales (sans underscore)
-    2. Colonnes de calcul/vérification
-    3. Colonnes avec underscore (_source_file, _target_group, etc.)
-    """
-    cols = df.columns.tolist()
-
-    # Séparer les colonnes
-    underscore_cols = [c for c in cols if c.startswith('_')]
-    calc_verify_cols = [c for c in cols if 'Vérification' in c or c == 'Com Calculée']
-    normal_cols = [c for c in cols if c not in underscore_cols and c not in calc_verify_cols]
-
-    # Nouvel ordre
-    new_order = normal_cols + calc_verify_cols + underscore_cols
-
-    return df[new_order]
-
-
-# =============================================================================
-# PHASE 3: VERIFICATION FUNCTIONS
-# =============================================================================
-
-def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.DataFrame:
-    """
-    Verify that Reçu is within tolerance range of calculated Com for each row.
-
-    The comparison uses a CALCULATED commission value based on the formula:
-        Com_calculée = ROUND((PA * 0.4) * 0.5, 2)
-
-    Args:
-        df: DataFrame with 'Reçu' and 'PA' columns
-        tolerance_pct: Tolerance percentage (default 10%)
-
-    Returns:
-        DataFrame with added columns:
-        - 'Com Calculée': The calculated commission for comparison
-        - 'Vérification (±X%)': Status flag
-    """
-    result_df = df.copy()
-
-    # Check if required columns exist
-    if 'Reçu' not in result_df.columns or 'PA' not in result_df.columns:
-        return result_df
-
-    # Convert to numeric
-    recu = pd.to_numeric(result_df['Reçu'], errors='coerce')
-    pa = pd.to_numeric(result_df['PA'], errors='coerce')
-
-    # Calculate expected commission: ROUND((PA * 0.4) * 0.5, 2)
-    com_calculee = (pa * 0.4 * 0.5).round(2)
-
-    # Add calculated commission column
-    result_df['Com Calculée'] = com_calculee
-
-    # Calculate tolerance bounds
-    tolerance = tolerance_pct / 100.0
-    lower_bound = com_calculee * (1 - tolerance)
-    upper_bound = com_calculee * (1 + tolerance)
-
-    # Calculate percentage difference
-    pct_diff = ((recu - com_calculee) / com_calculee * 100).round(1)
-
-    # Create verification column
-    verification = []
-    for i in range(len(result_df)):
-        r = recu.iloc[i]
-        c = com_calculee.iloc[i]
-        diff = pct_diff.iloc[i]
-
-        if pd.isna(r) or pd.isna(c) or c == 0:
-            verification.append('-')
-        elif r > upper_bound.iloc[i]:
-            verification.append(f'✅ +{diff}%')  # Bonus
-        elif r < lower_bound.iloc[i]:
-            verification.append(f'⚠️ {diff}%')  # Problem
-        else:
-            verification.append('✓ OK')
-
-    result_df[f'Vérification (±{tolerance_pct:.0f}%)'] = verification
-
-    return result_df
-
-
-def get_verification_stats(df: pd.DataFrame) -> dict:
-    """Get statistics about verification results."""
-    verif_cols = [col for col in df.columns if col.startswith('Vérification')]
-    if not verif_cols:
-        return {'ok': 0, 'bonus': 0, 'ecart': 0, 'na': 0}
-
-    verif = df[verif_cols[0]].astype(str)
-
-    return {
-        'ok': verif.str.contains('OK', na=False).sum(),
-        'bonus': verif.str.contains('✅', na=False).sum(),
-        'ecart': verif.str.contains('⚠️', na=False).sum(),
-        'na': (verif == '-').sum()
-    }
-
-
 # =============================================================================
 # BOARD HELPERS
 # =============================================================================
@@ -592,11 +425,39 @@ def load_boards_async(force_rerun: bool = False) -> None:
 
 
 # =============================================================================
-# PHASE 1: STEPPER COMPONENT
+# PHASE 1: STEPPER COMPONENT (Enhanced with Click Navigation)
 # =============================================================================
 
+def render_breadcrumb() -> None:
+    """Render breadcrumb navigation showing current context."""
+    parts = ["Accueil"]
+
+    if st.session_state.selected_source:
+        parts.append(st.session_state.selected_source)
+
+    if st.session_state.uploaded_files:
+        file_count = len(st.session_state.uploaded_files)
+        parts.append(f"{file_count} fichier{'s' if file_count > 1 else ''}")
+
+    if st.session_state._current_board_name:
+        board_name = st.session_state._current_board_name
+        if len(board_name) > 25:
+            board_name = board_name[:22] + "..."
+        parts.append(f'Board "{board_name}"')
+
+    breadcrumb_html = '<div class="breadcrumb">'
+    for i, part in enumerate(parts):
+        is_active = i == len(parts) - 1
+        breadcrumb_html += f'<span class="breadcrumb-item{"" if not is_active else " active"}">{part}</span>'
+        if i < len(parts) - 1:
+            breadcrumb_html += '<span class="breadcrumb-separator">›</span>'
+    breadcrumb_html += '</div>'
+
+    st.markdown(breadcrumb_html, unsafe_allow_html=True)
+
+
 def render_stepper() -> None:
-    """Render the progress stepper in main content area."""
+    """Render the clickable progress stepper in main content area."""
     stages = [
         ("1", "Configuration", "📁"),
         ("2", "Prévisualisation", "🔍"),
@@ -607,30 +468,32 @@ def render_stepper() -> None:
     for i, (num, name, icon) in enumerate(stages):
         stage_num = i + 1
         with cols[i]:
-            if stage_num == st.session_state.stage:
-                st.markdown(f"""
-                <div style="text-align: center; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                border-radius: 10px; color: white;">
-                    <div style="font-size: 1.5rem;">{icon}</div>
-                    <div style="font-weight: 600;">{name}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            elif stage_num < st.session_state.stage:
-                st.markdown(f"""
-                <div style="text-align: center; padding: 10px; background: #d4edda;
-                border-radius: 10px; color: #155724;">
-                    <div style="font-size: 1.5rem;">✅</div>
-                    <div style="font-weight: 500;">{name}</div>
-                </div>
-                """, unsafe_allow_html=True)
+            is_current = stage_num == st.session_state.stage
+            is_completed = stage_num < st.session_state.stage
+            is_future = stage_num > st.session_state.stage
+
+            # Determine CSS class
+            if is_current:
+                css_class = "current"
+            elif is_completed:
+                css_class = "completed"
             else:
-                st.markdown(f"""
-                <div style="text-align: center; padding: 10px; background: #f8f9fa;
-                border-radius: 10px; color: #6c757d;">
-                    <div style="font-size: 1.5rem;">{icon}</div>
-                    <div>{name}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                css_class = "future"
+
+            # Render step visual
+            display_icon = "✅" if is_completed else icon
+            st.markdown(f"""
+            <div class="stepper-step {css_class}">
+                <div class="step-icon">{display_icon}</div>
+                <div class="step-label">{name}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Add clickable button for completed stages
+            if is_completed:
+                if st.button(f"← Retour", key=f"stepper_nav_{stage_num}", use_container_width=True):
+                    st.session_state.stage = stage_num
+                    st.rerun()
 
 
 # =============================================================================
@@ -638,87 +501,191 @@ def render_stepper() -> None:
 # =============================================================================
 
 def render_sidebar() -> None:
-    """Render simplified sidebar."""
+    """Render enhanced sidebar with better design and comprehensive help."""
     with st.sidebar:
-        st.markdown("## 🔑 Configuration")
+        # Header with app branding
+        st.markdown("""
+        <div class="sidebar-header">
+            <h2>📊 Commission Pipeline</h2>
+            <div class="version">v1.0 • Extraction & Upload</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Connection status section
+        st.markdown('<div class="sidebar-section-title">🔗 Connexions</div>', unsafe_allow_html=True)
 
         api_from_secrets = get_secret('MONDAY_API_KEY') is not None
 
+        # Monday.com API status
         if st.session_state.monday_api_key:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                if api_from_secrets:
-                    st.success("API (secrets)", icon="🔐")
-                else:
-                    st.success("API connectée", icon="✅")
-            with col2:
-                if not api_from_secrets:
-                    if st.button("✏️", help="Modifier la clé API"):
-                        st.session_state.monday_api_key = None
-                        st.session_state.monday_boards = None
-                        st.rerun()
+            status_text = "API Secrets" if api_from_secrets else "API Connectée"
+            st.markdown(f"""
+            <div class="status-indicator connected">
+                <span>✓</span> <span>Monday.com: {status_text}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-            if st.session_state.monday_boards:
-                st.caption(f"📋 {len(st.session_state.monday_boards)} boards disponibles")
+            if not api_from_secrets:
+                if st.button("Déconnecter", key="disconnect_api", use_container_width=True):
+                    st.session_state.monday_api_key = None
+                    st.session_state.monday_boards = None
+                    st.rerun()
         else:
+            st.markdown("""
+            <div class="status-indicator disconnected">
+                <span>✗</span> <span>Monday.com: Non connecté</span>
+            </div>
+            """, unsafe_allow_html=True)
+
             api_key = st.text_input(
                 "Clé API Monday.com",
                 type="password",
                 placeholder="Entrez votre clé API...",
                 key="sidebar_api_key",
-                help="Ou configurez MONDAY_API_KEY dans .streamlit/secrets.toml"
+                label_visibility="collapsed"
             )
             if api_key:
-                if st.button("Connecter", type="primary", use_container_width=True):
+                if st.button("🔌 Connecter", type="primary", use_container_width=True):
                     st.session_state.monday_api_key = api_key
                     st.rerun()
 
-        st.divider()
+            st.caption("💡 Ou configurez `MONDAY_API_KEY` dans secrets.toml")
+
+        # Board status with stats
+        if st.session_state.monday_api_key:
+            st.markdown("---")
+            if st.session_state.boards_loading:
+                st.markdown("""
+                <div class="status-indicator loading">
+                    <span>⏳</span> <span>Chargement des boards...</span>
+                </div>
+                """, unsafe_allow_html=True)
+            elif st.session_state.get('boards_error'):
+                st.error(f"Erreur: {st.session_state.boards_error}")
+                if st.button("🔄 Réessayer", use_container_width=True, type="primary"):
+                    st.session_state.boards_error = None
+                    st.session_state.monday_boards = None
+                    load_boards_async(force_rerun=True)
+            elif st.session_state.monday_boards:
+                board_count = len(st.session_state.monday_boards)
+                st.markdown(f"""
+                <div class="sidebar-info-card">
+                    <div class="label">Boards disponibles</div>
+                    <div class="value">📋 {board_count} boards</div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button("🔄 Rafraîchir", use_container_width=True):
+                    st.session_state.monday_boards = None
+                    load_boards_async(force_rerun=True)
+            else:
+                if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
+                    load_boards_async(force_rerun=True)
+
+        st.markdown("---")
+
+        # Session info
+        st.markdown('<div class="sidebar-section-title">📈 Session actuelle</div>', unsafe_allow_html=True)
+
+        # Show current stage
+        stage_names = {1: "Configuration", 2: "Prévisualisation", 3: "Upload"}
+        current_stage_name = stage_names.get(st.session_state.stage, "Inconnu")
+
+        files_count = len(st.session_state.uploaded_files) if st.session_state.uploaded_files else 0
+        rows_count = len(st.session_state.combined_df) if st.session_state.combined_df is not None else 0
+
+        st.markdown(f"""
+        <div class="sidebar-stats">
+            <div class="sidebar-stat">
+                <div class="number">{st.session_state.stage}/3</div>
+                <div class="label">Étape</div>
+            </div>
+            <div class="sidebar-stat">
+                <div class="number">{files_count}</div>
+                <div class="label">Fichiers</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if rows_count > 0:
+            st.markdown(f"""
+            <div class="sidebar-info-card" style="margin-top: 0.5rem;">
+                <div class="label">Lignes extraites</div>
+                <div class="value">{rows_count} lignes</div>
+            </div>
+            """, unsafe_allow_html=True)
 
         # Quick actions
-        st.markdown("### ⚡ Actions rapides")
-
         if st.session_state.stage > 1:
-            if st.button("⬅️ Retour au début", use_container_width=True):
+            if st.button("⬅️ Recommencer", use_container_width=True):
                 reset_pipeline()
                 st.rerun()
 
-        # Board loading status
-        if st.session_state.boards_loading:
-            st.info("⏳ Chargement des boards...")
-        elif st.session_state.get('boards_error'):
-            st.error(f"❌ {st.session_state.boards_error}")
-            if st.button("🔄 Réessayer", use_container_width=True, type="primary"):
-                st.session_state.boards_error = None
-                st.session_state.monday_boards = None
-                load_boards_async(force_rerun=True)
-        elif st.session_state.monday_boards:
-            st.success(f"✅ {len(st.session_state.monday_boards)} boards chargés")
-            if st.button("🔄 Rafraîchir boards", use_container_width=True):
-                st.session_state.monday_boards = None
-                load_boards_async(force_rerun=True)
-        elif st.session_state.monday_api_key:
-            if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
-                load_boards_async(force_rerun=True)
+        st.markdown("---")
 
-        st.divider()
-
-        # Help section
-        with st.expander("ℹ️ Aide", expanded=False):
+        # Comprehensive help section
+        with st.expander("📖 Guide d'utilisation", expanded=False):
             st.markdown("""
-            **Sources supportées:**
-            - UV Assurance
-            - IDC / IDC Statement
-            - Assomption Vie
+            <div class="help-section">
 
-            **Stages:**
-            1. Configuration & Upload PDF
-            2. Prévisualisation & Édition
-            3. Export vers Monday.com
+            <h4>📄 Sources PDF supportées</h4>
+            <ul>
+                <li><strong>UV Assurance</strong> - Relevés de commissions UV</li>
+                <li><strong>IDC</strong> - Relevés Industrial Alliance</li>
+                <li><strong>IDC Statement</strong> - Statements détaillés IDC</li>
+                <li><strong>Assomption Vie</strong> - Relevés Assomption</li>
+            </ul>
 
-            **Besoin d'aide?**
-            Contactez le support technique.
-            """)
+            <h4>🔄 Workflow en 3 étapes</h4>
+            <ul>
+                <li><strong>Étape 1:</strong> Sélectionner la source et uploader les PDFs</li>
+                <li><strong>Étape 2:</strong> Vérifier et modifier les données extraites</li>
+                <li><strong>Étape 3:</strong> Exporter vers Monday.com</li>
+            </ul>
+
+            <h4>✨ Fonctionnalités</h4>
+            <ul>
+                <li>Extraction automatique via IA (VLM)</li>
+                <li>Vérification des commissions calculées</li>
+                <li>Normalisation des noms de conseillers</li>
+                <li>Support multi-fichiers et multi-mois</li>
+                <li>Cache intelligent pour éviter les re-extractions</li>
+            </ul>
+
+            <div class="help-tip">
+                <strong>💡 Astuce:</strong> Les fichiers déjà extraits sont mis en cache.
+                Réuploadez le même PDF pour utiliser le cache et économiser du temps.
+            </div>
+
+            <h4>⚙️ Configuration requise</h4>
+            <ul>
+                <li><code>MONDAY_API_KEY</code> - Clé API Monday.com</li>
+                <li><code>OPENROUTER_API_KEY</code> - Pour l'extraction IA</li>
+                <li><code>GOOGLE_SHEETS_*</code> - Pour la base conseillers</li>
+            </ul>
+
+            <h4>🔍 Vérification des données</h4>
+            <p>Le système vérifie automatiquement que:</p>
+            <ul>
+                <li><strong>✓ OK</strong> - Commission dans la tolérance (±10%)</li>
+                <li><strong>✅ Bonus</strong> - Commission supérieure au calcul</li>
+                <li><strong>⚠️ Écart</strong> - Commission inférieure au calcul</li>
+            </ul>
+
+            <h4>❓ Support</h4>
+            <p>En cas de problème, vérifiez:</p>
+            <ul>
+                <li>La qualité du PDF (scan lisible)</li>
+                <li>La connexion API Monday.com</li>
+                <li>Les logs dans la console</li>
+            </ul>
+
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Footer
+        st.markdown("---")
+        st.caption("🛠️ Commission Pipeline v1.0")
+        st.caption("Powered by OpenRouter & Monday.com")
 
 
 # =============================================================================
@@ -728,16 +695,6 @@ def render_sidebar() -> None:
 def render_advisor_management_tab() -> None:
     """Render advisor management interface."""
     st.markdown("### 👥 Gestion des Conseillers")
-
-    st.info("""
-    **Gestion des noms de conseillers**
-
-    Cette section permet de gérer les conseillers et leurs variations de noms.
-    Le système utilise ces données pour normaliser automatiquement les noms
-    lors de l'extraction des données PDF.
-
-    **Format de sortie:** Prénom, Initiale (ex: "Thomas, L")
-    """)
 
     try:
         from src.utils.advisor_matcher import get_advisor_matcher, Advisor
@@ -750,6 +707,42 @@ def render_advisor_management_tab() -> None:
         st.session_state.advisor_matcher = get_advisor_matcher()
 
     matcher = st.session_state.advisor_matcher
+
+    # Check if Google Sheets is configured
+    if not matcher.is_configured:
+        st.warning(f"""
+        ⚠️ **Google Sheets non configuré**
+
+        La gestion des conseillers nécessite une connexion à Google Sheets.
+
+        **Pour configurer:**
+        1. Créez un projet Google Cloud et activez l'API Sheets
+        2. Créez un compte de service et téléchargez le fichier JSON
+        3. Configurez les variables d'environnement:
+           - `GOOGLE_SHEETS_SPREADSHEET_ID` - ID de votre spreadsheet
+           - `GOOGLE_SHEETS_CREDENTIALS_FILE` - Chemin vers le fichier JSON
+
+        **Ou dans Streamlit secrets:**
+        ```toml
+        [gcp_service_account]
+        type = "service_account"
+        project_id = "..."
+        # ... autres champs du service account
+        ```
+
+        *La normalisation des noms de conseillers sera désactivée.*
+        """)
+        return
+
+    st.info("""
+    **Gestion des noms de conseillers**
+
+    Cette section permet de gérer les conseillers et leurs variations de noms.
+    Le système utilise ces données pour normaliser automatiquement les noms
+    lors de l'extraction des données PDF.
+
+    **Format de sortie:** Prénom, Initiale (ex: "Thomas, L")
+    """)
 
     st.divider()
 
@@ -998,17 +991,17 @@ def render_pdf_extraction_tab() -> None:
 
 def render_stage_1() -> None:
     """Render configuration stage with tabs."""
-    st.markdown("## 📊 Pipeline de Commissions")
+    st.markdown("## Pipeline de Commissions")
     render_stepper()
-    st.write("")
+    render_breadcrumb()
 
     # Check API key
     if not st.session_state.monday_api_key:
-        st.warning("👈 Veuillez d'abord configurer votre clé API Monday.com dans la barre latérale.")
+        st.warning("Veuillez d'abord configurer votre clé API Monday.com dans la barre latérale.")
         return
 
     # Tabs for different workflows
-    tab1, tab2 = st.tabs(["📄 Extraction PDF", "👥 Gestion Conseillers"])
+    tab1, tab2 = st.tabs(["Extraction PDF", "Gestion Conseillers"])
 
     with tab1:
         render_pdf_extraction_tab()
@@ -1075,6 +1068,9 @@ def run_extraction() -> None:
 
         st.session_state.extraction_results = results
 
+        # Store usage stats
+        st.session_state.extraction_usage = batch_result.total_usage
+
         # Get combined data and detect groups
         combined_df = batch_result.get_combined_dataframe()
         if combined_df is not None and not combined_df.empty:
@@ -1096,21 +1092,21 @@ def run_extraction() -> None:
 
 
 def render_stage_2() -> None:
-    """Render data preview stage."""
+    """Render data preview stage with modern tabs layout."""
     st.markdown("## 📊 Pipeline de Commissions")
     render_stepper()
-    st.write("")
+    render_breadcrumb()
 
     # Extract data if not done
     if st.session_state.combined_data is None:
         if not st.session_state.uploaded_files:
-            st.error("❌ Aucun fichier à traiter")
-            if st.button("🔄 Recommencer"):
+            st.error("Aucun fichier à traiter")
+            if st.button("Recommencer"):
                 reset_pipeline()
                 st.rerun()
             return
 
-        with st.spinner("🔄 Extraction en cours..."):
+        with st.spinner("Extraction en cours..."):
             run_extraction()
             st.rerun()
         return
@@ -1118,34 +1114,154 @@ def render_stage_2() -> None:
     df = st.session_state.combined_data
 
     if df is None or df.empty:
-        st.error("❌ Aucune donnée extraite")
-        if st.button("🔄 Recommencer"):
+        st.error("Aucune donnée extraite")
+        if st.button("Recommencer"):
             reset_pipeline()
             st.rerun()
         return
 
-    # Config summary
-    with st.expander("📋 Configuration", expanded=False):
+    # ===========================================
+    # METRICS DASHBOARD HEADER (Always Visible)
+    # ===========================================
+    usage = st.session_state.get('extraction_usage')
+    model_name = ""
+    cost_display = "Cache"
+    if usage:
+        model_name = usage.model.split("/")[-1] if usage.model and "/" in usage.model else (usage.model or "N/A")
+        cost_display = f"${usage.cost:.4f}" if usage.cost > 0 else "Cache"
+
+    # Determine status
+    has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
+    if has_verification_cols:
+        df_verified = verify_recu_vs_com(df, tolerance_pct=st.session_state.get('verification_tolerance', 10.0))
+        stats = get_verification_stats(df_verified)
+        status_icon = "OK" if stats['ecart'] == 0 else f"{stats['ecart']} Ecarts"
+    else:
+        df_verified = df
+        stats = None
+        status_icon = "OK"
+
+    # Dashboard metrics
+    render_metrics_dashboard(
+        row_count=len(df),
+        cost=cost_display,
+        model=model_name,
+        status=status_icon
+    )
+
+    # ===========================================
+    # TABBED INTERFACE (Replaces Expanders)
+    # ===========================================
+    tab_data, tab_verify, tab_config, tab_actions = st.tabs([
+        "Données",
+        "Vérification",
+        "Configuration",
+        "Actions"
+    ])
+
+    # ----- TAB 1: DONNÉES -----
+    with tab_data:
+        # Quick stats
         cols = st.columns(4)
-        cols[0].metric("Source", st.session_state.selected_source)
-        cols[1].metric("Fichiers", len(st.session_state.uploaded_files))
-        cols[2].metric("Board", st.session_state._current_board_name[:20] + "..." if len(st.session_state._current_board_name) > 20 else st.session_state._current_board_name)
-        cols[3].metric("Type", "Ventes" if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION else "Paiements")
+        cols[0].metric("Lignes", len(df))
+        cols[1].metric("Colonnes", len(df.columns))
+        if '# de Police' in df.columns:
+            cols[2].metric("Contrats", df['# de Police'].notna().sum())
+        elif 'Contrat' in df.columns:
+            cols[2].metric("Contrats", df['Contrat'].notna().sum())
+        else:
+            cols[2].metric("Contrats", "-")
+        cols[3].metric("Doublons", df.duplicated().sum())
 
-    # Multi-month warning (Phase 5)
-    if '_target_group' in df.columns:
-        groups_info = analyze_groups_in_data(df)
-        if groups_info['spans_multiple_months']:
-            st.warning(f"⚠️ Les données couvrent **{len(groups_info['unique_groups'])} mois différents**. "
-                       f"Les lignes seront automatiquement assignées à leur groupe respectif.")
-            with st.expander("📅 Détail par groupe", expanded=False):
-                for group, count in groups_info['group_counts'].items():
-                    st.markdown(f"**{group}**: {count} lignes")
+        st.markdown("---")
 
-    # Manual group override (Phase 5)
-    if '_target_group' in df.columns:
-        with st.expander("📅 Modifier le groupe de destination", expanded=False):
-            st.caption("Si la détection automatique de date n'est pas correcte, vous pouvez assigner manuellement un groupe.")
+        # Display the dataframe
+        if has_verification_cols:
+            st.dataframe(reorder_columns_for_display(df_verified), width="stretch", height=400)
+        else:
+            st.dataframe(reorder_columns_for_display(df), width="stretch", height=400)
+
+        # Extraction details
+        results = st.session_state.extraction_results
+        if results:
+            with st.expander("Détails de l'extraction", expanded=False):
+                for filename, result in results.items():
+                    if result.success:
+                        st.markdown(f"**{filename}**: {result.row_count} lignes ({result.extraction_time_ms}ms)")
+                    else:
+                        st.markdown(f"**{filename}**: {result.error}")
+
+    # ----- TAB 2: VÉRIFICATION -----
+    with tab_verify:
+        if has_verification_cols:
+            st.markdown("### Vérification Reçu vs Commission")
+            st.caption("Formule: `Com Calculée = ROUND((PA x 0.4) x 0.5, 2)`")
+
+            tolerance = st.slider(
+                "Tolérance (%)",
+                min_value=1.0,
+                max_value=50.0,
+                value=st.session_state.get('verification_tolerance', 10.0),
+                step=1.0,
+                key="verification_tolerance_slider"
+            )
+            st.session_state.verification_tolerance = tolerance
+
+            df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
+            stats = get_verification_stats(df_verified)
+
+            # Stats display
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("OK", stats['ok'])
+            stat_cols[1].metric("Bonus", stats['bonus'])
+            stat_cols[2].metric("Ecart", stats['ecart'])
+            stat_cols[3].metric("N/A", stats['na'])
+
+            if stats['ecart'] > 0:
+                st.warning(f"**{stats['ecart']} ligne(s)** ont un écart négatif")
+            if stats['bonus'] > 0:
+                st.success(f"**{stats['bonus']} ligne(s)** ont un bonus")
+        else:
+            st.info("La vérification n'est pas disponible pour ce type de données (colonnes 'Reçu' et 'PA' requises).")
+
+    # ----- TAB 3: CONFIGURATION -----
+    with tab_config:
+        st.markdown("### Résumé de la Configuration")
+
+        config_cols = st.columns(2)
+        with config_cols[0]:
+            st.markdown("**Source**")
+            st.info(st.session_state.selected_source or "N/A")
+
+            st.markdown("**Fichiers**")
+            st.info(f"{len(st.session_state.uploaded_files)} fichier(s)")
+
+        with config_cols[1]:
+            board_name = st.session_state._current_board_name or "N/A"
+            st.markdown("**Board de destination**")
+            st.info(board_name[:40] + "..." if len(board_name) > 40 else board_name)
+
+            st.markdown("**Type de table**")
+            st.info("Ventes" if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION else "Paiements")
+
+        st.markdown("---")
+
+        # Multi-month detection
+        if '_target_group' in df.columns:
+            groups_info = analyze_groups_in_data(df)
+
+            st.markdown("### Groupes Détectés")
+            if groups_info['spans_multiple_months']:
+                st.warning(f"Les données couvrent **{len(groups_info['unique_groups'])} mois différents**.")
+
+            for group, count in groups_info['group_counts'].items():
+                st.markdown(f"- **{group}**: {count} lignes")
+
+            st.markdown("---")
+
+            # Manual override
+            st.markdown("### Modifier le groupe manuellement")
+            st.caption("Remplacer la détection automatique si nécessaire.")
 
             months_fr = get_months_fr()
             now = datetime.now()
@@ -1167,117 +1283,55 @@ def render_stage_2() -> None:
                 manual_group = st.selectbox("Groupe manuel", group_options, key="manual_group_override")
             with col2:
                 if manual_group != "(Garder auto-détection)":
-                    if st.button("✅ Appliquer", use_container_width=True):
+                    if st.button("Appliquer", use_container_width=True, type="primary"):
                         df['_target_group'] = manual_group
                         st.session_state.combined_data = df
                         st.success(f"Groupe modifié: {manual_group}")
                         st.rerun()
 
-    # Statistics
-    st.markdown("### 📊 Aperçu")
-
-    cols = st.columns(4)
-    cols[0].metric("Lignes", len(df))
-    cols[1].metric("Colonnes", len(df.columns))
-    if '# de Police' in df.columns:
-        cols[2].metric("Contrats", df['# de Police'].notna().sum())
-    elif 'Contrat' in df.columns:
-        cols[2].metric("Contrats", df['Contrat'].notna().sum())
-    else:
-        cols[2].metric("", "")
-    cols[3].metric("Doublons", df.duplicated().sum())
-
-    # Phase 3: Verification section
-    has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
-
-    if has_verification_cols:
-        st.markdown("### 🔍 Vérification Reçu vs Commission")
-        st.caption("Formule: `Com Calculée = ROUND((PA × 0.4) × 0.5, 2)`")
-
-        col1, col2 = st.columns([2, 3])
-        with col1:
-            tolerance = st.slider(
-                "Tolérance (%)",
-                min_value=1.0,
-                max_value=50.0,
-                value=10.0,
-                step=1.0,
-                key="verification_tolerance_slider"
-            )
-
-        df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
-        stats = get_verification_stats(df_verified)
-
-        with col2:
-            stat_cols = st.columns(4)
-            stat_cols[0].metric("✓ OK", stats['ok'])
-            stat_cols[1].metric("✅ Bonus", stats['bonus'])
-            stat_cols[2].metric("⚠️ Écart", stats['ecart'])
-            stat_cols[3].metric("- N/A", stats['na'])
-
-        if stats['ecart'] > 0:
-            st.warning(f"⚠️ **{stats['ecart']} ligne(s)** ont un écart négatif")
-
-        if stats['bonus'] > 0:
-            st.success(f"✅ **{stats['bonus']} ligne(s)** ont un bonus")
-
-        st.dataframe(reorder_columns_for_display(df_verified), use_container_width=True, height=350)
-        df_display = df_verified
-    else:
-        st.dataframe(reorder_columns_for_display(df), use_container_width=True, height=350)
-        df_display = df
-
-    # Extraction details
-    results = st.session_state.extraction_results
-    if results:
-        with st.expander("📊 Détails de l'extraction", expanded=False):
-            for filename, result in results.items():
-                if result.success:
-                    st.markdown(f"✅ **{filename}**: {result.row_count} lignes ({result.extraction_time_ms}ms)")
-                else:
-                    st.markdown(f"❌ **{filename}**: {result.error}")
-
-    # Actions row
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "💾 Télécharger CSV",
-            data=csv,
-            file_name=f"commissions_{st.session_state.selected_source}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
-    with col2:
-        if st.button("ℹ️ Colonnes", use_container_width=True):
-            st.session_state.show_columns = not st.session_state.get('show_columns', False)
-            st.rerun()
-
-    with col3:
-        if st.button("⬅️ Retour", use_container_width=True):
-            reset_pipeline()
-            st.rerun()
-
-    with col4:
-        if st.button("➡️ Uploader", type="primary", use_container_width=True):
-            st.session_state.stage = 3
-            st.rerun()
-
-    # Column info
-    if st.session_state.get('show_columns', False):
-        st.markdown("#### Informations colonnes")
+        # Column info
+        st.markdown("---")
+        st.markdown("### Informations Colonnes")
         col_info = pd.DataFrame({
             'Colonne': df.columns,
             'Type': df.dtypes.astype(str),
             'Non-Null': df.notna().sum().values,
             'Null': df.isna().sum().values
         })
-        st.dataframe(col_info, use_container_width=True, height=200)
+        st.dataframe(col_info, width="stretch", height=200)
 
-    # Phase 6: Excel upload replacement
-    with st.expander("📤 Remplacer par un fichier modifié", expanded=False):
+    # ----- TAB 4: ACTIONS -----
+    with tab_actions:
+        st.markdown("### Exporter les données")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "Télécharger CSV",
+                data=csv,
+                file_name=f"commissions_{st.session_state.selected_source}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with col2:
+            # Excel export
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Commissions')
+            excel_data = output.getvalue()
+            st.download_button(
+                "Télécharger Excel",
+                data=excel_data,
+                file_name=f"commissions_{st.session_state.selected_source}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+        st.markdown("---")
+        st.markdown("### Remplacer les données")
+        st.caption("Uploader un fichier Excel/CSV modifié pour remplacer les données extraites.")
+
         excel_file = st.file_uploader(
             "Fichier Excel/CSV modifié",
             type=['xlsx', 'xls', 'csv'],
@@ -1291,9 +1345,9 @@ def render_stage_2() -> None:
                 else:
                     uploaded_df = pd.read_excel(excel_file)
 
-                st.success(f"✅ {excel_file.name} chargé ({len(uploaded_df)} lignes)")
+                st.success(f"{excel_file.name} chargé ({len(uploaded_df)} lignes)")
 
-                if st.button("✅ Utiliser ce fichier", type="primary"):
+                if st.button("Utiliser ce fichier", type="primary"):
                     st.session_state.combined_data = uploaded_df
                     st.session_state.data_modified = True
                     st.rerun()
@@ -1301,75 +1355,94 @@ def render_stage_2() -> None:
             except Exception as e:
                 st.error(f"Erreur: {e}")
 
+    # ===========================================
+    # STICKY ACTION FOOTER
+    # ===========================================
+    st.markdown("---")
+
+    footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
+
+    with footer_col1:
+        if st.button("Retour", use_container_width=True):
+            reset_pipeline()
+            st.rerun()
+
+    with footer_col3:
+        if st.button("Uploader vers Monday.com", type="primary", use_container_width=True):
+            st.session_state.stage = 3
+            st.rerun()
+
+
+
 
 # =============================================================================
 # STAGE 3: UPLOAD
 # =============================================================================
 
 def render_stage_3() -> None:
-    """Render upload stage."""
-    st.markdown("## 📊 Pipeline de Commissions")
+    """Render upload stage with modern styling."""
+    st.markdown("## Pipeline de Commissions")
     render_stepper()
-    st.write("")
+    render_breadcrumb()
 
     df = st.session_state.combined_data
 
     if df is None or df.empty:
-        st.error("❌ Aucune donnée à uploader")
-        if st.button("🔄 Recommencer"):
+        st.error("Aucune donnée à uploader")
+        if st.button("Recommencer"):
             reset_pipeline()
             st.rerun()
         return
 
     if st.session_state.data_modified:
-        st.warning("⚠️ Upload de données modifiées")
+        st.warning("Upload de données modifiées")
 
-    # Summary
-    st.markdown("### 📋 Résumé de l'upload")
-
+    # Summary Dashboard (similar to Stage 2)
     unique_groups = df['_target_group'].unique() if '_target_group' in df.columns else []
+    board_name = st.session_state._current_board_name or "N/A"
 
-    cols = st.columns(4)
-    cols[0].metric("Items total", len(df))
-    cols[1].metric("Board", st.session_state._current_board_name[:20] + "..." if len(st.session_state._current_board_name) > 20 else st.session_state._current_board_name)
-    cols[2].metric("Groupes", len(unique_groups) if len(unique_groups) > 0 else 1)
-    cols[3].metric("Fichiers", len(st.session_state.extraction_results))
+    render_upload_dashboard(
+        item_count=len(df),
+        board_name=board_name,
+        group_count=len(unique_groups) if len(unique_groups) > 0 else 1,
+        file_count=len(st.session_state.extraction_results)
+    )
 
     # Groups breakdown
     if '_target_group' in df.columns and len(unique_groups) > 1:
-        with st.expander("📁 Détail par groupe", expanded=False):
+        with st.expander("Détail par groupe", expanded=False):
             for group in unique_groups:
                 group_count = len(df[df['_target_group'] == group])
                 st.markdown(f"**{group}**: {group_count} items")
 
-    st.divider()
+    st.markdown("---")
 
     # Upload process
     if st.session_state.upload_result is None:
-        st.info(f"Les données vont être uploadées vers Monday.com.")
+        st.info("Les données vont être uploadées vers Monday.com.")
 
-        col1, col2 = st.columns(2)
+        footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
-        with col1:
-            if st.button("⬅️ Retour", use_container_width=True):
+        with footer_col1:
+            if st.button("Retour", use_container_width=True):
                 st.session_state.stage = 2
                 st.rerun()
 
-        with col2:
-            if st.button("🚀 Confirmer l'upload", type="primary", use_container_width=True):
+        with footer_col3:
+            if st.button("Confirmer l'upload", type="primary", use_container_width=True):
                 execute_upload(df)
     else:
         render_upload_result(st.session_state.upload_result)
 
-        col1, col2 = st.columns(2)
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
-            if st.button("🔄 Nouveau pipeline", use_container_width=True):
+            if st.button("Nouveau pipeline", use_container_width=True):
                 reset_pipeline()
                 st.rerun()
-        with col2:
-            if st.button("📋 Voir le board", use_container_width=True):
-                board_id = st.session_state.selected_board_id
-                st.markdown(f"[Ouvrir Monday.com](https://monday.com/boards/{board_id})")
+        with col3:
+            board_id = st.session_state.selected_board_id
+            st.link_button("Ouvrir Monday.com", f"https://monday.com/boards/{board_id}", use_container_width=True)
 
 
 def execute_upload(df: pd.DataFrame) -> None:
@@ -1454,9 +1527,9 @@ def execute_upload(df: pd.DataFrame) -> None:
         }
 
         if items_failed == 0:
-            st.success(f"✅ {items_uploaded} éléments uploadés dans {len(unique_groups)} groupe(s)!")
+            st.success(f"{items_uploaded} éléments uploadés dans {len(unique_groups)} groupe(s)!")
         else:
-            st.warning(f"⚠️ {items_uploaded}/{total_items} uploadés. {items_failed} en erreur.")
+            st.warning(f"{items_uploaded}/{total_items} uploadés. {items_failed} en erreur.")
 
     except Exception as e:
         st.error(f"Échec de l'upload: {e}")
@@ -1475,16 +1548,19 @@ def execute_upload(df: pd.DataFrame) -> None:
 
 
 def render_upload_result(result: dict) -> None:
-    """Render upload result summary."""
+    """Render upload result summary with modern styling."""
     total = result.get("total", 0)
     success = result.get("success", 0)
     failed = result.get("failed", 0)
     groups = result.get("groups", 1)
 
     if failed == 0:
-        st.success(f"✅ {success}/{total} éléments uploadés avec succès dans {groups} groupe(s)!")
+        render_success_box(
+            title="Upload réussi!",
+            message=f"{success}/{total} éléments uploadés dans {groups} groupe(s)."
+        )
     else:
-        st.warning(f"⚠️ {success}/{total} éléments uploadés. {failed} en erreur.")
+        st.warning(f"{success}/{total} éléments uploadés. {failed} en erreur.")
 
     errors = result.get("errors", [])
     if errors:
@@ -1500,6 +1576,13 @@ def render_upload_result(result: dict) -> None:
 def main() -> None:
     """Main application entry point."""
     init_session_state()
+
+    # Auto-load boards at startup if API key is available
+    if (st.session_state.monday_api_key and
+        st.session_state.monday_boards is None and
+        not st.session_state.boards_loading):
+        load_boards_async()
+
     render_sidebar()
 
     # Route to appropriate stage

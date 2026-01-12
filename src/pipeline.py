@@ -61,6 +61,17 @@ class ExtractionWarning:
 
 
 @dataclass
+class UsageStats:
+    """Usage statistics from VLM extraction."""
+    model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+    cached_tokens: int = 0
+
+
+@dataclass
 class PipelineResult:
     """Result of processing a single PDF."""
     pdf_path: str
@@ -72,6 +83,7 @@ class PipelineResult:
     error: Optional[str] = None
     extraction_time_ms: int = 0
     row_count: int = 0
+    usage: Optional[UsageStats] = None
 
     def __post_init__(self):
         self.row_count = len(self.dataframe) if self.dataframe is not None else 0
@@ -96,6 +108,23 @@ class BatchResult:
             self.total_rows += result.row_count
         else:
             self.failed += 1
+
+    @property
+    def total_usage(self) -> UsageStats:
+        """Aggregate usage statistics from all results."""
+        total = UsageStats()
+        models_used = set()
+        for result in self.results:
+            if result.usage:
+                total.prompt_tokens += result.usage.prompt_tokens
+                total.completion_tokens += result.usage.completion_tokens
+                total.total_tokens += result.usage.total_tokens
+                total.cost += result.usage.cost
+                total.cached_tokens += result.usage.cached_tokens
+                if result.usage.model:
+                    models_used.add(result.usage.model)
+        total.model = ", ".join(sorted(models_used)) if models_used else ""
+        return total
 
     @property
     def all_warnings(self) -> list[ExtractionWarning]:
@@ -302,6 +331,21 @@ class Pipeline:
                 # Step 2: Unify to DataFrame
                 df, board_type = self._unifier.unify(report, source_type.value)
 
+                # Step 3: Capture usage stats from extractor's client
+                usage_stats = None
+                if hasattr(extractor, 'client') and extractor.client:
+                    client_usage = extractor.client.get_session_summary()
+                    if client_usage.get("request_count", 0) > 0:
+                        from .utils.model_registry import get_model_config
+                        model_config = get_model_config(source_type.value)
+                        usage_stats = UsageStats(
+                            model=model_config.model_id,
+                            prompt_tokens=client_usage.get("total_prompt_tokens", 0),
+                            completion_tokens=client_usage.get("total_completion_tokens", 0),
+                            total_tokens=client_usage.get("total_prompt_tokens", 0) + client_usage.get("total_completion_tokens", 0),
+                            cost=client_usage.get("total_cost", 0.0),
+                        )
+
                 # Check for empty results
                 if df.empty:
                     warnings.append(ExtractionWarning(
@@ -318,7 +362,8 @@ class Pipeline:
                     dataframe=df,
                     success=True,
                     warnings=warnings,
-                    extraction_time_ms=elapsed_ms
+                    extraction_time_ms=elapsed_ms,
+                    usage=usage_stats
                 )
 
             except Exception as e:

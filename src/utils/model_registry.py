@@ -57,56 +57,57 @@ class ModelConfig:
 # Default models
 DEFAULT_VISION_MODEL = "google/gemini-3-flash-preview"  # Primary: Gemini 3 Flash
 FALLBACK_VISION_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"  # Fallback: Qwen 3 VL
+SECONDARY_FALLBACK_MODEL = "google/gemini-3-pro-preview"  # Secondary fallback: Gemini 3 Pro
 LEGACY_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct"  # Legacy: Qwen 2.5 VL
 DEFAULT_TEXT_MODEL = "deepseek/deepseek-chat"  # Text fallback (V3 stable)
 
 # Document type to model configuration mapping
 MODEL_REGISTRY: dict[str, ModelConfig] = {
-    # UV Assurance - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # UV Assurance - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # All pages are relevant
     "UV": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=None,  # Use all pages
     ),
 
-    # Assomption Vie - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # Assomption Vie - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # Pages: 1 (summary), 3 (commissions), 5 (bonuses) - 0-indexed: 0, 2, 4
     "ASSOMPTION": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=PageConfig(pages=[0, 2, 4]),  # Summary, Commissions, Bonuses
     ),
 
-    # IDC Propositions - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # IDC Propositions - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # All pages are relevant
     "IDC": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=None,  # Use all pages
     ),
 
-    # IDC Statements (trailing fees) - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # IDC Statements (trailing fees) - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # Skip first 2 pages (cover and summary)
     "IDC_STATEMENT": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=PageConfig(skip_first=2),  # Skip cover and summary pages
     ),
 }
