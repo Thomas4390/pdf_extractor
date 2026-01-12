@@ -333,16 +333,14 @@ class Pipeline:
 
                 # Step 3: Capture usage stats from extractor's client
                 usage_stats = None
+                from .utils.model_registry import get_model_config
+                model_config = get_model_config(source_type.value)
+
                 if hasattr(extractor, 'client') and extractor.client:
                     client_usage = extractor.client.get_session_summary()
                     if client_usage.get("request_count", 0) > 0:
                         # Use the actual model that was used (including fallbacks)
-                        actual_model = client_usage.get("last_model_used")
-                        if not actual_model:
-                            # Fallback to configured model if not tracked
-                            from .utils.model_registry import get_model_config
-                            model_config = get_model_config(source_type.value)
-                            actual_model = model_config.model_id
+                        actual_model = client_usage.get("last_model_used") or model_config.model_id
 
                         usage_stats = UsageStats(
                             model=actual_model,
@@ -351,6 +349,24 @@ class Pipeline:
                             total_tokens=client_usage.get("total_prompt_tokens", 0) + client_usage.get("total_completion_tokens", 0),
                             cost=client_usage.get("total_cost", 0.0),
                         )
+                    else:
+                        # Cached result - still report the configured model
+                        usage_stats = UsageStats(
+                            model=model_config.model_id,
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            cost=0.0,
+                        )
+                else:
+                    # No client - report configured model
+                    usage_stats = UsageStats(
+                        model=model_config.model_id,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                        cost=0.0,
+                    )
 
                 # Check for empty results
                 if df.empty:

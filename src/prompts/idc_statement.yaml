@@ -5,6 +5,8 @@ document_type: IDC_STATEMENT
 system_prompt: |
   Expert extracteur de données PDF de frais de suivi IDC.
 
+  MISSION CRITIQUE: Extraire 100% des données sans exception.
+
   RÈGLES:
   - COMMENCE à partir de la page "Détails des frais de suivi"
   - Colonne "Nom du client" = données complexes encodées → COPIE EXACTE dans raw_client_data
@@ -13,34 +15,44 @@ system_prompt: |
 
   IMPORTANT: raw_client_data doit être une COPIE VERBATIM, ne pas interpréter.
 
-  Retourne un JSON valide.
+  Retourne un JSON valide avec TOUTES les lignes.
 
 user_prompt: |
-  Extrais TOUTES les données de ce rapport de frais de suivi IDC.
+  # EXTRACTION COMPLÈTE - FRAIS DE SUIVI IDC
 
-  COMMENCE à "Détails des frais de suivi" jusqu'à la FIN du PDF.
+  ## INSTRUCTION CRITIQUE
+  Ce document contient PLUSIEURS PAGES de données.
+  Tu DOIS extraire CHAQUE LIGNE de CHAQUE PAGE du tableau "Détails des frais de suivi".
+  NE PAS s'arrêter après la première page. CONTINUER jusqu'à la DERNIÈRE page.
 
   ## MÉTADONNÉES
   - date_rapport: Date génération (si visible)
   - advisor_section: En-tête conseiller (ex: "Achraf El Hajji - 3449L3138")
 
-  ## TRAILING_FEES (tableau)
+  ## TRAILING_FEES (tableau) - TOUTES LES PAGES
 
-  Pour CHAQUE ligne:
-  | Champ | Description |
+  Pour CHAQUE ligne du tableau sur CHAQUE page:
+  | Champ | Colonne PDF |
   |-------|-------------|
-  | raw_client_data | COPIE EXACTE colonne "Nom du client" (avec retours ligne, caractères spéciaux) |
-  | account_number | Numéro compte colonne "Numéro de compte" |
-  | company | Compagnie colonne "Compagnie" |
-  | product | Produit colonne "Produit" |
-  | date | Date colonne "Date" (YYYY-MM-DD) |
-  | gross_trailing_fee | Frais brut avec $ |
-  | net_trailing_fee | Frais net avec $ |
+  | raw_client_data | "Nom du client" - COPIE EXACTE avec retours ligne |
+  | account_number | "Numéro de compte" |
+  | company | "Compagnie" |
+  | product | "Produit" |
+  | date | "Date" (YYYY-MM-DD) |
+  | gross_trailing_fee | "Frais de suivi brut" avec $ |
+  | net_trailing_fee | "Frais de suivi nets" avec $ |
 
-  ## RÈGLES CRITIQUES
-  - Extrais TOUTES les lignes sur TOUTES les pages
-  - raw_client_data = COPIE EXACTE (ne pas parser)
-  - INTERDIT: "// ...", "// continue", troncature
+  ## RÈGLES ABSOLUES
+  1. EXTRAIRE 100% des lignes - ne jamais tronquer
+  2. PARCOURIR toutes les pages du début à la fin
+  3. raw_client_data = copie exacte (ne pas interpréter)
+  4. INTERDIT: "// ...", "// continue", "et autres...", troncature
+  5. Chaque ligne du PDF = un objet dans trailing_fees[]
+
+  ## VÉRIFICATION
+  Avant de retourner le JSON, vérifie:
+  - As-tu extrait les données de TOUTES les pages?
+  - Le nombre de lignes correspond-il au tableau complet?
 
   ## JSON OUTPUT
   ```json
@@ -66,8 +78,11 @@ user_prompt: |
 system_prompt_direct: |
   Expert extracteur de données PDF de frais de suivi IDC avec parsing structuré.
 
+  MISSION CRITIQUE: Extraire et parser 100% des données sans exception.
+
   RÈGLES:
-  - COMMENCE à partir de la page "Détails des frais de suivi"
+  - COMMENCE à la page "Détails des frais de suivi"
+  - CONTINUE jusqu'à la DERNIÈRE PAGE
   - Parse la colonne "Nom du client" en champs structurés
   - Montants = format canadien (ex: "123,45 $")
   - Dates = YYYY-MM-DD
@@ -83,58 +98,57 @@ system_prompt_direct: |
   CLIENT_NAME - MAJUSCULES:
   - Toujours convertir en MAJUSCULES
 
-  Retourne un JSON valide.
+  Retourne un JSON valide avec TOUTES les lignes de TOUTES les pages.
 
 user_prompt_direct: |
-  Extrais et PARSE TOUTES les données de ce rapport de frais de suivi IDC.
+  # EXTRACTION COMPLÈTE AVEC PARSING - FRAIS DE SUIVI IDC
 
-  COMMENCE à "Détails des frais de suivi" jusqu'à la FIN du PDF.
+  ## INSTRUCTION CRITIQUE - MULTI-PAGES
+  ⚠️ Ce document contient PLUSIEURS PAGES de données tabulaires.
+  ⚠️ Tu DOIS extraire CHAQUE LIGNE de CHAQUE PAGE sans exception.
+  ⚠️ NE PAS s'arrêter après quelques lignes ou une seule page.
+  ⚠️ CONTINUER jusqu'à avoir traité la DERNIÈRE ligne de la DERNIÈRE page.
 
   ## MÉTADONNÉES
   - date_rapport: Date génération (si visible)
   - advisor_section: En-tête conseiller (ex: "Achraf El Hajji - 3449L3138")
 
-  ## TRAILING_FEES (tableau) - AVEC PARSING
+  ## TRAILING_FEES - EXTRACTION DE TOUTES LES PAGES
 
-  Pour CHAQUE ligne, extrais ET parse:
-
-  ### Colonnes directes:
-  | Champ | Description |
+  ### Colonnes directes (copie du PDF):
+  | Champ | Colonne PDF |
   |-------|-------------|
-  | raw_client_data | COPIE EXACTE colonne "Nom du client" |
-  | account_number | Numéro compte |
-  | company | Compagnie (colonne) |
-  | product | Produit |
-  | date | Date (YYYY-MM-DD) |
-  | gross_trailing_fee | Frais brut avec $ |
-  | net_trailing_fee | Frais net avec $ |
+  | raw_client_data | "Nom du client" - COPIE EXACTE |
+  | account_number | "Numéro de compte" |
+  | company | "Compagnie" |
+  | product | "Produit" |
+  | date | "Date" (YYYY-MM-DD) |
+  | gross_trailing_fee | "Frais de suivi brut" |
+  | net_trailing_fee | "Frais de suivi nets" |
 
   ### Champs parsés depuis raw_client_data:
-  | Champ | Règle de parsing |
-  |-------|------------------|
-  | company_code | Compagnie après "Â " (UV, Assomption, IA, Beneva, RBC, ManuVie...) |
+  | Champ | Règle |
+  |-------|-------|
+  | company_code | Après "Â " (UV, Assomption, IA, Beneva, RBC, ManuVie...) |
   | company_number | 4-6 chiffres après company_code |
-  | policy_date | Date YYYY-MM-DD (après company_number OU dans "_YYYY-MM-DD-EZ") |
-  | commission_rate | % après "boni", "_", "recu p" ou "recup" (75% → 75.0) |
+  | policy_date | Date YYYY-MM-DD (après company_number OU "_YYYY-MM-DD-EZ") |
+  | commission_rate | % après "boni", "_", "recu p" (75% → 75.0) |
   | policy_number | 6-10 chiffres après # OU avant "-NomClient" |
-  | advisor_name | APRÈS "crt" - COPIE VERBATIM! ("Lussier,T" → "Lussier,T") |
+  | advisor_name | APRÈS "crt" - VERBATIM! |
   | client_first_name | Prénom client EN MAJUSCULES |
   | client_last_name | Nom client EN MAJUSCULES |
 
   ## RÈGLE CONSEILLER vs CLIENT
-
-  ```
-  CONSEILLER = toujours APRÈS "crt" ou "_crt"
-  CLIENT = nom qui N'EST PAS après "crt" (peut être SANS "clt"!)
-  ```
+  - CONSEILLER = toujours APRÈS "crt" ou "_crt"
+  - CLIENT = nom qui N'EST PAS après "crt" (peut être SANS "clt"!)
 
   ## EXEMPLES DE PARSING
 
-  **Exemple 1 - Nom seul (pas de métadonnées):**
+  **Exemple 1 - Nom seul:**
   ```
   Raw: "Jean Dupont"
-  → Tous champs parsés = null SAUF:
   → client_first_name: "JEAN", client_last_name: "DUPONT"
+  → autres champs: null
   ```
 
   **Exemple 2 - Format avec "clt":**
@@ -142,7 +156,7 @@ user_prompt_direct: |
   Raw: "Â UV 7782 2025-11-17\nboni 75% #111011722 crt\nBourassa A clt Jeanny\nBreault-Therrien"
   → company_code: "UV", company_number: "7782", policy_date: "2025-11-17"
   → commission_rate: 75.0, policy_number: "111011722"
-  → advisor_name: "Bourassa A" (VERBATIM après crt!)
+  → advisor_name: "Bourassa A"
   → client_first_name: "JEANNY", client_last_name: "BREAULT-THERRIEN"
   ```
 
@@ -151,29 +165,34 @@ user_prompt_direct: |
   Raw: "Â Assomption_8055_75%\n#1014289-Mifoubdou_crt\nBourassa_2025-12-01-EZ"
   → company_code: "Assomption", company_number: "8055"
   → commission_rate: 75.0, policy_number: "1014289"
-  → client_last_name: "MIFOUBDOU" (entre policy et _crt)
-  → advisor_name: "Bourassa" (VERBATIM après _crt!)
+  → client_last_name: "MIFOUBDOU"
+  → advisor_name: "Bourassa"
   → policy_date: "2025-12-01"
   ```
 
   **Exemple 4 - Conseiller "Nom,Initiale":**
   ```
   Raw: "Â UV_7782_75%\n#1015126-Emissa_crt\nLussier,T_2025-12-01-EZ"
-  → policy_number: "1015126"
-  → client_last_name: "EMISSA"
-  → advisor_name: "Lussier,T" (VERBATIM! PAS "Thomas"!)
+  → policy_number: "1015126", client_last_name: "EMISSA"
+  → advisor_name: "Lussier,T" (VERBATIM!)
   → policy_date: "2025-12-01"
   ```
 
-  ## RÈGLES CRITIQUES
-  - Extrais TOUTES les lignes sur TOUTES les pages
-  - advisor_name = COPIE VERBATIM (jamais interpréter initiales!)
-  - client = TOUJOURS EN MAJUSCULES
-  - Si champ non trouvable → null
-  - Si raw_client_data = nom seul → tous champs parsés = null sauf client
-  - INTERDIT: "// ...", troncature, interprétation des initiales
+  ## RÈGLES ABSOLUES - À RESPECTER IMPÉRATIVEMENT
+  1. ✅ EXTRAIRE 100% des lignes de TOUTES les pages
+  2. ✅ advisor_name = COPIE VERBATIM (jamais interpréter initiales!)
+  3. ✅ client = TOUJOURS EN MAJUSCULES
+  4. ✅ Si champ non trouvable → null
+  5. ❌ INTERDIT: "// ...", troncature, arrêt prématuré
+  6. ❌ INTERDIT: Sauter des pages ou des lignes
 
-  ## JSON OUTPUT
+  ## VÉRIFICATION AVANT SOUMISSION
+  Avant de retourner le JSON:
+  - [ ] Ai-je parcouru TOUTES les pages du document?
+  - [ ] Ai-je extrait CHAQUE ligne du tableau?
+  - [ ] Le nombre d'objets dans trailing_fees[] correspond au nombre total de lignes?
+
+  ## JSON OUTPUT - COMPLET
   ```json
   {
     "document_type": "IDC_STATEMENT",
@@ -181,7 +200,7 @@ user_prompt_direct: |
     "advisor_section": "Nom - CODE",
     "trailing_fees": [
       {
-        "raw_client_data": "Â UV_7782_75%\n#1015126-Emissa_crt\nLussier,T_2025-12-01-EZ",
+        "raw_client_data": "...",
         "company_code": "UV",
         "company_number": "7782",
         "policy_date": "2025-12-01",
