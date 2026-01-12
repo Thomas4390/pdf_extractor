@@ -240,6 +240,17 @@ class OpenRouterClient:
                 {"role": "user", "content": user_prompt},
             ]
 
+    # Preferred provider order - prioritize reliable providers
+    PREFERRED_PROVIDERS = [
+        "Google",           # Google AI (most reliable for Gemini)
+        "Anthropic",        # Anthropic (most reliable for Claude)
+        "DeepInfra",        # Usually reliable
+        "Together",         # Usually reliable
+        "Fireworks",        # Usually reliable
+        "Lepton",           # Usually reliable
+        # GMICloud, Novita, etc. are less reliable - not included
+    ]
+
     async def _make_request(
         self,
         messages: list[dict],
@@ -254,6 +265,11 @@ class OpenRouterClient:
             "temperature": temperature,
             "usage": {"include": True},  # Request usage/cost data in response
             # Note: response_format removed - causes 404 with some OpenRouter data policies
+            # Provider ordering - prefer reliable providers
+            "provider": {
+                "order": self.PREFERRED_PROVIDERS,
+                "allow_fallbacks": True,  # Allow other providers if preferred ones unavailable
+            },
         }
 
         # Add max_tokens if specified (important for long extractions)
@@ -417,7 +433,13 @@ class OpenRouterClient:
 
                 content = choices[0].get("message", {}).get("content", "")
                 if not content:
-                    raise ValueError(f"Empty content in response: {result}")
+                    # Empty response - likely provider issue, skip to fallback immediately
+                    provider = result.get("provider", "unknown")
+                    model_used = result.get("model", self.model)
+                    logger.warning(f"Empty response from {provider} ({model_used}), trying fallback...")
+                    print(f"\n⚠️ Empty response from provider '{provider}' - skipping to fallback model")
+                    last_error = ValueError(f"Empty content from {provider}")
+                    break  # Exit retry loop, go directly to fallback
 
                 last_content = content
                 parsed = self._parse_json_response(content)
