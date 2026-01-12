@@ -185,6 +185,10 @@ class DataUnifier:
         # Appliquer le schéma de colonnes final
         df = self._apply_final_schema(df, board_type)
 
+        # Agrégation par numéro de police pour Ventes et Production
+        if board_type == BoardType.SALES_PRODUCTION and not df.empty:
+            df = self._aggregate_by_policy(df)
+
         # Stocker le board_type dans les attributs du DataFrame
         df.attrs['board_type'] = board_type.value
         df.attrs['source'] = source
@@ -203,6 +207,78 @@ class DataUnifier:
         # Utilise match_compact pour obtenir le format "Prénom, Initiale"
         result = self.advisor_matcher.match_compact(str(name))
         return result if result else name
+
+    def _aggregate_by_policy(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Agrège les données par numéro de police pour le board Ventes et Production.
+
+        Logique d'agrégation:
+        - Texte (Client, Compagnie, Statut, Conseiller, etc.): prend la première valeur non-nulle
+        - Numériques (PA, Com, Boni, etc.): somme des valeurs
+        - Date: prend la plus récente
+
+        Args:
+            df: DataFrame avec colonnes SALES_PRODUCTION
+
+        Returns:
+            DataFrame agrégé par numéro de police
+        """
+        if df.empty or '# de Police' not in df.columns:
+            return df
+
+        # Colonnes textuelles - prendre la première valeur non-nulle
+        text_cols = ['Nom Client', 'Compagnie', 'Statut', 'Conseiller', 'Complet', 'Lead/MC', 'Texte']
+
+        # Colonnes numériques - sommer
+        numeric_cols = ['PA', 'Com', 'Reçu 1', 'Boni', 'Reçu 2', 'Sur-Com', 'Reçu 3', 'Total', 'Total Reçu', 'Paie']
+
+        # Colonne date - prendre la plus récente
+        date_col = 'Date'
+
+        # Vérifier quelles colonnes existent
+        existing_text_cols = [c for c in text_cols if c in df.columns]
+        existing_numeric_cols = [c for c in numeric_cols if c in df.columns]
+
+        # Construire le dictionnaire d'agrégation
+        agg_dict = {}
+
+        # Fonction helper pour prendre la première valeur non-nulle
+        def first_non_null(x):
+            non_null = x.dropna()
+            return non_null.iloc[0] if len(non_null) > 0 else None
+
+        # Pour les colonnes textuelles: prendre la première valeur non-nulle
+        for col in existing_text_cols:
+            agg_dict[col] = first_non_null
+
+        # Pour les colonnes numériques: sommer
+        for col in existing_numeric_cols:
+            agg_dict[col] = 'sum'
+
+        # Pour la date: prendre la plus récente
+        if date_col in df.columns:
+            agg_dict[date_col] = 'max'
+
+        # Si pas de colonnes à agréger, retourner tel quel
+        if not agg_dict:
+            return df
+
+        # Nombre de lignes avant agrégation
+        rows_before = len(df)
+
+        # Grouper par numéro de police
+        df_grouped = df.groupby('# de Police', as_index=False).agg(agg_dict)
+
+        # Réordonner les colonnes selon le schéma final
+        final_cols = [c for c in self.FINAL_COLUMNS_SALES if c in df_grouped.columns]
+        df_grouped = df_grouped[final_cols]
+
+        # Info si agrégation a eu lieu
+        rows_after = len(df_grouped)
+        if rows_before > rows_after:
+            print(f"  ℹ️  Agrégation: {rows_before} → {rows_after} lignes (par numéro de police)")
+
+        return df_grouped
 
     def _calculate_commission(
         self,

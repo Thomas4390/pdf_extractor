@@ -126,6 +126,7 @@ def init_session_state() -> None:
         "selected_source": None,
         "force_refresh": False,
         "data_modified": False,
+        "upload_key_counter": 0,  # Counter to reset file uploader widget
 
         # Advisor management (Phase 2)
         "advisor_matcher": None,
@@ -176,6 +177,9 @@ def reset_pipeline() -> None:
             st.session_state[key] = 0.0
         else:
             st.session_state[key] = None
+
+    # Increment upload key counter to reset file uploader widget
+    st.session_state.upload_key_counter = st.session_state.get('upload_key_counter', 0) + 1
 
 
 # =============================================================================
@@ -872,12 +876,14 @@ def render_pdf_extraction_tab() -> None:
     col1, col2 = st.columns([2, 1])
 
     with col1:
+        # Use counter in key to reset widget when pipeline is reset
+        upload_key = f"pdf_upload_main_{st.session_state.get('upload_key_counter', 0)}"
         uploaded_files = st.file_uploader(
             "Déposez vos fichiers PDF ici",
             type=['pdf'],
             accept_multiple_files=True,
             help="Sélectionnez un ou plusieurs fichiers PDF du même type",
-            key="pdf_upload_main"
+            key=upload_key
         )
 
         if uploaded_files:
@@ -977,6 +983,19 @@ def render_pdf_extraction_tab() -> None:
         BoardType.SALES_PRODUCTION if target_type == "Ventes et Production"
         else BoardType.HISTORICAL_PAYMENTS
     )
+
+    # Info about data processing based on board type
+    if target_type == "Ventes et Production":
+        st.caption(
+            "ℹ️ **Traitement des données:** Les lignes sont regroupées par numéro de police. "
+            "Plusieurs entrées avec le même numéro seront agrégées. "
+            "Colonnes: Date, Police, Client, Compagnie, Statut, Conseiller, PA, Com, Boni, etc."
+        )
+    else:
+        st.caption(
+            "ℹ️ **Traitement des données:** Chaque ligne représente un paiement individuel. "
+            "Colonnes: Police, Client, Compagnie, Statut, Conseiller, PA, Com, Boni, Sur-Com, Reçu, Date."
+        )
 
     force_refresh = st.checkbox(
         "Forcer la ré-extraction (ignorer le cache)",
