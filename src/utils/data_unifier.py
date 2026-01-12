@@ -487,11 +487,18 @@ class DataUnifier:
                 client_name = fee.client_full_name
                 advisor_name = fee.advisor_name
                 policy_number = fee.policy_number or fee.account_number
+                # Use company_code from parsed data if available (overrides default)
+                company_name = fee.company_code if hasattr(fee, 'company_code') and fee.company_code else fee.company
             else:
                 # IDCTrailingFeeRaw - parser raw_client_data
                 client_name = self._parse_client_from_raw(fee.raw_client_data)
                 advisor_name = self._parse_advisor_from_raw(fee.raw_client_data)
                 policy_number = self._parse_policy_from_raw(fee.raw_client_data) or fee.account_number
+                # Try to extract company from raw_client_data
+                company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
+
+            # Normalize company name using the standard mapping
+            company_name = self._normalize_insurer_name(company_name) if company_name else fee.company
 
             # Convertir le montant des frais de suivi
             trailing_fee = self._clean_currency(fee.net_trailing_fee)
@@ -510,7 +517,7 @@ class DataUnifier:
             row = {
                 '# de Police': str(policy_number) if policy_number else 'Unknown',
                 'Nom Client': client_name or 'Unknown',
-                'Compagnie': fee.company,
+                'Compagnie': company_name,
                 'Statut': status,
                 'Conseiller': advisor_name,
                 'Verifié': None,  # Sera calculé plus tard si nécessaire
@@ -621,6 +628,50 @@ class DataUnifier:
         match = re.search(r'(\d{6,10})[-_][A-Za-z]', raw_data)
         if match:
             return match.group(1)
+
+        return None
+
+    def _parse_company_from_raw(self, raw_data: str) -> Optional[str]:
+        """
+        Parse le nom de la compagnie depuis raw_client_data.
+
+        L'information de la compagnie se trouve souvent au début du raw_client_data.
+
+        Formats supportés:
+        - "Â UV 7782 2025-11-17..." → "UV"
+        - "UV 7782 2025-11-17..." → "UV"
+        - "Assomption_8055_2025-10-15..." → "Assomption"
+        - "IA 1234 2025-10-15..." → "IA"
+        - "Beneva_..." → "Beneva"
+        """
+        if not raw_data:
+            return None
+
+        # Clean up the data - remove special characters at start
+        clean_data = raw_data.strip()
+        if clean_data.startswith('Â '):
+            clean_data = clean_data[2:]
+
+        # List of known company names to search for
+        known_companies = [
+            'UV', 'Assomption', 'IA', 'Industrial Alliance',
+            'Beneva', 'RBC', 'ManuVie', 'Manulife', 'Manuvie',
+            'Humania', 'Sun Life', 'Canada Life', 'Desjardins',
+            'Empire', 'Equitable'
+        ]
+
+        # Check at the start of the string (most common pattern)
+        for company in known_companies:
+            # Pattern: company name followed by space/underscore and numbers
+            pattern = rf'^{re.escape(company)}[\s_]\d'
+            if re.search(pattern, clean_data, re.IGNORECASE):
+                return company
+
+        # Check anywhere in first line
+        first_line = clean_data.split('\n')[0] if '\n' in clean_data else clean_data
+        for company in known_companies:
+            if company.upper() in first_line.upper():
+                return company
 
         return None
 

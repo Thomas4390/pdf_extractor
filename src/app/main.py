@@ -496,6 +496,14 @@ def render_stepper() -> None:
             # Add clickable button for completed stages
             if is_completed:
                 if st.button(f"← Retour", key=f"stepper_nav_{stage_num}", use_container_width=True):
+                    # Reset extraction state when going back to stage 1
+                    if stage_num == 1:
+                        st.session_state.combined_data = None
+                        st.session_state.extraction_results = {}
+                        st.session_state.batch_result = None
+                        st.session_state.extraction_usage = None
+                        st.session_state.upload_result = None
+                        st.session_state.file_group_overrides = {}
                     st.session_state.stage = stage_num
                     st.rerun()
 
@@ -986,6 +994,13 @@ def render_pdf_extraction_tab() -> None:
     with col2:
         can_proceed = st.session_state.selected_board_id is not None
         if st.button(button_text, type="primary", use_container_width=True, disabled=not can_proceed):
+            # Reset extraction state for new extraction
+            st.session_state.combined_data = None
+            st.session_state.extraction_results = {}
+            st.session_state.batch_result = None
+            st.session_state.extraction_usage = None
+            st.session_state.upload_result = None
+            st.session_state.file_group_overrides = {}
             st.session_state.stage = 2
             st.rerun()
 
@@ -1819,18 +1834,25 @@ def render_stage_3() -> None:
 
     # Upload process
     if st.session_state.upload_result is None:
-        st.info("Les données vont être uploadées vers Monday.com.")
+        # Check if upload is in progress
+        if st.session_state.is_uploading:
+            # Execute the upload (after rerun from button click)
+            execute_upload(df)
+        else:
+            st.info("Les données vont être uploadées vers Monday.com.")
 
-        footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
+            footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
-        with footer_col1:
-            if st.button("Retour", use_container_width=True):
-                st.session_state.stage = 2
-                st.rerun()
+            with footer_col1:
+                if st.button("Retour", use_container_width=True):
+                    st.session_state.stage = 2
+                    st.rerun()
 
-        with footer_col3:
-            if st.button("Confirmer l'upload", type="primary", use_container_width=True):
-                execute_upload(df)
+            with footer_col3:
+                if st.button("Confirmer l'upload", type="primary", use_container_width=True):
+                    # Set uploading state and rerun to hide the button
+                    st.session_state.is_uploading = True
+                    st.rerun()
     else:
         render_upload_result(st.session_state.upload_result)
 
@@ -1847,7 +1869,6 @@ def render_stage_3() -> None:
 
 def execute_upload(df: pd.DataFrame) -> None:
     """Execute the upload to Monday.com."""
-    st.session_state.is_uploading = True
     st.session_state.upload_result = None
 
     pipeline = get_pipeline()
@@ -1867,6 +1888,9 @@ def execute_upload(df: pd.DataFrame) -> None:
         items_uploaded = 0
         items_failed = 0
         all_errors = []
+
+        # Track items processed so far for progress display
+        items_processed_before_group = 0
 
         for group_idx, group_name in enumerate(unique_groups):
             status_text.markdown(f"📁 **Groupe {group_idx + 1}/{len(unique_groups)}:** {group_name}")
@@ -1890,11 +1914,15 @@ def execute_upload(df: pd.DataFrame) -> None:
                 if not group_id:
                     raise Exception(f"Impossible de créer le groupe: {group_result.error}")
 
-                # Progress callback
+                # Progress callback - show overall progress
                 def on_progress(current: int, total: int) -> None:
-                    nonlocal items_uploaded
-                    overall_progress = (items_uploaded + current) / total_items
-                    progress_bar.progress(min(overall_progress, 0.99), text=f"Upload: {group_name} ({current}/{total})")
+                    # Calculate overall progress across all groups
+                    overall_current = items_processed_before_group + current
+                    overall_progress = overall_current / total_items
+                    progress_bar.progress(
+                        min(overall_progress, 0.99),
+                        text=f"Upload: {group_name} ({overall_current}/{total_items})"
+                    )
 
                 # Upload
                 result = asyncio.run(
@@ -1910,11 +1938,15 @@ def execute_upload(df: pd.DataFrame) -> None:
                 items_failed += result.failed
                 all_errors.extend(result.errors)
 
+                # Update items processed before next group
+                items_processed_before_group += len(export_df)
+
             except Exception as e:
                 items_failed += len(export_df)
+                items_processed_before_group += len(export_df)
                 all_errors.append(f"Groupe {group_name}: {str(e)}")
 
-        progress_bar.progress(1.0)
+        progress_bar.progress(1.0, text=f"Upload terminé! ({total_items}/{total_items})")
         status_text.empty()
 
         # Store result
