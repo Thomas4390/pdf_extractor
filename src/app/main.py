@@ -1058,25 +1058,19 @@ def run_extraction() -> None:
     pipeline = get_pipeline()
 
     # ===== ENHANCED PROGRESS UI =====
-    # Model info header
     st.markdown("---")
-    model_info_container = st.container()
-    with model_info_container:
-        if model_config:
-            primary_model = model_config.model_id.split("/")[-1] if "/" in model_config.model_id else model_config.model_id
-            fallback_model = model_config.fallback_model_id.split("/")[-1] if model_config.fallback_model_id and "/" in model_config.fallback_model_id else (model_config.fallback_model_id or "Aucun")
-            secondary_fallback = model_config.secondary_fallback_model_id.split("/")[-1] if model_config.secondary_fallback_model_id and "/" in model_config.secondary_fallback_model_id else (model_config.secondary_fallback_model_id or "Aucun")
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown(f"**🤖 Modèle principal**")
-                st.code(primary_model, language=None)
-            with col2:
-                st.markdown(f"**🔄 Fallback 1**")
-                st.code(fallback_model, language=None)
-            with col3:
-                st.markdown(f"**🔄 Fallback 2**")
-                st.code(secondary_fallback, language=None)
+    # Model info - simple elegant display
+    if model_config:
+        primary_model = model_config.model_id.split("/")[-1] if "/" in model_config.model_id else model_config.model_id
+        st.markdown(f"""
+        <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    border-radius: 20px; margin-bottom: 16px;">
+            <span style="font-size: 16px;">🤖</span>
+            <span style="color: white; font-weight: 500; font-size: 14px;">Modèle: {primary_model}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     # File list with status
     st.markdown("### 📁 Fichiers en cours de traitement")
@@ -1397,6 +1391,50 @@ def render_stage_2() -> None:
                 st.warning(f"**{stats['ecart']} ligne(s)** ont un écart négatif")
             if stats['bonus'] > 0:
                 st.success(f"**{stats['bonus']} ligne(s)** ont un bonus")
+
+            st.markdown("---")
+
+            # Find verification column
+            verif_col = [col for col in df_verified.columns if col.startswith('Vérification')]
+            if verif_col:
+                verif_col = verif_col[0]
+
+                # Show table with ecarts (negative differences)
+                if stats['ecart'] > 0:
+                    st.markdown("#### ⚠️ Lignes avec écarts négatifs")
+                    ecart_df = df_verified[df_verified[verif_col].astype(str).str.contains('⚠️', na=False)]
+
+                    # Select relevant columns for display
+                    display_cols = ['# de Police', 'Nom Client', 'Conseiller', 'PA', 'Reçu', 'Com Calculée', verif_col]
+                    display_cols = [c for c in display_cols if c in ecart_df.columns]
+
+                    st.dataframe(
+                        ecart_df[display_cols],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                # Show table with bonus (positive differences)
+                if stats['bonus'] > 0:
+                    st.markdown("#### ✅ Lignes avec bonus")
+                    bonus_df = df_verified[df_verified[verif_col].astype(str).str.contains('✅', na=False)]
+
+                    display_cols = ['# de Police', 'Nom Client', 'Conseiller', 'PA', 'Reçu', 'Com Calculée', verif_col]
+                    display_cols = [c for c in display_cols if c in bonus_df.columns]
+
+                    st.dataframe(
+                        bonus_df[display_cols],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                # Show all data with verification
+                with st.expander("📊 Voir toutes les données avec vérification", expanded=False):
+                    st.dataframe(
+                        df_verified,
+                        use_container_width=True,
+                        hide_index=True
+                    )
         else:
             st.info("La vérification n'est pas disponible pour ce type de données (colonnes 'Reçu' et 'PA' requises).")
 
