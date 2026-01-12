@@ -95,8 +95,14 @@ def get_pdf_page_count(pdf_path: Union[str, Path]) -> int:
 
     Returns:
         Number of pages in the PDF
+
+    Raises:
+        FileNotFoundError: If the PDF file doesn't exist
     """
     pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
     doc = fitz.open(pdf_path)
     try:
         return len(doc)

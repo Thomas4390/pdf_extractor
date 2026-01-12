@@ -21,9 +21,46 @@ import io
 import re
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Coroutine, Optional, TypeVar
+
+T = TypeVar('T')
+
+
+def run_async(coro: Coroutine[Any, Any, T]) -> T:
+    """
+    Run an async coroutine safely, handling existing event loops.
+
+    This function handles the common issue where asyncio.run() fails
+    when called from within an existing event loop (e.g., in Streamlit
+    or Jupyter environments).
+
+    Args:
+        coro: The coroutine to run
+
+    Returns:
+        The result of the coroutine
+    """
+    try:
+        # Try to get the current event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop running, safe to use asyncio.run()
+        return asyncio.run(coro)
+
+    # Event loop already running - use nest_asyncio if available,
+    # otherwise run in a separate thread
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(coro)
+    except ImportError:
+        # nest_asyncio not available - run in thread pool
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
 
 import pandas as pd
 import streamlit as st
@@ -81,6 +118,54 @@ def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
     except Exception:
         pass
     return os.environ.get(key, default)
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal attacks.
+
+    Removes directory components and special characters that could
+    be used to escape the intended directory.
+
+    Args:
+        filename: Original filename from user upload
+
+    Returns:
+        Safe filename with only the base name and allowed characters
+    """
+    # Extract only the base filename (remove any path components)
+    safe_name = Path(filename).name
+
+    # Remove any remaining path separators and null bytes
+    safe_name = safe_name.replace('/', '_').replace('\\', '_').replace('\x00', '')
+
+    # Remove leading dots to prevent hidden files
+    safe_name = safe_name.lstrip('.')
+
+    # If empty after sanitization, use a default name
+    if not safe_name:
+        safe_name = "uploaded_file.pdf"
+
+    return safe_name
+
+
+def cleanup_temp_files() -> None:
+    """Clean up temporary files from previous sessions."""
+    import shutil
+
+    temp_paths = st.session_state.get('temp_pdf_paths', [])
+    if temp_paths:
+        for path in temp_paths:
+            try:
+                if isinstance(path, Path) and path.exists():
+                    # Get parent temp directory
+                    temp_dir = path.parent
+                    if temp_dir.exists() and str(temp_dir).startswith(tempfile.gettempdir()):
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        break  # All files are in same temp dir
+            except Exception:
+                pass  # Ignore cleanup errors
+        st.session_state.temp_pdf_paths = []
 
 
 def init_session_state() -> None:
@@ -422,7 +507,7 @@ def load_boards_async(force_rerun: bool = False) -> None:
             st.session_state.boards_error = None
             pipeline = get_pipeline()
             if pipeline.monday_configured:
-                boards = asyncio.run(pipeline.monday.list_boards())
+                boards = run_async(pipeline.monday.list_boards())
                 st.session_state.monday_boards = boards
             st.session_state.boards_loading = False
             if force_rerun:
@@ -499,7 +584,7 @@ def render_stepper() -> None:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button(f"← Retour", key=f"stepper_nav_{stage_num}", use_container_width=True):
+                if st.button(f"← Retour", key=f"stepper_nav_{stage_num}", width="stretch"):
                     # Reset extraction state when going back to stage 1
                     if stage_num == 1:
                         st.session_state.combined_data = None
@@ -542,7 +627,7 @@ def render_sidebar() -> None:
             """, unsafe_allow_html=True)
 
             if not api_from_secrets:
-                if st.button("Déconnecter", key="disconnect_api", use_container_width=True):
+                if st.button("Déconnecter", key="disconnect_api", width="stretch"):
                     st.session_state.monday_api_key = None
                     st.session_state.monday_boards = None
                     st.rerun()
@@ -561,7 +646,7 @@ def render_sidebar() -> None:
                 label_visibility="collapsed"
             )
             if api_key:
-                if st.button("🔌 Connecter", type="primary", use_container_width=True):
+                if st.button("🔌 Connecter", type="primary", width="stretch"):
                     st.session_state.monday_api_key = api_key
                     st.rerun()
 
@@ -578,7 +663,7 @@ def render_sidebar() -> None:
                 """, unsafe_allow_html=True)
             elif st.session_state.get('boards_error'):
                 st.error(f"Erreur: {st.session_state.boards_error}")
-                if st.button("🔄 Réessayer", use_container_width=True, type="primary"):
+                if st.button("🔄 Réessayer", width="stretch", type="primary"):
                     st.session_state.boards_error = None
                     st.session_state.monday_boards = None
                     load_boards_async(force_rerun=True)
@@ -590,11 +675,11 @@ def render_sidebar() -> None:
                     <div class="value">📋 {board_count} boards</div>
                 </div>
                 """, unsafe_allow_html=True)
-                if st.button("🔄 Rafraîchir", use_container_width=True):
+                if st.button("🔄 Rafraîchir", width="stretch"):
                     st.session_state.monday_boards = None
                     load_boards_async(force_rerun=True)
             else:
-                if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
+                if st.button("📥 Charger les boards", width="stretch", type="primary"):
                     load_boards_async(force_rerun=True)
 
         st.markdown("---")
@@ -632,7 +717,7 @@ def render_sidebar() -> None:
 
         # Quick actions
         if st.session_state.stage > 1:
-            if st.button("⬅️ Recommencer", use_container_width=True):
+            if st.button("⬅️ Recommencer", width="stretch"):
                 reset_pipeline()
                 st.rerun()
 
@@ -1012,7 +1097,7 @@ def render_pdf_extraction_tab() -> None:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         can_proceed = st.session_state.selected_board_id is not None
-        if st.button(button_text, type="primary", use_container_width=True, disabled=not can_proceed):
+        if st.button(button_text, type="primary", width="stretch", disabled=not can_proceed):
             # Reset extraction state for new extraction
             st.session_state.combined_data = None
             st.session_state.extraction_results = {}
@@ -1091,6 +1176,11 @@ def run_extraction() -> None:
 
     pipeline = get_pipeline()
 
+    # Reset extractor clients if a custom model was selected
+    # This ensures new clients are created with the updated model config
+    if selected_model:
+        pipeline.reset_extractor_clients()
+
     # ===== ENHANCED PROGRESS UI =====
     st.markdown("---")
 
@@ -1128,12 +1218,17 @@ def run_extraction() -> None:
     status_text = st.empty()
     fallback_alert = st.empty()
 
-    # Save files to temp directory
+    # Clean up previous temp files before creating new ones
+    cleanup_temp_files()
+
+    # Save files to temp directory with sanitized names
     temp_dir = tempfile.mkdtemp()
     temp_paths = []
 
     for file in uploaded_files:
-        temp_path = Path(temp_dir) / file.name
+        # Sanitize filename to prevent path traversal attacks
+        safe_filename = sanitize_filename(file.name)
+        temp_path = Path(temp_dir) / safe_filename
         temp_path.write_bytes(file.read())
         temp_paths.append(temp_path)
         file.seek(0)
@@ -1177,7 +1272,7 @@ def run_extraction() -> None:
 
     try:
         # Run extraction
-        batch_result = asyncio.run(
+        batch_result = run_async(
             pipeline.process_batch(
                 pdf_paths=temp_paths,
                 source=st.session_state.selected_source,
@@ -1444,7 +1539,7 @@ def render_stage_2() -> None:
 
                     st.dataframe(
                         ecart_df[display_cols],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
 
@@ -1458,7 +1553,7 @@ def render_stage_2() -> None:
 
                     st.dataframe(
                         bonus_df[display_cols],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
 
@@ -1466,7 +1561,7 @@ def render_stage_2() -> None:
                 with st.expander("📊 Voir toutes les données avec vérification", expanded=False):
                     st.dataframe(
                         df_verified,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
         else:
@@ -1526,12 +1621,14 @@ def render_stage_2() -> None:
 
         with col_btn:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🔄 Ré-extraire", type="primary", use_container_width=True):
+            if st.button("🔄 Ré-extraire", type="primary", width="stretch"):
                 st.session_state.selected_model = selected_model_id
                 st.session_state.combined_data = None
                 st.session_state.extraction_results = {}
                 st.session_state.extraction_usage = None
                 st.session_state.force_refresh = True
+                # IMPORTANT: Reset pipeline to force new extractors with new model
+                st.session_state.pipeline = None
                 st.rerun()
 
         st.markdown("---")
@@ -1636,7 +1733,7 @@ def render_stage_2() -> None:
             # Always show apply button when multiple files
             col_apply, col_reset = st.columns([3, 1])
             with col_apply:
-                if st.button("✅ Appliquer les modifications de groupes", type="primary", use_container_width=True):
+                if st.button("✅ Appliquer les modifications de groupes", type="primary", width="stretch"):
                     # Update the dataframe with new groups
                     changes_made = False
                     for filename in unique_files:
@@ -1666,7 +1763,7 @@ def render_stage_2() -> None:
                         st.info("Aucune modification détectée.")
 
             with col_reset:
-                if st.button("🔄 Reset", use_container_width=True):
+                if st.button("🔄 Reset", width="stretch"):
                     st.session_state.file_group_overrides = {}
                     st.rerun()
 
@@ -1717,7 +1814,7 @@ def render_stage_2() -> None:
                     manual_group if manual_group != "(Garder auto-détection)" else None
                 )
                 if final_group:
-                    if st.button("Appliquer", use_container_width=True, type="primary"):
+                    if st.button("Appliquer", width="stretch", type="primary"):
                         df['_target_group'] = final_group
                         st.session_state.combined_data = df
                         st.success(f"Groupe modifié: {final_group}")
@@ -1746,7 +1843,7 @@ def render_stage_2() -> None:
                 data=csv,
                 file_name=f"commissions_{st.session_state.selected_source}.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )
         with col2:
             # Excel export
@@ -1759,7 +1856,7 @@ def render_stage_2() -> None:
                 data=excel_data,
                 file_name=f"commissions_{st.session_state.selected_source}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width="stretch"
             )
 
         st.markdown("---")
@@ -1797,12 +1894,12 @@ def render_stage_2() -> None:
     footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
     with footer_col1:
-        if st.button("Retour", use_container_width=True):
+        if st.button("Retour", width="stretch"):
             reset_pipeline()
             st.rerun()
 
     with footer_col3:
-        if st.button("Uploader vers Monday.com", type="primary", use_container_width=True):
+        if st.button("Uploader vers Monday.com", type="primary", width="stretch"):
             st.session_state.stage = 3
             st.rerun()
 
@@ -1860,30 +1957,45 @@ def render_stage_3() -> None:
         else:
             st.info("Les données vont être uploadées vers Monday.com.")
 
+            # Confirmation checkbox for safety
+            confirm_upload = st.checkbox(
+                "✅ Je confirme vouloir uploader ces données vers Monday.com",
+                value=False,
+                key="confirm_upload_checkbox"
+            )
+
             footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
             with footer_col1:
-                if st.button("Retour", use_container_width=True):
+                if st.button("Retour", width="stretch"):
                     st.session_state.stage = 2
                     st.rerun()
 
             with footer_col3:
-                if st.button("Confirmer l'upload", type="primary", use_container_width=True):
+                if st.button(
+                    "Confirmer l'upload",
+                    type="primary",
+                    width="stretch",
+                    disabled=not confirm_upload
+                ):
                     # Set uploading state and rerun to hide the button
                     st.session_state.is_uploading = True
                     st.rerun()
+
+            if not confirm_upload:
+                st.caption("⚠️ Cochez la case de confirmation pour activer le bouton d'upload")
     else:
         render_upload_result(st.session_state.upload_result)
 
         st.markdown("---")
         col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
-            if st.button("Nouveau pipeline", use_container_width=True):
+            if st.button("Nouveau pipeline", width="stretch"):
                 reset_pipeline()
                 st.rerun()
         with col3:
             board_id = st.session_state.selected_board_id
-            st.link_button("Ouvrir Monday.com", f"https://monday.com/boards/{board_id}", use_container_width=True)
+            st.link_button("Ouvrir Monday.com", f"https://monday.com/boards/{board_id}", width="stretch")
 
 
 def execute_upload(df: pd.DataFrame) -> None:
@@ -1925,7 +2037,7 @@ def execute_upload(df: pd.DataFrame) -> None:
 
             try:
                 # Create or get group
-                group_result = asyncio.run(
+                group_result = run_async(
                     pipeline.monday.get_or_create_group(board_id, str(group_name))
                 )
                 group_id = group_result.id if group_result.success else None
@@ -1944,7 +2056,7 @@ def execute_upload(df: pd.DataFrame) -> None:
                     )
 
                 # Upload
-                result = asyncio.run(
+                result = run_async(
                     pipeline.monday.upload_dataframe(
                         df=export_df,
                         board_id=board_id,

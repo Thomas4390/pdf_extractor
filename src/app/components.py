@@ -105,7 +105,7 @@ def render_stepper(current_stage: int) -> Optional[int]:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button("Retour", key=f"stepper_nav_{stage_num}", use_container_width=True):
+                if st.button("Retour", key=f"stepper_nav_{stage_num}", width="stretch"):
                     new_stage = stage_num
 
     return new_stage
@@ -127,10 +127,10 @@ def render_metrics_dashboard(
     Args:
         row_count: Number of extracted rows
         cost: Cost display string (e.g., "$0.0234" or "Cache")
-        model: Model name (will be truncated if > 15 chars)
+        model: Model name (will be truncated if > 20 chars)
         status: Status display (e.g., "OK" or "3 Ecarts")
     """
-    model_display = model[:15] if len(model) > 15 else model
+    model_display = model[:20] + "..." if len(model) > 20 else model
 
     st.markdown(f"""
     <div class="metrics-dashboard animate-fade-in">

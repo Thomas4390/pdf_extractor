@@ -234,6 +234,16 @@ class Pipeline:
         self._semaphore = asyncio.Semaphore(max_parallel)
         self._max_parallel = max_parallel
 
+    def reset_extractor_clients(self) -> None:
+        """
+        Reset all extractors' cached clients.
+
+        Call this when the model configuration has changed to ensure
+        extractors create new clients with the updated model settings.
+        """
+        for extractor in self._extractors.values():
+            extractor._configured_client = None
+
     # -------------------------------------------------------------------------
     # Source detection
     # -------------------------------------------------------------------------
