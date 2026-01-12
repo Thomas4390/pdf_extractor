@@ -105,6 +105,8 @@ class OpenRouterClient:
             "total_completion_tokens": 0,
             "total_cost": 0.0,
             "request_count": 0,
+            "last_model_used": None,  # Track the actual model used (including fallbacks)
+            "models_used": [],  # List of all models used in this session
         }
 
     def _format_number(self, num: int) -> str:
@@ -143,6 +145,9 @@ class OpenRouterClient:
         self.session_usage["total_completion_tokens"] += completion_tokens
         self.session_usage["total_cost"] += cost
         self.session_usage["request_count"] += 1
+        self.session_usage["last_model_used"] = model
+        if model not in self.session_usage["models_used"]:
+            self.session_usage["models_used"].append(model)
 
         # Build display
         model_short = model.split("/")[-1] if "/" in model else model

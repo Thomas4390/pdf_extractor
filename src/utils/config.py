@@ -2,6 +2,7 @@
 Configuration management for the VLM PDF Extractor.
 
 Handles environment variables and application settings using Pydantic.
+Supports both local .env files and Streamlit Cloud secrets.
 """
 
 import os
@@ -17,6 +18,24 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Load .env from project root
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
+    """
+    Get secret from Streamlit secrets or environment variables.
+
+    Priority: Streamlit secrets > Environment variables > Default
+    """
+    # Try Streamlit secrets first (for Streamlit Cloud deployment)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+
+    # Fall back to environment variables
+    return os.environ.get(key, default)
 
 
 class Settings(BaseSettings):
@@ -104,7 +123,9 @@ settings = get_settings()
 
 def get_openrouter_api_key() -> str:
     """
-    Retrieve OpenRouter API key from environment.
+    Retrieve OpenRouter API key from Streamlit secrets or environment.
+
+    Priority: Streamlit secrets > Environment variables > Settings
 
     Returns:
         str: The API key
@@ -112,11 +133,12 @@ def get_openrouter_api_key() -> str:
     Raises:
         ValueError: If API key is not configured
     """
-    key = settings.openrouter_api_key
+    # Try Streamlit secrets first, then environment, then settings
+    key = _get_secret("OPENROUTER_API_KEY") or settings.openrouter_api_key
     if not key:
         raise ValueError(
             "OPENROUTER_API_KEY not configured. "
-            "Add it to your .env file or set it as an environment variable."
+            "Add it to your .env file, environment variables, or Streamlit secrets."
         )
     return key
 
