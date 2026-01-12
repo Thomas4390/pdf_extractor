@@ -14,7 +14,12 @@ from pydantic import BaseModel
 from ..clients.cache import ExtractionCache
 from ..clients.openrouter import OpenRouterClient
 from ..utils.config import get_cache_dir, settings
-from ..utils.model_registry import ExtractionMode, get_model_config, get_pages_for_extraction
+from ..utils.model_registry import (
+    ExtractionMode,
+    get_model_config,
+    get_pages_for_extraction,
+    get_default_text_model,
+)
 from ..utils.pdf import get_pdf_hash, get_pdf_page_count, pdf_to_images, pdf_to_text
 
 T = TypeVar("T", bound=BaseModel)
@@ -193,9 +198,10 @@ class BaseExtractor(ABC, Generic[T]):
                 return self.model_class(**cached)
 
         mode = self.extraction_mode
+        model_config = get_model_config(self.document_type)
 
         if mode == ExtractionMode.VISION:
-            # Vision mode: send PDF pages as images
+            # Vision mode: send PDF pages as images to VLM
             images = self.get_images(pdf_path)
             result = await self.client.validate_and_extract(
                 images=images,
@@ -203,8 +209,9 @@ class BaseExtractor(ABC, Generic[T]):
                 user_prompt=self.user_prompt,
                 model_class=self.model_class,
             )
-        else:
-            # Text mode: extract text and send to LLM
+
+        elif mode == ExtractionMode.TEXT:
+            # Text mode: extract text via PyMuPDF and send to LLM
             pdf_text = self.get_text(pdf_path)
             user_prompt_with_text = f"{self.user_prompt}\n\n--- PDF TEXT CONTENT ---\n{pdf_text}"
             raw_result = await self.client.extract_with_text(
@@ -212,6 +219,48 @@ class BaseExtractor(ABC, Generic[T]):
                 user_prompt=user_prompt_with_text,
             )
             result = self.model_class(**raw_result)
+
+        elif mode == ExtractionMode.PDF_NATIVE:
+            # PDF Native mode: send PDF directly via file-parser plugin
+            raw_result = await self.client.extract_with_pdf_native(
+                pdf_path=str(pdf_path),
+                system_prompt=self.system_prompt,
+                user_prompt=self.user_prompt,
+                ocr_engine=model_config.ocr_engine.value,
+            )
+            result = self.model_class(**raw_result)
+
+        elif mode == ExtractionMode.HYBRID:
+            # Hybrid mode: Phase 1 OCR + Phase 2 LLM text analysis
+            # Phase 1: Extract text using OCR via file-parser
+            ocr_prompt = "Extract ALL text from this PDF document exactly as written. Preserve the structure including tables, lists, and formatting."
+            ocr_result = await self.client.extract_with_pdf_native(
+                pdf_path=str(pdf_path),
+                system_prompt="You are an OCR system. Extract text verbatim.",
+                user_prompt=ocr_prompt,
+                ocr_engine=model_config.ocr_engine.value,
+                model=model_config.text_analysis_model or get_default_text_model(),
+            )
+
+            # OCR result might be a dict with content or just text
+            if isinstance(ocr_result, dict):
+                extracted_text = ocr_result.get("text", str(ocr_result))
+            else:
+                extracted_text = str(ocr_result)
+
+            # Phase 2: Analyze extracted text with LLM
+            analysis_model = model_config.text_analysis_model or get_default_text_model()
+            user_prompt_with_text = f"{self.user_prompt}\n\n--- EXTRACTED DOCUMENT TEXT ---\n{extracted_text}"
+
+            raw_result = await self.client.extract_with_text(
+                system_prompt=self.system_prompt,
+                user_prompt=user_prompt_with_text,
+                model=analysis_model,
+            )
+            result = self.model_class(**raw_result)
+
+        else:
+            raise ValueError(f"Unsupported extraction mode: {mode}")
 
         # Cache the result
         if settings.cache_enabled:
@@ -235,7 +284,7 @@ class BaseExtractor(ABC, Generic[T]):
         Extract data without Pydantic validation.
 
         Useful for debugging or when schema flexibility is needed.
-        Uses vision or text mode based on the document type configuration.
+        Uses vision, text, pdf_native, or hybrid mode based on the document type configuration.
 
         Args:
             pdf_path: Path to the PDF file
@@ -245,6 +294,7 @@ class BaseExtractor(ABC, Generic[T]):
         """
         pdf_path = Path(pdf_path)
         mode = self.extraction_mode
+        model_config = get_model_config(self.document_type)
 
         if mode == ExtractionMode.VISION:
             images = self.get_images(pdf_path)
@@ -253,13 +303,51 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=self.user_prompt,
             )
-        else:
+
+        elif mode == ExtractionMode.TEXT:
             pdf_text = self.get_text(pdf_path)
             user_prompt_with_text = f"{self.user_prompt}\n\n--- PDF TEXT CONTENT ---\n{pdf_text}"
             return await self.client.extract_with_text(
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt_with_text,
             )
+
+        elif mode == ExtractionMode.PDF_NATIVE:
+            return await self.client.extract_with_pdf_native(
+                pdf_path=str(pdf_path),
+                system_prompt=self.system_prompt,
+                user_prompt=self.user_prompt,
+                ocr_engine=model_config.ocr_engine.value,
+            )
+
+        elif mode == ExtractionMode.HYBRID:
+            # Phase 1: OCR extraction
+            ocr_prompt = "Extract ALL text from this PDF document exactly as written. Preserve the structure."
+            ocr_result = await self.client.extract_with_pdf_native(
+                pdf_path=str(pdf_path),
+                system_prompt="You are an OCR system. Extract text verbatim.",
+                user_prompt=ocr_prompt,
+                ocr_engine=model_config.ocr_engine.value,
+                model=model_config.text_analysis_model or get_default_text_model(),
+            )
+
+            if isinstance(ocr_result, dict):
+                extracted_text = ocr_result.get("text", str(ocr_result))
+            else:
+                extracted_text = str(ocr_result)
+
+            # Phase 2: LLM analysis
+            analysis_model = model_config.text_analysis_model or get_default_text_model()
+            user_prompt_with_text = f"{self.user_prompt}\n\n--- EXTRACTED DOCUMENT TEXT ---\n{extracted_text}"
+
+            return await self.client.extract_with_text(
+                system_prompt=self.system_prompt,
+                user_prompt=user_prompt_with_text,
+                model=analysis_model,
+            )
+
+        else:
+            raise ValueError(f"Unsupported extraction mode: {mode}")
 
     def is_cached(self, pdf_path: Union[str, Path]) -> bool:
         """Check if a PDF's extraction is cached."""

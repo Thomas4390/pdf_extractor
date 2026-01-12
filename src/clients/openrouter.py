@@ -49,9 +49,22 @@ class OpenRouterClient:
     - Prompt caching support (via consistent system prompts)
     - Multi-level fallback support (primary → secondary → tertiary)
     - JSON repair for malformed responses
+    - Usage and cost tracking per request
     """
 
     BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    # ANSI color codes for terminal output
+    COLORS = {
+        "reset": "\033[0m",
+        "bold": "\033[1m",
+        "dim": "\033[2m",
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "blue": "\033[94m",
+        "cyan": "\033[96m",
+        "gray": "\033[90m",
+    }
 
     def __init__(
         self,
@@ -85,6 +98,107 @@ class OpenRouterClient:
             "HTTP-Referer": "https://github.com/pdf-extractor",
             "X-Title": "PDF Extractor",
         }
+
+        # Track cumulative usage for session
+        self.session_usage = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_cost": 0.0,
+            "request_count": 0,
+        }
+
+    def _format_number(self, num: int) -> str:
+        """Format number with thousands separator."""
+        return f"{num:,}"
+
+    def _display_usage(self, response: dict, model: str) -> dict:
+        """
+        Display usage statistics and cost after an API call.
+
+        Args:
+            response: API response containing usage data
+            model: Model identifier used for the request
+
+        Returns:
+            Usage dict for external tracking
+        """
+        usage = response.get("usage", {})
+        if not usage:
+            return {}
+
+        c = self.COLORS
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", 0)
+        cost = usage.get("cost", 0)
+
+        # Get details
+        prompt_details = usage.get("prompt_tokens_details", {})
+        completion_details = usage.get("completion_tokens_details", {})
+        cached_tokens = prompt_details.get("cached_tokens", 0)
+        reasoning_tokens = completion_details.get("reasoning_tokens", 0)
+
+        # Update session totals
+        self.session_usage["total_prompt_tokens"] += prompt_tokens
+        self.session_usage["total_completion_tokens"] += completion_tokens
+        self.session_usage["total_cost"] += cost
+        self.session_usage["request_count"] += 1
+
+        # Build display
+        model_short = model.split("/")[-1] if "/" in model else model
+
+        print(f"\n{c['gray']}{'─' * 60}{c['reset']}")
+        print(f"{c['cyan']}💰 Usage{c['reset']} {c['dim']}({model_short}){c['reset']}")
+        print(f"{c['gray']}{'─' * 60}{c['reset']}")
+
+        # Token breakdown
+        print(f"   {c['blue']}Tokens:{c['reset']}  {self._format_number(prompt_tokens)} prompt + {self._format_number(completion_tokens)} completion = {c['bold']}{self._format_number(total_tokens)}{c['reset']}")
+
+        # Cache info if applicable
+        if cached_tokens > 0:
+            cache_pct = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0
+            print(f"   {c['green']}Cached:{c['reset']}  {self._format_number(cached_tokens)} tokens ({cache_pct:.0f}% of prompt)")
+
+        # Reasoning tokens if applicable
+        if reasoning_tokens > 0:
+            print(f"   {c['yellow']}Reasoning:{c['reset']} {self._format_number(reasoning_tokens)} tokens")
+
+        # Cost
+        if cost > 0:
+            print(f"   {c['green']}Cost:{c['reset']}    {c['bold']}${cost:.6f}{c['reset']}")
+        else:
+            print(f"   {c['green']}Cost:{c['reset']}    {c['dim']}$0.000000 (or not reported){c['reset']}")
+
+        print(f"{c['gray']}{'─' * 60}{c['reset']}\n")
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cached_tokens": cached_tokens,
+            "cost": cost,
+            "model": model,
+        }
+
+    def get_session_summary(self) -> dict:
+        """Get cumulative usage statistics for the session."""
+        return self.session_usage.copy()
+
+    def display_session_summary(self) -> None:
+        """Display cumulative usage for all requests in this session."""
+        c = self.COLORS
+        s = self.session_usage
+
+        if s["request_count"] == 0:
+            return
+
+        print(f"\n{c['cyan']}{'═' * 60}{c['reset']}")
+        print(f"{c['bold']}📊 Session Summary{c['reset']}")
+        print(f"{c['cyan']}{'═' * 60}{c['reset']}")
+        print(f"   Requests:    {s['request_count']}")
+        print(f"   Total tokens: {self._format_number(s['total_prompt_tokens'] + s['total_completion_tokens'])}")
+        print(f"   {c['bold']}Total cost:  ${s['total_cost']:.6f}{c['reset']}")
+        print(f"{c['cyan']}{'═' * 60}{c['reset']}\n")
 
     def _encode_image(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 data URL."""
@@ -133,6 +247,7 @@ class OpenRouterClient:
             "model": model or self.model,
             "messages": messages,
             "temperature": temperature,
+            "usage": {"include": True},  # Request usage/cost data in response
             # Note: response_format removed - causes 404 with some OpenRouter data policies
         }
 
@@ -231,6 +346,10 @@ class OpenRouterClient:
                 raise ValueError(f"Empty content in response: {result}")
 
             parsed = self._parse_json_response(content)
+
+            # Display usage/cost for this model
+            self._display_usage(result, model)
+
             return parsed, None, content
 
         except json.JSONDecodeError as e:
@@ -298,6 +417,9 @@ class OpenRouterClient:
                 last_content = content
                 parsed = self._parse_json_response(content)
 
+                # Display usage/cost
+                self._display_usage(result, self.model)
+
                 logger.info("VLM extraction successful")
                 return parsed
 
@@ -359,11 +481,12 @@ class OpenRouterClient:
 
             if result is not None:
                 print("✅ Fallback model succeeded!")
+                # Display usage for fallback (content holds the raw response in _try_model_extraction)
                 logger.info("Fallback model extraction successful")
                 return result
 
             logger.warning(f"Fallback model also failed: {error}")
-            print(f"❌ Fallback model failed: {error}")
+            print(f"❌ Fallback model also failed: {error}")
 
             if isinstance(error, json.JSONDecodeError) and content:
                 debug_path = save_debug_json(
@@ -402,7 +525,7 @@ class OpenRouterClient:
                 return result
 
             logger.warning(f"Secondary fallback also failed: {error}")
-            print(f"❌ Secondary fallback failed: {error}")
+            print(f"❌ Secondary fallback also failed: {error}")
 
             # Try to recover partial JSON from secondary
             if isinstance(error, json.JSONDecodeError) and content:
@@ -509,6 +632,10 @@ class OpenRouterClient:
 
                 # Validate with Pydantic
                 validated = model_class(**parsed)
+
+                # Display usage/cost
+                self._display_usage(result, self.model)
+
                 logger.info("VLM extraction and validation successful")
                 return validated
 
@@ -625,6 +752,9 @@ class OpenRouterClient:
                 # Validate with Pydantic
                 validated = model_class(**parsed)
 
+                # Display usage/cost for fallback
+                self._display_usage(result, self.fallback_model)
+
                 print("✅ Fallback model succeeded!")
                 logger.info("Fallback model extraction and validation successful")
                 return validated
@@ -734,6 +864,9 @@ class OpenRouterClient:
 
                     parsed = json.loads(content)
 
+                    # Display usage/cost
+                    self._display_usage(result, self.model)
+
                     logger.info("Text LLM extraction successful")
                     return parsed
 
@@ -787,3 +920,180 @@ class OpenRouterClient:
             )
         finally:
             self.model = original_model
+
+    async def extract_with_pdf_native(
+        self,
+        pdf_path: str,
+        system_prompt: str,
+        user_prompt: str,
+        ocr_engine: str = "mistral-ocr",
+        max_retries: Optional[int] = None,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """
+        Send a PDF directly to OpenRouter via the file-parser plugin.
+
+        This method uses OpenRouter's native PDF processing with OCR engines:
+        - "pdf-text": Free, for text-based PDFs
+        - "mistral-ocr": Paid, for scanned documents (better quality)
+
+        Args:
+            pdf_path: Path to the PDF file
+            system_prompt: System instructions
+            user_prompt: User prompt describing the extraction task
+            ocr_engine: OCR engine ("pdf-text" or "mistral-ocr")
+            max_retries: Number of retry attempts (defaults to settings)
+            temperature: Model temperature (defaults to settings)
+            model: Optional model override (defaults to self.model)
+            max_tokens: Maximum tokens for response
+
+        Returns:
+            Parsed JSON response from the model
+
+        Raises:
+            OpenRouterError: If all retries fail
+            FileNotFoundError: If PDF file doesn't exist
+        """
+        from pathlib import Path
+
+        max_retries = max_retries or settings.vlm_max_retries
+        temperature = temperature if temperature is not None else settings.vlm_temperature
+        max_tokens = max_tokens or settings.vlm_max_tokens
+        request_model = model or self.model
+
+        # Read and encode PDF
+        pdf_file = Path(pdf_path)
+        if not pdf_file.exists():
+            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
+        pdf_bytes = pdf_file.read_bytes()
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        # Build messages with file type (OpenRouter file-parser format)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": pdf_file.name,
+                            "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        last_error: Optional[Exception] = None
+        last_content: Optional[str] = None
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(
+                    f"PDF native request attempt {attempt + 1}/{max_retries} "
+                    f"(ocr_engine={ocr_engine}, model={request_model})"
+                )
+
+                # Build payload with file-parser plugin
+                payload = {
+                    "model": request_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "usage": {"include": True},
+                    "plugins": [
+                        {
+                            "id": "file-parser",
+                            "pdf": {"engine": ocr_engine},
+                        }
+                    ],
+                }
+
+                if max_tokens:
+                    payload["max_tokens"] = max_tokens
+
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        self.BASE_URL,
+                        headers=self.headers,
+                        json=payload,
+                    )
+
+                    if response.status_code == 429:
+                        raise OpenRouterRateLimitError("Rate limited by OpenRouter API")
+
+                    response.raise_for_status()
+                    result = response.json()
+
+                # Extract content from response
+                choices = result.get("choices", [])
+                if not choices:
+                    raise ValueError(f"No choices in response: {result}")
+
+                content = choices[0].get("message", {}).get("content", "")
+                if not content:
+                    raise ValueError(f"Empty content in response: {result}")
+
+                # Handle potential markdown code blocks
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+
+                last_content = content
+                parsed = self._parse_json_response(content)
+
+                # Display usage/cost
+                self._display_usage(result, request_model)
+
+                logger.info("PDF native extraction successful")
+                return parsed
+
+            except OpenRouterRateLimitError:
+                wait_time = 30 * (attempt + 1)
+                logger.warning(f"Rate limited, waiting {wait_time}s before retry")
+                await asyncio.sleep(wait_time)
+                last_error = OpenRouterRateLimitError("Rate limited")
+
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"HTTP error on attempt {attempt + 1}: {e}")
+                last_error = e
+                await asyncio.sleep(2**attempt)
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse error on attempt {attempt + 1}: {e}")
+                last_error = e
+
+                # Save debug file
+                error_details = f"Line {e.lineno}, column {e.colno}: {e.msg}"
+                debug_path = save_debug_json(
+                    last_content or "[No content]",
+                    "json_parse_pdf_native",
+                    error_details,
+                )
+
+                print("\n" + "=" * 70)
+                print(f"📋 Parse error at line {e.lineno}, column {e.colno}:")
+                print(f"   {e.msg}")
+                print(f"💾 Saved to: {debug_path}")
+                print("=" * 70 + "\n")
+
+                temperature = min(temperature + 0.1, 1.0)
+                await asyncio.sleep(2**attempt)
+
+            except Exception as e:
+                logger.warning(f"Unexpected error on attempt {attempt + 1}: {e}")
+                last_error = e
+                await asyncio.sleep(2**attempt)
+
+        raise OpenRouterError(
+            f"PDF native extraction failed after {max_retries} attempts. Last error: {last_error}"
+        )

@@ -430,12 +430,27 @@ class MondayClient:
         result = await self._execute_query(mutation)
         return result["data"]["create_column"]
 
+    # Column types that are read-only (computed by Monday.com)
+    READ_ONLY_COLUMN_TYPES = {
+        "formula",
+        "auto_number",
+        "creation_log",
+        "last_updated",
+        "item_id",
+        "subtasks",
+        "dependency",
+        "board_relation",
+        "mirror",
+        "button",
+        "doc",
+    }
+
     async def get_or_create_columns(
         self,
         board_id: int,
         column_names: list[str],
         default_type: ColumnType = ColumnType.TEXT
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], dict[str, str]]:
         """
         Get existing columns or create missing ones.
 
@@ -445,54 +460,58 @@ class MondayClient:
             default_type: Default type for new columns
 
         Returns:
-            Mapping of column_name -> column_id
+            Tuple of (column_id_map, column_type_map):
+            - column_id_map: column_name -> column_id (excludes read-only columns)
+            - column_type_map: column_name -> actual Monday.com column type
         """
-        # Check cache first
-        cache_key = str(board_id)
-        if cache_key in self._column_cache:
-            cached = self._column_cache[cache_key]
-            # Check if all columns are in cache
-            if all(name.lower() in [k.lower() for k in cached.keys()]
-                   for name in column_names):
-                return {
-                    name: cached[k]
-                    for name in column_names
-                    for k in cached.keys()
-                    if k.lower() == name.lower()
-                }
-
-        # Get existing columns
+        # Get existing columns (always refresh to check types)
         existing = await self.list_columns(board_id)
+
+        # Build maps: title -> id and title -> type
         existing_map = {col["title"].lower(): col["id"] for col in existing}
+        existing_type_map = {col["title"].lower(): col["type"] for col in existing}
 
         column_id_map = {}
+        column_type_map = {}
 
         for col_name in column_names:
             col_name_lower = col_name.lower()
 
             if col_name_lower in existing_map:
-                column_id_map[col_name] = existing_map[col_name_lower]
+                col_id = existing_map[col_name_lower]
+                col_type = existing_type_map.get(col_name_lower, "text")
+
+                # Skip read-only column types
+                if col_type in self.READ_ONLY_COLUMN_TYPES:
+                    print(f"Skipping read-only column '{col_name}' (type: {col_type})")
+                    continue
+
+                # Also skip by column ID prefix (backup check)
+                if col_id.startswith(self.READ_ONLY_COLUMN_ID_PREFIXES):
+                    print(f"Skipping read-only column '{col_name}' (id: {col_id})")
+                    continue
+
+                column_id_map[col_name] = col_id
+                column_type_map[col_name] = col_type
             else:
                 # Determine column type
-                col_type = self.COLUMN_TYPE_MAPPING.get(col_name, default_type)
+                col_type_enum = self.COLUMN_TYPE_MAPPING.get(col_name, default_type)
 
                 try:
                     new_col = await self.create_column(
                         board_id=board_id,
                         title=col_name,
-                        column_type=col_type
+                        column_type=col_type_enum
                     )
                     column_id_map[col_name] = new_col["id"]
+                    column_type_map[col_name] = col_type_enum.value
                     # Wait for Monday.com to process
                     await asyncio.sleep(1.0)
                 except MondayError as e:
                     print(f"Warning: Could not create column '{col_name}': {e}")
                     continue
 
-        # Update cache
-        self._column_cache[cache_key] = column_id_map
-
-        return column_id_map
+        return column_id_map, column_type_map
 
     # -------------------------------------------------------------------------
     # Item operations
@@ -555,17 +574,58 @@ class MondayClient:
     def _format_column_value(
         self,
         value: Any,
-        column_name: str
+        column_name: str,
+        actual_type: Optional[str] = None
     ) -> Any:
-        """Format a value for Monday.com API based on column type."""
+        """Format a value for Monday.com API based on actual column type.
+
+        Args:
+            value: The value to format
+            column_name: Column name (used as fallback for type lookup)
+            actual_type: Actual Monday.com column type string (e.g., "text", "numbers")
+        """
         if pd.isna(value) or value is None or value == "":
             return None
 
+        # Use actual Monday.com type if provided, otherwise fall back to our mapping
+        if actual_type:
+            # Map Monday.com type string to our formatting logic
+            if actual_type == "numbers" or actual_type == "numeric":
+                try:
+                    if isinstance(value, str):
+                        value = value.replace(" ", "").replace(",", ".")
+                        value = value.replace("$", "").replace("%", "")
+                    return float(value)
+                except (ValueError, TypeError):
+                    return None
+
+            elif actual_type == "date":
+                if isinstance(value, str) and len(value) >= 10:
+                    return {"date": value[:10]}
+                return None
+
+            elif actual_type == "status":
+                return {"label": str(value)}
+
+            elif actual_type == "checkbox" or actual_type == "boolean":
+                if isinstance(value, bool):
+                    return {"checked": "true" if value else "false"}
+                if isinstance(value, str):
+                    return {"checked": "true" if value.lower() in ("true", "oui", "yes", "1") else "false"}
+                return None
+
+            elif actual_type == "long_text":
+                return {"text": str(value)}
+
+            else:
+                # text, short_text, and other text-like columns
+                return str(value) if value else None
+
+        # Fallback to our mapping if actual_type not provided
         col_type = self.COLUMN_TYPE_MAPPING.get(column_name, ColumnType.TEXT)
 
         if col_type == ColumnType.NUMBERS:
             try:
-                # Handle string numbers with French formatting
                 if isinstance(value, str):
                     value = value.replace(" ", "").replace(",", ".")
                     value = value.replace("$", "").replace("%", "")
@@ -574,7 +634,6 @@ class MondayClient:
                 return None
 
         elif col_type == ColumnType.DATE:
-            # Expect YYYY-MM-DD format
             if isinstance(value, str) and len(value) >= 10:
                 return {"date": value[:10]}
             return None
@@ -596,17 +655,49 @@ class MondayClient:
             # Text column
             return str(value) if value else None
 
+    # Column ID prefixes that indicate read-only columns
+    READ_ONLY_COLUMN_ID_PREFIXES = (
+        "formula",
+        "auto_number",
+        "creation_log",
+        "last_updated",
+        "item_id",
+        "subitems",
+        "dependency",
+        "board_relation",
+        "mirror",
+        "button",
+        "doc",
+    )
+
     def _row_to_column_values(
         self,
         row: pd.Series,
-        column_id_map: dict[str, str]
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None
     ) -> dict:
-        """Convert a DataFrame row to Monday.com column_values format."""
+        """Convert a DataFrame row to Monday.com column_values format.
+
+        Automatically skips formula columns and other read-only columns
+        that cannot be set via the API.
+
+        Args:
+            row: DataFrame row to convert
+            column_id_map: column_name -> column_id mapping
+            column_type_map: column_name -> actual Monday.com type (optional)
+        """
         column_values = {}
+        column_type_map = column_type_map or {}
 
         for col_name, col_id in column_id_map.items():
+            # Skip read-only columns (formula, auto_number, etc.)
+            # These columns are auto-calculated by Monday.com
+            if col_id.startswith(self.READ_ONLY_COLUMN_ID_PREFIXES):
+                continue
+
             if col_name in row.index and col_name != "Nom Client":
-                formatted = self._format_column_value(row[col_name], col_name)
+                actual_type = column_type_map.get(col_name)
+                formatted = self._format_column_value(row[col_name], col_name, actual_type)
                 if formatted is not None:
                     column_values[col_id] = formatted
 
@@ -649,7 +740,7 @@ class MondayClient:
         ]
 
         if create_missing_columns:
-            column_id_map = await self.get_or_create_columns(
+            column_id_map, column_type_map = await self.get_or_create_columns(
                 board_id=board_id,
                 column_names=columns_to_create
             )
@@ -660,6 +751,11 @@ class MondayClient:
                 for col in existing
                 if col["title"] in columns_to_create
             }
+            column_type_map = {
+                col["title"]: col["type"]
+                for col in existing
+                if col["title"] in columns_to_create
+            }
 
         # Upload items with rate limiting
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -667,7 +763,7 @@ class MondayClient:
         async def upload_row(idx: int, row: pd.Series) -> CreateResult:
             async with semaphore:
                 item_name = str(row.get(item_name_column, f"Item {idx}"))
-                column_values = self._row_to_column_values(row, column_id_map)
+                column_values = self._row_to_column_values(row, column_id_map, column_type_map)
 
                 create_result = await self.create_item(
                     board_id=board_id,

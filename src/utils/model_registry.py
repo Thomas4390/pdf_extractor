@@ -12,8 +12,16 @@ from typing import Optional
 
 class ExtractionMode(Enum):
     """Mode of extraction from PDF."""
-    VISION = "vision"  # Send PDF pages as images
-    TEXT = "text"  # Extract text from PDF and send as text
+    VISION = "vision"  # Send PDF pages as images to VLM
+    TEXT = "text"  # Extract text from PDF via PyMuPDF and send to LLM
+    PDF_NATIVE = "pdf_native"  # Send PDF directly via OpenRouter file-parser plugin
+    HYBRID = "hybrid"  # Phase 1: OCR via file-parser, Phase 2: LLM text analysis
+
+
+class OcrEngine(Enum):
+    """OCR engine for PDF_NATIVE and HYBRID modes."""
+    PDF_TEXT = "pdf-text"  # Free, for text-based PDFs
+    MISTRAL_OCR = "mistral-ocr"  # Paid, for scanned documents (better quality)
 
 
 @dataclass
@@ -40,58 +48,62 @@ class ModelConfig:
     max_tokens: Optional[int] = None
     # Page configuration for this document type
     page_config: Optional[PageConfig] = None
+    # OCR engine for PDF_NATIVE and HYBRID modes
+    ocr_engine: OcrEngine = OcrEngine.MISTRAL_OCR
+    # LLM model for HYBRID mode Phase 2 analysis (defaults to DEFAULT_TEXT_MODEL)
+    text_analysis_model: Optional[str] = None
 
 
 # Default models
-DEFAULT_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct"  # Primary: fast, cost-effective
-ADVANCED_VISION_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"  # Secondary: more capable
-DEFAULT_TEXT_MODEL = "deepseek/deepseek-chat"  # Tertiary: text fallback (V3 stable)
+DEFAULT_VISION_MODEL = "google/gemini-3-flash-preview"  # Primary: Gemini 3 Flash
+FALLBACK_VISION_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"  # Fallback: Qwen 3 VL
+LEGACY_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct"  # Legacy: Qwen 2.5 VL
+DEFAULT_TEXT_MODEL = "deepseek/deepseek-chat"  # Text fallback (V3 stable)
 
 # Document type to model configuration mapping
 MODEL_REGISTRY: dict[str, ModelConfig] = {
-    # UV Assurance - Qwen 2.5 → Qwen3 → DeepSeek
+    # UV Assurance - Gemini 3 Flash → Qwen3 VL → DeepSeek
     # All pages are relevant
     "UV": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
-        fallback_model_id=ADVANCED_VISION_MODEL,
+        fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
         secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
         secondary_fallback_mode=ExtractionMode.TEXT,
         page_config=None,  # Use all pages
     ),
 
-    # Assomption Vie - Qwen 2.5 → Qwen3 → DeepSeek
+    # Assomption Vie - Gemini 3 Flash → Qwen3 VL → DeepSeek
     # Pages: 1 (summary), 3 (commissions), 5 (bonuses) - 0-indexed: 0, 2, 4
     "ASSOMPTION": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
-        fallback_model_id=ADVANCED_VISION_MODEL,
+        fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
         secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
         secondary_fallback_mode=ExtractionMode.TEXT,
         page_config=PageConfig(pages=[0, 2, 4]),  # Summary, Commissions, Bonuses
     ),
 
-    # IDC Propositions - Qwen 2.5 → Qwen3 → DeepSeek
+    # IDC Propositions - Gemini 3 Flash → Qwen3 VL → DeepSeek
     # All pages are relevant
     "IDC": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
-        fallback_model_id=ADVANCED_VISION_MODEL,
+        fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
         secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
         secondary_fallback_mode=ExtractionMode.TEXT,
         page_config=None,  # Use all pages
     ),
 
-    # IDC Statements (trailing fees) - Complex documents
-    # Using Qwen3 VL as primary (most capable), Qwen 2.5 as fallback
+    # IDC Statements (trailing fees) - Gemini 3 Flash → Qwen3 VL → DeepSeek
     # Skip first 2 pages (cover and summary)
     "IDC_STATEMENT": ModelConfig(
-        model_id=ADVANCED_VISION_MODEL,
+        model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
-        fallback_model_id=DEFAULT_VISION_MODEL,
+        fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
         secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
         secondary_fallback_mode=ExtractionMode.TEXT,

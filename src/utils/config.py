@@ -31,12 +31,12 @@ class Settings(BaseSettings):
 
     # VLM Configuration
     vlm_model: str = Field(
-        default="qwen/qwen2.5-vl-72b-instruct",
+        default="qwen/qwen3-vl-235b-a22b-instruct",
         description="Primary Vision LLM model to use",
     )
     vlm_fallback_model: str = Field(
-        default="deepseek/deepseek-v3.2",
-        description="Fallback Vision LLM model (larger/more capable) used when primary fails",
+        default="qwen/qwen2.5-vl-72b-instruct",
+        description="Fallback Vision LLM model used when primary fails",
     )
     vlm_temperature: float = Field(
         default=0.1,
@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     vlm_max_tokens: int = Field(
         default=16384,
         description="Maximum tokens for VLM response (high to prevent truncation)",
+    )
+
+    # Hybrid Mode Configuration
+    default_ocr_engine: str = Field(
+        default="mistral-ocr",
+        description="OCR engine for PDF_NATIVE/HYBRID modes: pdf-text (free) or mistral-ocr (paid)",
+    )
+    hybrid_analysis_model: str = Field(
+        default="deepseek/deepseek-chat",
+        description="LLM model for HYBRID mode Phase 2 text analysis",
     )
 
     # PDF Processing

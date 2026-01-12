@@ -11,14 +11,39 @@ This module handles:
 - Commission calculation using universal formula
 - Advisor name normalization
 - Board type detection based on source
+- Google Sheets advisor normalization
 """
 
+import os
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, Union
+from pathlib import Path
+from typing import Optional, Union, List, Dict, Any
 import re
 
 import pandas as pd
+
+# Try to import Google Sheets client
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSHEETS_AVAILABLE = True
+except ImportError:
+    GSHEETS_AVAILABLE = False
+
+# Try to load environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Try to import Streamlit for secrets access
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
 
 from ..models.uv import UVReport
 from ..models.idc import IDCReport
@@ -99,15 +124,23 @@ class DataUnifier:
     DEFAULT_BONUS_RATE = 1.75        # 175%
     DEFAULT_ON_COMMISSION_RATE = 0.75  # 75%
 
-    def __init__(self, advisor_matcher=None):
+    def __init__(self, advisor_matcher=None, auto_load_matcher: bool = True):
         """
         Initialise le DataUnifier.
 
         Args:
             advisor_matcher: Instance optionnelle d'AdvisorMatcher pour
                            normaliser les noms de conseillers
+            auto_load_matcher: Si True et advisor_matcher est None, charge
+                              automatiquement l'AdvisorMatcher (défaut: True)
         """
-        self.advisor_matcher = advisor_matcher
+        if advisor_matcher is not None:
+            self.advisor_matcher = advisor_matcher
+        elif auto_load_matcher:
+            from .advisor_matcher import get_advisor_matcher
+            self.advisor_matcher = get_advisor_matcher()
+        else:
+            self.advisor_matcher = None
 
     def unify(
         self,
@@ -159,10 +192,16 @@ class DataUnifier:
         return df, board_type
 
     def _normalize_advisor(self, name: str) -> str:
-        """Normalise un nom de conseiller via l'AdvisorMatcher."""
+        """
+        Normalise un nom de conseiller via l'AdvisorMatcher.
+
+        Retourne le format compact "Prénom, Initiale" (ex: "Guillaume, S")
+        en matchant avec la base de données des conseillers.
+        """
         if not name or not self.advisor_matcher:
             return name
-        result = self.advisor_matcher.match(str(name))
+        # Utilise match_compact pour obtenir le format "Prénom, Initiale"
+        result = self.advisor_matcher.match_compact(str(name))
         return result if result else name
 
     def _calculate_commission(
@@ -841,3 +880,212 @@ class DataUnifier:
             print(f"  ℹ️  UV: {filled_count} numéro(s) de police rempli(s) par ffill (même client)")
 
         return df
+
+    # =========================================================================
+    # GOOGLE SHEETS ADVISOR NORMALIZATION
+    # =========================================================================
+
+    @staticmethod
+    def _get_gsheets_credentials():
+        """
+        Get Google Cloud credentials from multiple sources (priority order):
+        1. Streamlit secrets (gcp_service_account table)
+        2. Service account JSON file
+        """
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+
+        # Try Streamlit secrets first
+        if STREAMLIT_AVAILABLE:
+            try:
+                if 'gcp_service_account' in st.secrets:
+                    creds_dict = dict(st.secrets['gcp_service_account'])
+                    return Credentials.from_service_account_info(creds_dict, scopes=scopes)
+            except Exception:
+                pass
+
+        # Fallback to file-based credentials
+        credentials_file = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_FILE')
+        if credentials_file:
+            # Resolve relative path from project root
+            if not os.path.isabs(credentials_file):
+                credentials_file = Path(__file__).parent.parent.parent / credentials_file
+
+            if Path(credentials_file).exists():
+                return Credentials.from_service_account_file(str(credentials_file), scopes=scopes)
+
+        return None
+
+    def normalize_gsheet_advisors(
+        self,
+        worksheet_name: Optional[str] = None,
+        column_name: str = 'Conseiller',
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Normalize advisor names in a Google Sheet using the AdvisorMatcher.
+
+        Connects to the Google Sheet configured in environment variables,
+        finds the specified column, and normalizes advisor names to the
+        compact format "Prénom, Initiale" (e.g., "Guillaume, S").
+
+        Args:
+            worksheet_name: Name of the worksheet to process. If None, processes
+                           all worksheets that have the column.
+            column_name: Name of the column containing advisor names (default: 'Conseiller')
+            dry_run: If True, only reports changes without applying them
+
+        Returns:
+            Dict with statistics:
+            {
+                'processed_sheets': list of sheet names processed,
+                'total_cells': int,
+                'normalized_count': int,
+                'unchanged_count': int,
+                'not_found_count': int,
+                'changes': list of (sheet, row, original, normalized) tuples,
+                'not_found': list of (sheet, row, original) tuples,
+            }
+
+        Raises:
+            RuntimeError: If gspread is not available or Google Sheets not configured
+        """
+        from .advisor_matcher import get_advisor_matcher
+
+        if not GSHEETS_AVAILABLE:
+            raise RuntimeError("gspread library not installed. Run: pip install gspread google-auth")
+
+        spreadsheet_id = os.environ.get('GOOGLE_SHEETS_SPREADSHEET_ID')
+        if not spreadsheet_id:
+            raise RuntimeError("GOOGLE_SHEETS_SPREADSHEET_ID not set in environment")
+
+        credentials = self._get_gsheets_credentials()
+        if not credentials:
+            raise RuntimeError("Could not get Google Sheets credentials. Check GOOGLE_SHEETS_CREDENTIALS_FILE")
+
+        # Connect to Google Sheets
+        client = gspread.authorize(credentials)
+        spreadsheet = client.open_by_key(spreadsheet_id)
+
+        # Get matcher
+        matcher = self.advisor_matcher or get_advisor_matcher()
+
+        # Results tracking
+        results = {
+            'processed_sheets': [],
+            'total_cells': 0,
+            'normalized_count': 0,
+            'unchanged_count': 0,
+            'not_found_count': 0,
+            'changes': [],
+            'not_found': [],
+        }
+
+        # Get worksheets to process
+        if worksheet_name:
+            try:
+                worksheets = [spreadsheet.worksheet(worksheet_name)]
+            except gspread.WorksheetNotFound:
+                raise ValueError(f"Worksheet '{worksheet_name}' not found in spreadsheet")
+        else:
+            worksheets = spreadsheet.worksheets()
+
+        print(f"\n{'='*60}")
+        print("Google Sheets Advisor Normalization")
+        print(f"{'='*60}")
+        print(f"Spreadsheet ID: {spreadsheet_id}")
+        print(f"Column: {column_name}")
+        print(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}")
+
+        for ws in worksheets:
+            try:
+                # Get all values including headers
+                all_values = ws.get_all_values()
+                if not all_values:
+                    continue
+
+                headers = all_values[0]
+
+                # Check if this worksheet has the target column
+                if column_name not in headers:
+                    continue
+
+                col_idx = headers.index(column_name)
+                col_letter = chr(ord('A') + col_idx)
+
+                print(f"\n--- Processing: {ws.title} ---")
+                print(f"  Column '{column_name}' found at index {col_idx + 1} ({col_letter})")
+                results['processed_sheets'].append(ws.title)
+
+                # Process each row (skip header)
+                updates_batch = []
+                for row_idx, row in enumerate(all_values[1:], start=2):  # row_idx is 1-based for gspread
+                    if col_idx >= len(row):
+                        continue
+
+                    original_name = row[col_idx].strip()
+                    if not original_name or original_name.lower() in ['none', 'nan', 'null', '']:
+                        continue
+
+                    results['total_cells'] += 1
+
+                    # Try to normalize
+                    normalized = matcher.match_compact(original_name)
+
+                    if normalized:
+                        if normalized != original_name:
+                            results['normalized_count'] += 1
+                            results['changes'].append((ws.title, row_idx, original_name, normalized))
+
+                            if not dry_run:
+                                # Batch update for efficiency
+                                cell_ref = f"{col_letter}{row_idx}"
+                                updates_batch.append({
+                                    'range': cell_ref,
+                                    'values': [[normalized]]
+                                })
+                        else:
+                            results['unchanged_count'] += 1
+                    else:
+                        results['not_found_count'] += 1
+                        results['not_found'].append((ws.title, row_idx, original_name))
+
+                # Apply batch updates
+                if updates_batch and not dry_run:
+                    ws.batch_update(updates_batch)
+                    print(f"  ✅ Updated {len(updates_batch)} cells")
+
+            except Exception as e:
+                print(f"  ⚠️  Error processing {ws.title}: {e}")
+
+        # Print summary
+        print(f"\n{'='*60}")
+        print("SUMMARY")
+        print(f"{'='*60}")
+        print(f"Sheets processed: {len(results['processed_sheets'])}")
+        print(f"Total cells checked: {results['total_cells']}")
+        print(f"Normalized: {results['normalized_count']}")
+        print(f"Unchanged (already correct): {results['unchanged_count']}")
+        print(f"Not found in database: {results['not_found_count']}")
+
+        if results['changes']:
+            print(f"\n--- Changes {'(not applied - DRY RUN)' if dry_run else '(applied)'} ---")
+            for sheet, row, original, normalized in results['changes'][:20]:  # Show first 20
+                print(f"  [{sheet}] Row {row}: '{original}' → '{normalized}'")
+            if len(results['changes']) > 20:
+                print(f"  ... and {len(results['changes']) - 20} more")
+
+        if results['not_found']:
+            print(f"\n--- Not found in advisor database ---")
+            unique_not_found = set(nf[2] for nf in results['not_found'])
+            for name in sorted(unique_not_found)[:20]:
+                count = sum(1 for nf in results['not_found'] if nf[2] == name)
+                print(f"  '{name}' ({count} occurrences)")
+            if len(unique_not_found) > 20:
+                print(f"  ... and {len(unique_not_found) - 20} more unique names")
+
+        print(f"\n{'='*60}\n")
+
+        return results

@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any, Union
 
-from ..models.idc_statement import IDCStatementReport, IDCStatementReportParsed
+from ..models.idc_statement import IDCStatementReport, IDCStatementReportParsed, IDCTrailingFeeRaw
 from ..utils.config import settings
 from ..utils.model_registry import ExtractionMode, get_model_config
 from ..utils.pdf import get_pdf_hash
@@ -23,7 +23,7 @@ from .base import BaseExtractor
 logger = logging.getLogger(__name__)
 
 
-class IDCStatementExtractor(BaseExtractor[IDCStatementReport]):
+class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
     """
     Extractor for IDC Statement (trailing fees) reports.
 
@@ -34,9 +34,13 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReport]):
       Concessionnaire, Frais de suivi brut, Frais de suivi nets
     - Multiple pages with repeating table structure
 
-    Supports two extraction modes:
-    - extract(): Raw extraction with raw_client_data as-is
-    - extract_direct(): Direct parsing of structured fields
+    DEFAULT BEHAVIOR (direct parsing):
+    - extract(): DIRECT parsing with structured fields (company_code, advisor_name,
+      client_first_name, client_last_name, etc.)
+
+    Alternative methods:
+    - extract_raw(): Use raw prompts (raw_client_data as-is without parsing)
+    - extract_direct(): Explicit direct parsing (same as extract())
 
     Page configuration: Skips first 2 pages (cover/summary) - defined in model_registry.
     """
@@ -50,8 +54,9 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReport]):
         return "IDC_STATEMENT"
 
     @property
-    def model_class(self) -> type[IDCStatementReport]:
-        return IDCStatementReport
+    def model_class(self) -> type[IDCStatementReportParsed]:
+        # Use parsed model by default since we use direct prompts
+        return IDCStatementReportParsed
 
     @property
     def extraction_mode(self) -> ExtractionMode:
@@ -65,12 +70,32 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReport]):
 
     @property
     def system_prompt(self) -> str:
-        """System prompt for IDC Statement extraction (from YAML)."""
-        return self._prompt_config.system_prompt
+        """System prompt for IDC Statement extraction (DIRECT mode by default)."""
+        # Use direct prompt by default for better field parsing
+        prompt = self._prompt_config.system_prompt_direct
+        if not prompt:
+            # Fallback to raw prompt if direct not available
+            return self._prompt_config.system_prompt
+        return prompt
 
     @property
     def user_prompt(self) -> str:
-        """User prompt for IDC Statement extraction (from YAML)."""
+        """User prompt for IDC Statement extraction (DIRECT mode by default)."""
+        # Use direct prompt by default for better field parsing
+        prompt = self._prompt_config.user_prompt_direct
+        if not prompt:
+            # Fallback to raw prompt if direct not available
+            return self._prompt_config.user_prompt
+        return prompt
+
+    @property
+    def system_prompt_raw(self) -> str:
+        """System prompt for RAW extraction (copies Nom du client as-is)."""
+        return self._prompt_config.system_prompt
+
+    @property
+    def user_prompt_raw(self) -> str:
+        """User prompt for RAW extraction (copies Nom du client as-is)."""
         return self._prompt_config.user_prompt
 
     @property
@@ -215,7 +240,7 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReport]):
 async def extract_idc_statement_report(
     pdf_path: Union[str, Path],
     force_refresh: bool = False,
-    direct: bool = False,
+    raw: bool = False,
 ) -> Union[IDCStatementReport, IDCStatementReportParsed]:
     """
     Convenience function to extract an IDC Statement report.
@@ -223,12 +248,16 @@ async def extract_idc_statement_report(
     Args:
         pdf_path: Path to the IDC Statement PDF
         force_refresh: If True, ignore cache
-        direct: If True, use direct extraction with parsed fields
+        raw: If True, use RAW extraction (copies raw_client_data without parsing).
+             Default is DIRECT mode with parsed fields.
 
     Returns:
-        Validated IDCStatementReport or IDCStatementReportParsed instance
+        IDCStatementReportParsed by default (with parsed fields)
+        IDCStatementReport if raw=True (with raw_client_data only)
     """
     extractor = IDCStatementExtractor()
-    if direct:
-        return await extractor.extract_direct_validated(pdf_path, force_refresh=force_refresh)
+    if raw:
+        # Use raw prompts - not implemented yet, use extract_direct for now
+        # TODO: Add extract_raw_mode() method if needed
+        return await extractor.extract(pdf_path, force_refresh=force_refresh)
     return await extractor.extract(pdf_path, force_refresh=force_refresh)

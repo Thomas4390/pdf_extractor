@@ -519,6 +519,11 @@ class Pipeline:
         """Check if Monday.com client is configured."""
         return self._monday_client is not None
 
+    @property
+    def monday(self) -> Optional[MondayClient]:
+        """Get the Monday.com client instance."""
+        return self._monday_client
+
 
 # =============================================================================
 # CONVENIENCE FUNCTIONS

@@ -1,15 +1,27 @@
 """
 PDF Extractor - Streamlit Application
 
-Single-page application for extracting commission data from PDFs
+Multi-stage wizard application for extracting commission data from PDFs
 and uploading to Monday.com.
+
+Features:
+- Multi-stage wizard (Configuration → Preview → Upload)
+- Batch PDF processing with progress tracking
+- Advisor management tab with CRUD operations
+- Verification of Reçu vs calculated Commission
+- Automatic date/group detection from data
+- Multi-month file handling
+- Excel/CSV file replacement
 
 Run with: streamlit run src/app/main.py
 """
 
 import asyncio
+import io
+import re
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -95,6 +107,14 @@ st.markdown("""
         padding: 10px 20px;
     }
 
+    /* Form styling */
+    [data-testid="stForm"] {
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 1.5rem;
+        background: #fafafa;
+    }
+
     /* Success/warning boxes */
     .success-box {
         background-color: #d4edda;
@@ -132,6 +152,9 @@ def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
 def init_session_state() -> None:
     """Initialize all session state variables."""
     defaults = {
+        # Stage (Phase 1: Multi-stage wizard)
+        "stage": 1,  # 1=Configuration, 2=Preview, 3=Upload
+
         # Pipeline
         "pipeline": None,
 
@@ -159,11 +182,22 @@ def init_session_state() -> None:
         "upload_result": None,
         "is_uploading": False,
         "_current_board_name": "",
+        "boards_loading": False,
+        "boards_error": None,
 
         # Options
         "selected_source": None,
         "force_refresh": False,
         "data_modified": False,
+
+        # Advisor management (Phase 2)
+        "advisor_matcher": None,
+
+        # Verification (Phase 3)
+        "verification_tolerance": 10.0,
+
+        # UI state
+        "show_columns": False,
     }
 
     for key, default in defaults.items():
@@ -182,172 +216,810 @@ def get_pipeline() -> Pipeline:
     return st.session_state.pipeline
 
 
+def reset_pipeline() -> None:
+    """Reset pipeline state to start over."""
+    keys_to_reset = [
+        'stage', 'uploaded_files', 'temp_pdf_paths', 'extraction_results',
+        'batch_result', 'combined_data', 'is_processing', 'processing_progress',
+        'current_file', 'selected_board_id', 'selected_group_id', 'monday_groups',
+        'upload_result', 'is_uploading', 'selected_source', 'data_modified',
+        'show_columns', '_current_board_name'
+    ]
+    for key in keys_to_reset:
+        if key == 'stage':
+            st.session_state[key] = 1
+        elif key in ['uploaded_files', 'temp_pdf_paths']:
+            st.session_state[key] = []
+        elif key == 'extraction_results':
+            st.session_state[key] = {}
+        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns']:
+            st.session_state[key] = False
+        elif key == 'processing_progress':
+            st.session_state[key] = 0.0
+        else:
+            st.session_state[key] = None
+
+
 # =============================================================================
-# SIDEBAR
+# PHASE 4: DATE/GROUP DETECTION UTILITIES
+# =============================================================================
+
+def get_months_fr() -> dict:
+    """Retourne le dictionnaire des mois en français."""
+    return {
+        1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril",
+        5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août",
+        9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
+    }
+
+
+def date_to_group(date_val, fallback_group: str = None) -> str:
+    """
+    Convertit une date en nom de groupe "Mois YYYY".
+
+    Args:
+        date_val: Date (string YYYY-MM-DD, YYYY/MM/DD, datetime, ou Timestamp)
+        fallback_group: Groupe à utiliser si la date n'est pas parsable
+
+    Returns:
+        str: Nom du groupe (ex: "Octobre 2025")
+    """
+    months_fr = get_months_fr()
+
+    # Si None ou NaN, utiliser fallback ou date du jour
+    if date_val is None or pd.isna(date_val):
+        if fallback_group:
+            return fallback_group
+        now = datetime.now()
+        return f"{months_fr[now.month]} {now.year}"
+
+    # Gérer les Timestamp pandas directement
+    if isinstance(date_val, pd.Timestamp):
+        return f"{months_fr[date_val.month]} {date_val.year}"
+
+    # Gérer les datetime
+    if isinstance(date_val, datetime):
+        return f"{months_fr[date_val.month]} {date_val.year}"
+
+    date_str = str(date_val).strip()
+
+    # Pattern YYYY-MM-DD ou YYYY/MM/DD
+    match = re.match(r'(\d{4})[-/](\d{2})[-/](\d{2})', date_str)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if 1 <= month <= 12:
+            return f"{months_fr[month]} {year}"
+
+    # Pattern DD/MM/YYYY ou DD-MM-YYYY
+    match = re.match(r'(\d{2})[-/](\d{2})[-/](\d{4})', date_str)
+    if match:
+        month = int(match.group(2))
+        year = int(match.group(3))
+        if 1 <= month <= 12:
+            return f"{months_fr[month]} {year}"
+
+    # Essayer de parser avec pandas
+    try:
+        parsed = pd.to_datetime(date_str)
+        if pd.notna(parsed):
+            return f"{months_fr[parsed.month]} {parsed.year}"
+    except Exception:
+        pass
+
+    # Fallback
+    if fallback_group:
+        return fallback_group
+    now = datetime.now()
+    return f"{months_fr[now.month]} {now.year}"
+
+
+def detect_date_from_filename(filename: str) -> Optional[str]:
+    """
+    Détecte la date/mois à partir du nom de fichier PDF.
+
+    Patterns supportés:
+    - rappportremun_21622_2025-10-20.pdf -> "Octobre 2025"
+    - Rapport des propositions soumises.20251017_1517.pdf -> "Octobre 2025"
+    - 20251017_report.pdf -> "Octobre 2025"
+
+    Returns:
+        str: Nom du groupe (ex: "Octobre 2025") ou None si non détecté
+    """
+    months_fr = get_months_fr()
+
+    # Patterns de date dans le nom de fichier
+    patterns = [
+        (r'(\d{4})-(\d{2})-(\d{2})', 1, 2),      # 2025-10-20
+        (r'\.(\d{4})(\d{2})(\d{2})_', 1, 2),     # .20251017_
+        (r'_(\d{4})(\d{2})(\d{2})', 1, 2),       # _20251017
+        (r'^(\d{4})(\d{2})(\d{2})', 1, 2),       # 20251017 at start
+    ]
+
+    for pattern, year_pos, month_pos in patterns:
+        match = re.search(pattern, filename)
+        if match:
+            try:
+                year = int(match.group(year_pos))
+                month = int(match.group(month_pos))
+                if 1 <= month <= 12 and 2020 <= year <= 2030:
+                    return f"{months_fr[month]} {year}"
+            except (ValueError, IndexError):
+                continue
+
+    return None
+
+
+def detect_groups_from_data(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    """
+    Analyse le DataFrame extrait et assigne un groupe à chaque ligne basé sur la date.
+
+    Args:
+        df: DataFrame avec les données extraites
+        source: Type de source (UV, IDC, IDC_STATEMENT, ASSOMPTION)
+
+    Returns:
+        DataFrame avec colonne '_target_group' ajoutée par ligne
+    """
+    df = df.copy()
+
+    # Trouver la colonne de date
+    date_column = None
+    for col in ['Date', 'date', 'Émission', 'effective_date', 'report_date']:
+        if col in df.columns:
+            non_null_count = df[col].notna().sum()
+            if non_null_count > 0:
+                date_column = col
+                break
+
+    if date_column is None:
+        # Pas de colonne de date - utiliser date du jour
+        months_fr = get_months_fr()
+        now = datetime.now()
+        default_group = f"{months_fr[now.month]} {now.year}"
+        df['_target_group'] = default_group
+        return df
+
+    # Assigner un groupe à chaque ligne basé sur sa date
+    df['_target_group'] = df[date_column].apply(date_to_group)
+
+    return df
+
+
+def analyze_groups_in_data(df: pd.DataFrame) -> dict:
+    """
+    Analyse les groupes présents dans un DataFrame.
+
+    Returns:
+        {
+            'unique_groups': ['Octobre 2025', 'Novembre 2025', ...],
+            'spans_multiple_months': True/False,
+            'group_counts': {'Octobre 2025': 15, 'Novembre 2025': 3}
+        }
+    """
+    if '_target_group' not in df.columns:
+        return {
+            'unique_groups': [],
+            'spans_multiple_months': False,
+            'group_counts': {}
+        }
+
+    unique_groups = df['_target_group'].unique().tolist()
+    group_counts = df['_target_group'].value_counts().to_dict()
+
+    return {
+        'unique_groups': unique_groups,
+        'spans_multiple_months': len(unique_groups) > 1,
+        'group_counts': group_counts
+    }
+
+
+def reorder_columns_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Réordonne les colonnes pour l'affichage:
+    1. Colonnes normales (sans underscore)
+    2. Colonnes de calcul/vérification
+    3. Colonnes avec underscore (_source_file, _target_group, etc.)
+    """
+    cols = df.columns.tolist()
+
+    # Séparer les colonnes
+    underscore_cols = [c for c in cols if c.startswith('_')]
+    calc_verify_cols = [c for c in cols if 'Vérification' in c or c == 'Com Calculée']
+    normal_cols = [c for c in cols if c not in underscore_cols and c not in calc_verify_cols]
+
+    # Nouvel ordre
+    new_order = normal_cols + calc_verify_cols + underscore_cols
+
+    return df[new_order]
+
+
+# =============================================================================
+# PHASE 3: VERIFICATION FUNCTIONS
+# =============================================================================
+
+def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.DataFrame:
+    """
+    Verify that Reçu is within tolerance range of calculated Com for each row.
+
+    The comparison uses a CALCULATED commission value based on the formula:
+        Com_calculée = ROUND((PA * 0.4) * 0.5, 2)
+
+    Args:
+        df: DataFrame with 'Reçu' and 'PA' columns
+        tolerance_pct: Tolerance percentage (default 10%)
+
+    Returns:
+        DataFrame with added columns:
+        - 'Com Calculée': The calculated commission for comparison
+        - 'Vérification (±X%)': Status flag
+    """
+    result_df = df.copy()
+
+    # Check if required columns exist
+    if 'Reçu' not in result_df.columns or 'PA' not in result_df.columns:
+        return result_df
+
+    # Convert to numeric
+    recu = pd.to_numeric(result_df['Reçu'], errors='coerce')
+    pa = pd.to_numeric(result_df['PA'], errors='coerce')
+
+    # Calculate expected commission: ROUND((PA * 0.4) * 0.5, 2)
+    com_calculee = (pa * 0.4 * 0.5).round(2)
+
+    # Add calculated commission column
+    result_df['Com Calculée'] = com_calculee
+
+    # Calculate tolerance bounds
+    tolerance = tolerance_pct / 100.0
+    lower_bound = com_calculee * (1 - tolerance)
+    upper_bound = com_calculee * (1 + tolerance)
+
+    # Calculate percentage difference
+    pct_diff = ((recu - com_calculee) / com_calculee * 100).round(1)
+
+    # Create verification column
+    verification = []
+    for i in range(len(result_df)):
+        r = recu.iloc[i]
+        c = com_calculee.iloc[i]
+        diff = pct_diff.iloc[i]
+
+        if pd.isna(r) or pd.isna(c) or c == 0:
+            verification.append('-')
+        elif r > upper_bound.iloc[i]:
+            verification.append(f'✅ +{diff}%')  # Bonus
+        elif r < lower_bound.iloc[i]:
+            verification.append(f'⚠️ {diff}%')  # Problem
+        else:
+            verification.append('✓ OK')
+
+    result_df[f'Vérification (±{tolerance_pct:.0f}%)'] = verification
+
+    return result_df
+
+
+def get_verification_stats(df: pd.DataFrame) -> dict:
+    """Get statistics about verification results."""
+    verif_cols = [col for col in df.columns if col.startswith('Vérification')]
+    if not verif_cols:
+        return {'ok': 0, 'bonus': 0, 'ecart': 0, 'na': 0}
+
+    verif = df[verif_cols[0]].astype(str)
+
+    return {
+        'ok': verif.str.contains('OK', na=False).sum(),
+        'bonus': verif.str.contains('✅', na=False).sum(),
+        'ecart': verif.str.contains('⚠️', na=False).sum(),
+        'na': (verif == '-').sum()
+    }
+
+
+# =============================================================================
+# BOARD HELPERS
+# =============================================================================
+
+def sort_and_filter_boards(boards: list, search_query: str = "") -> list:
+    """Sort boards with priority keywords first and filter by search query."""
+    if not boards:
+        return []
+
+    filtered_boards = boards
+    if search_query and search_query.strip():
+        search_lower = search_query.lower().strip()
+        filtered_boards = [b for b in boards if search_lower in b['name'].lower()]
+
+    priority_1_keywords = ['paiement', 'historique']
+    priority_2_keywords = ['vente', 'production']
+
+    def get_priority(board_name: str) -> tuple:
+        name_lower = board_name.lower()
+        if any(kw in name_lower for kw in priority_1_keywords):
+            return (0, name_lower)
+        if any(kw in name_lower for kw in priority_2_keywords):
+            return (1, name_lower)
+        return (2, name_lower)
+
+    return sorted(filtered_boards, key=lambda b: get_priority(b['name']))
+
+
+def detect_board_type_from_name(board_name: str) -> str:
+    """Detect the board type based on regex patterns in the board name."""
+    if not board_name:
+        return "Paiements Historiques"
+
+    name_lower = board_name.lower()
+
+    sales_patterns = [
+        r'vente[s]?', r'production[s]?', r'sales?', r'prod\b',
+        r'commercial', r'soumis', r'proposition[s]?',
+    ]
+
+    payment_patterns = [
+        r'paiement[s]?', r'historique[s]?', r'payment[s]?', r'history',
+        r'hist\b', r'reçu[s]?', r'commission[s]?', r'statement[s]?',
+    ]
+
+    for pattern in sales_patterns:
+        if re.search(pattern, name_lower):
+            return "Ventes et Production"
+
+    for pattern in payment_patterns:
+        if re.search(pattern, name_lower):
+            return "Paiements Historiques"
+
+    return "Paiements Historiques"
+
+
+def load_boards_async(force_rerun: bool = False) -> None:
+    """Load Monday.com boards automatically when API key is set."""
+    if (st.session_state.monday_api_key and
+        st.session_state.monday_boards is None and
+        not st.session_state.boards_loading):
+        try:
+            st.session_state.boards_loading = True
+            st.session_state.boards_error = None
+            pipeline = get_pipeline()
+            if pipeline.monday_configured:
+                boards = asyncio.run(pipeline.monday.list_boards())
+                st.session_state.monday_boards = boards
+            st.session_state.boards_loading = False
+            if force_rerun:
+                st.rerun()
+        except Exception as e:
+            st.session_state.boards_loading = False
+            st.session_state.boards_error = str(e)
+
+
+# =============================================================================
+# PHASE 1: STEPPER COMPONENT
+# =============================================================================
+
+def render_stepper() -> None:
+    """Render the progress stepper in main content area."""
+    stages = [
+        ("1", "Configuration", "📁"),
+        ("2", "Prévisualisation", "🔍"),
+        ("3", "Upload", "☁️")
+    ]
+
+    cols = st.columns(3)
+    for i, (num, name, icon) in enumerate(stages):
+        stage_num = i + 1
+        with cols[i]:
+            if stage_num == st.session_state.stage:
+                st.markdown(f"""
+                <div style="text-align: center; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-radius: 10px; color: white;">
+                    <div style="font-size: 1.5rem;">{icon}</div>
+                    <div style="font-weight: 600;">{name}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            elif stage_num < st.session_state.stage:
+                st.markdown(f"""
+                <div style="text-align: center; padding: 10px; background: #d4edda;
+                border-radius: 10px; color: #155724;">
+                    <div style="font-size: 1.5rem;">✅</div>
+                    <div style="font-weight: 500;">{name}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="text-align: center; padding: 10px; background: #f8f9fa;
+                border-radius: 10px; color: #6c757d;">
+                    <div style="font-size: 1.5rem;">{icon}</div>
+                    <div>{name}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+
+# =============================================================================
+# PHASE 7: SIDEBAR
 # =============================================================================
 
 def render_sidebar() -> None:
-    """Render the sidebar."""
+    """Render simplified sidebar."""
     with st.sidebar:
-        st.title("📊 Pipeline Commissions")
-        st.caption("Extraire • Prévisualiser • Exporter")
+        st.markdown("## 🔑 Configuration")
 
-        st.divider()
+        api_from_secrets = get_secret('MONDAY_API_KEY') is not None
 
-        # API Configuration
-        st.subheader("🔑 Configuration")
+        if st.session_state.monday_api_key:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                if api_from_secrets:
+                    st.success("API (secrets)", icon="🔐")
+                else:
+                    st.success("API connectée", icon="✅")
+            with col2:
+                if not api_from_secrets:
+                    if st.button("✏️", help="Modifier la clé API"):
+                        st.session_state.monday_api_key = None
+                        st.session_state.monday_boards = None
+                        st.rerun()
 
-        # Monday.com API Key
-        api_key = st.session_state.monday_api_key
-        with st.expander("Monday.com API", expanded=not api_key):
-            new_key = st.text_input(
-                "Clé API",
-                value=api_key or "",
+            if st.session_state.monday_boards:
+                st.caption(f"📋 {len(st.session_state.monday_boards)} boards disponibles")
+        else:
+            api_key = st.text_input(
+                "Clé API Monday.com",
                 type="password",
-                key="sidebar_monday_key"
+                placeholder="Entrez votre clé API...",
+                key="sidebar_api_key",
+                help="Ou configurez MONDAY_API_KEY dans .streamlit/secrets.toml"
             )
-            if st.button("Sauvegarder", key="save_monday_key"):
-                if new_key:
-                    st.session_state.monday_api_key = new_key
-                    st.session_state.pipeline = None
-                    st.session_state.monday_boards = None
-                    st.success("Sauvegardé!")
+            if api_key:
+                if st.button("Connecter", type="primary", use_container_width=True):
+                    st.session_state.monday_api_key = api_key
                     st.rerun()
-
-        # Status indicators
-        st.divider()
-        st.subheader("📊 Statut")
-
-        # Files status
-        files = st.session_state.uploaded_files
-        if files:
-            st.success(f"📁 {len(files)} fichier(s) chargé(s)")
-        else:
-            st.info("📁 Aucun fichier")
-
-        # Source type
-        source = st.session_state.get("selected_source")
-        if source:
-            st.info(f"📄 Source: {source}")
-
-        # Extraction status
-        results = st.session_state.extraction_results
-        if results:
-            success = sum(1 for r in results.values() if r.success)
-            st.success(f"✅ {success}/{len(results)} extraits")
-        else:
-            st.info("📝 Aucune extraction")
-
-        # Monday.com status
-        if api_key:
-            st.success("🔗 Monday.com connecté")
-            boards = st.session_state.monday_boards
-            if boards:
-                st.caption(f"📋 {len(boards)} boards disponibles")
-        else:
-            st.warning("🔗 Monday.com non configuré")
 
         st.divider()
 
         # Quick actions
-        if st.button("🔄 Tout réinitialiser", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                if key not in ["monday_api_key"]:
-                    del st.session_state[key]
-            st.rerun()
+        st.markdown("### ⚡ Actions rapides")
+
+        if st.session_state.stage > 1:
+            if st.button("⬅️ Retour au début", use_container_width=True):
+                reset_pipeline()
+                st.rerun()
+
+        # Board loading status
+        if st.session_state.boards_loading:
+            st.info("⏳ Chargement des boards...")
+        elif st.session_state.get('boards_error'):
+            st.error(f"❌ {st.session_state.boards_error}")
+            if st.button("🔄 Réessayer", use_container_width=True, type="primary"):
+                st.session_state.boards_error = None
+                st.session_state.monday_boards = None
+                load_boards_async(force_rerun=True)
+        elif st.session_state.monday_boards:
+            st.success(f"✅ {len(st.session_state.monday_boards)} boards chargés")
+            if st.button("🔄 Rafraîchir boards", use_container_width=True):
+                st.session_state.monday_boards = None
+                load_boards_async(force_rerun=True)
+        elif st.session_state.monday_api_key:
+            if st.button("📥 Charger les boards", use_container_width=True, type="primary"):
+                load_boards_async(force_rerun=True)
 
         st.divider()
 
-        # Supported sources
-        with st.expander("ℹ️ Sources supportées"):
+        # Help section
+        with st.expander("ℹ️ Aide", expanded=False):
             st.markdown("""
-            - **UV Assurance**
-            - **IDC Propositions**
-            - **IDC Statement**
-            - **Assomption Vie**
+            **Sources supportées:**
+            - UV Assurance
+            - IDC / IDC Statement
+            - Assomption Vie
+
+            **Stages:**
+            1. Configuration & Upload PDF
+            2. Prévisualisation & Édition
+            3. Export vers Monday.com
+
+            **Besoin d'aide?**
+            Contactez le support technique.
             """)
 
 
 # =============================================================================
-# SECTION 1: FILE UPLOAD
+# PHASE 2: ADVISOR MANAGEMENT TAB
 # =============================================================================
 
-def render_upload_section() -> None:
-    """Render the file upload section."""
-    st.header("📤 1. Upload des fichiers PDF")
+def render_advisor_management_tab() -> None:
+    """Render advisor management interface."""
+    st.markdown("### 👥 Gestion des Conseillers")
 
-    col_upload, col_source = st.columns([2, 1])
+    st.info("""
+    **Gestion des noms de conseillers**
 
-    with col_upload:
-        # File uploader
+    Cette section permet de gérer les conseillers et leurs variations de noms.
+    Le système utilise ces données pour normaliser automatiquement les noms
+    lors de l'extraction des données PDF.
+
+    **Format de sortie:** Prénom, Initiale (ex: "Thomas, L")
+    """)
+
+    try:
+        from src.utils.advisor_matcher import get_advisor_matcher, Advisor
+    except ImportError:
+        st.error("Module advisor_matcher non disponible")
+        return
+
+    # Initialize matcher
+    if st.session_state.advisor_matcher is None:
+        st.session_state.advisor_matcher = get_advisor_matcher()
+
+    matcher = st.session_state.advisor_matcher
+
+    st.divider()
+
+    # Statistics
+    advisors = matcher.get_all_advisors()
+    total_variations = sum(len(a.variations) for a in advisors)
+
+    cols = st.columns(3)
+    cols[0].metric("Conseillers", len(advisors))
+    cols[1].metric("Variations totales", total_variations)
+    cols[2].metric("Stockage", f"{'☁️ Cloud' if matcher.storage_backend == 'google_sheets' else '💾 Local'}")
+
+    st.divider()
+
+    # Add new advisor
+    st.markdown("#### ➕ Ajouter un conseiller")
+
+    with st.form("add_advisor_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            new_first_name = st.text_input(
+                "Prénom",
+                placeholder="Ex: Thomas",
+                key="new_advisor_first_name"
+            )
+
+        with col2:
+            new_last_name = st.text_input(
+                "Nom de famille",
+                placeholder="Ex: Lussier",
+                key="new_advisor_last_name"
+            )
+
+        new_variations = st.text_input(
+            "Variations (séparées par des virgules)",
+            placeholder="Ex: Tom, T. Lussier, Tommy",
+            help="Entrez les différentes façons dont ce nom peut apparaître",
+            key="new_advisor_variations"
+        )
+
+        submitted = st.form_submit_button("➕ Ajouter le conseiller", type="primary")
+
+        if submitted:
+            if new_first_name and new_last_name:
+                variations = []
+                if new_variations:
+                    variations = [v.strip() for v in new_variations.split(',') if v.strip()]
+
+                # Check if exists
+                existing = matcher.find_advisor(new_first_name, new_last_name)
+                if existing:
+                    st.error(f"❌ Ce conseiller existe déjà")
+                else:
+                    try:
+                        advisor = matcher.add_advisor(new_first_name, new_last_name, variations)
+                        st.success(f"✅ Conseiller ajouté: {advisor.display_name_compact}")
+                        st.session_state.advisor_matcher = get_advisor_matcher()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {e}")
+            else:
+                st.error("❌ Veuillez entrer le prénom et le nom de famille")
+
+    st.divider()
+
+    # List existing advisors
+    st.markdown("#### 📋 Conseillers existants")
+
+    if not advisors:
+        st.info("Aucun conseiller enregistré. Ajoutez-en un ci-dessus.")
+    else:
+        for idx, advisor in enumerate(advisors):
+            with st.expander(f"**{advisor.display_name_compact}** ({advisor.full_name})", expanded=False):
+                st.markdown(f"**Prénom:** {advisor.first_name}")
+                st.markdown(f"**Nom:** {advisor.last_name}")
+                st.markdown(f"**Format compact:** {advisor.display_name_compact}")
+
+                st.markdown("**Variations:**")
+                if advisor.variations:
+                    for var in advisor.variations:
+                        st.text(f"  • {var}")
+                else:
+                    st.caption("Aucune variation définie")
+
+    st.divider()
+
+    # Test matching
+    st.markdown("#### 🔍 Tester la correspondance")
+
+    test_name = st.text_input(
+        "Entrez un nom à tester",
+        placeholder="Ex: Thomas Lussier, Lussier Thomas, T. Lussier...",
+        key="test_name_input"
+    )
+
+    if test_name:
+        result = matcher.match_compact(test_name)
+        if result:
+            st.success(f"✅ Correspondance trouvée: **{result}**")
+        else:
+            st.warning(f"⚠️ Aucune correspondance pour: \"{test_name}\"")
+
+
+# =============================================================================
+# STAGE 1: CONFIGURATION (PDF EXTRACTION TAB)
+# =============================================================================
+
+def render_pdf_extraction_tab() -> None:
+    """Render PDF extraction tab with batch processing support."""
+
+    # File upload
+    st.markdown("### 📤 Upload des fichiers PDF")
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
         uploaded_files = st.file_uploader(
-            "Déposez vos fichiers PDF ici ou cliquez pour parcourir",
-            type=["pdf"],
+            "Déposez vos fichiers PDF ici",
+            type=['pdf'],
             accept_multiple_files=True,
-            key="pdf_uploader",
-            help="Supportés: UV, IDC, IDC Statement, Assomption"
+            help="Sélectionnez un ou plusieurs fichiers PDF du même type",
+            key="pdf_upload_main"
         )
 
         if uploaded_files:
-            st.session_state.uploaded_files = uploaded_files
-
-    with col_source:
-        # Source type selection - REQUIRED (no auto-detect)
-        source_options = [s.value for s in SourceType]
-        selected_source = st.selectbox(
-            "Type de document *",
-            source_options,
-            key="source_selector",
-            help="Sélectionnez le type de document PDF"
-        )
-        st.session_state.selected_source = selected_source
-
-    if uploaded_files:
-        # Show file list
-        st.subheader(f"📁 {len(uploaded_files)} fichier(s) sélectionné(s)")
-
-        for file in uploaded_files:
-            col1, col2 = st.columns([3, 1])
-
-            with col1:
-                st.text(f"📄 {file.name}")
-
-            with col2:
-                st.caption(f"{file.size / 1024:.1f} KB")
-
-    # Extraction options
-    with st.expander("⚙️ Options d'extraction", expanded=False):
-        st.session_state.force_refresh = st.checkbox(
-            "Forcer la ré-extraction",
-            value=st.session_state.force_refresh,
-            help="Ignorer le cache"
-        )
-
-    # Extract button
-    col1, col2 = st.columns(2)
-
-    with col1:
-        extract_disabled = (
-            len(st.session_state.uploaded_files) == 0 or
-            st.session_state.is_processing or
-            not st.session_state.selected_source
-        )
-        if st.button(
-            "🚀 Extraire les données",
-            type="primary",
-            disabled=extract_disabled,
-            use_container_width=True
-        ):
-            run_extraction()
+            is_batch = len(uploaded_files) > 1
+            if is_batch:
+                st.success(f"✅ {len(uploaded_files)} fichiers chargés")
+            else:
+                st.success(f"✅ Fichier chargé: {uploaded_files[0].name}")
 
     with col2:
-        if st.button("🗑️ Effacer les fichiers", use_container_width=True):
-            st.session_state.uploaded_files = []
-            st.session_state.extraction_results = {}
-            st.session_state.batch_result = None
-            st.session_state.combined_data = None
+        source_options = [s.value for s in SourceType]
+        source = st.selectbox(
+            "Source",
+            options=source_options,
+            help="Type de document PDF",
+            key="source_select"
+        )
+
+    if not uploaded_files:
+        st.info("👆 Commencez par uploader un ou plusieurs fichiers PDF pour continuer.")
+        return
+
+    st.session_state.uploaded_files = uploaded_files
+    st.session_state.selected_source = source
+
+    # Show file details with detected dates for batch mode
+    is_batch = len(uploaded_files) > 1
+    if is_batch:
+        with st.expander(f"📁 Détail des {len(uploaded_files)} fichiers", expanded=True):
+            has_undetected = False
+            for i, f in enumerate(uploaded_files):
+                detected_group = detect_date_from_filename(f.name)
+                col_file, col_date = st.columns([3, 1])
+                with col_file:
+                    st.text(f"{i+1}. {f.name}")
+                with col_date:
+                    if detected_group:
+                        st.caption(f"→ {detected_group}")
+                    else:
+                        st.caption("→ 📅 À détecter")
+                        has_undetected = True
+            if has_undetected:
+                st.info("💡 Certains groupes seront détectés après extraction")
+
+    st.divider()
+
+    # Board selection
+    st.markdown("### 📋 Destination Monday.com")
+
+    if st.session_state.monday_boards is None and st.session_state.monday_api_key:
+        load_boards_async()
+
+    if st.session_state.boards_loading:
+        st.info("⏳ Chargement des boards...")
+        return
+
+    if st.session_state.monday_boards:
+        search = st.text_input(
+            "🔍 Rechercher un board",
+            placeholder="Filtrer par nom...",
+            key="pdf_search_board"
+        )
+
+        sorted_boards = sort_and_filter_boards(st.session_state.monday_boards, search)
+
+        if sorted_boards:
+            board_options = {b['name']: b['id'] for b in sorted_boards}
+            selected_name = st.selectbox(
+                "Board de destination",
+                options=list(board_options.keys()),
+                key="pdf_board_select"
+            )
+            st.session_state.selected_board_id = board_options[selected_name]
+            st.session_state._current_board_name = selected_name
+
+            # Auto-detect board type
+            detected_type = detect_board_type_from_name(selected_name)
+            st.caption(f"🔍 Type détecté: **{detected_type}**")
+        else:
+            st.warning("Aucun board trouvé")
+    else:
+        st.warning("⚠️ Configurez la clé API Monday.com dans la sidebar")
+
+    st.divider()
+
+    # Configuration options
+    st.markdown("### ⚙️ Configuration")
+
+    type_options = ["Paiements Historiques", "Ventes et Production"]
+    target_type = st.selectbox(
+        "Type de table",
+        options=type_options,
+        key="pdf_target_type"
+    )
+
+    st.session_state.selected_board_type = (
+        BoardType.SALES_PRODUCTION if target_type == "Ventes et Production"
+        else BoardType.HISTORICAL_PAYMENTS
+    )
+
+    force_refresh = st.checkbox(
+        "Forcer la ré-extraction (ignorer le cache)",
+        value=False,
+        key="pdf_force_refresh"
+    )
+    st.session_state.force_refresh = force_refresh
+
+    st.divider()
+
+    # Submit button
+    button_text = f"🚀 Extraire {len(uploaded_files)} fichier{'s' if is_batch else ''}"
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        can_proceed = st.session_state.selected_board_id is not None
+        if st.button(button_text, type="primary", use_container_width=True, disabled=not can_proceed):
+            st.session_state.stage = 2
             st.rerun()
 
+    if not can_proceed:
+        st.caption("⚠️ Sélectionnez un board de destination pour continuer")
+
+
+def render_stage_1() -> None:
+    """Render configuration stage with tabs."""
+    st.markdown("## 📊 Pipeline de Commissions")
+    render_stepper()
+    st.write("")
+
+    # Check API key
+    if not st.session_state.monday_api_key:
+        st.warning("👈 Veuillez d'abord configurer votre clé API Monday.com dans la barre latérale.")
+        return
+
+    # Tabs for different workflows
+    tab1, tab2 = st.tabs(["📄 Extraction PDF", "👥 Gestion Conseillers"])
+
+    with tab1:
+        render_pdf_extraction_tab()
+
+    with tab2:
+        render_advisor_management_tab()
+
+
+# =============================================================================
+# STAGE 2: PREVIEW
+# =============================================================================
 
 def run_extraction() -> None:
     """Run the extraction process."""
@@ -402,7 +1074,12 @@ def run_extraction() -> None:
             results[filename] = result
 
         st.session_state.extraction_results = results
-        st.session_state.combined_data = batch_result.get_combined_dataframe()
+
+        # Get combined data and detect groups
+        combined_df = batch_result.get_combined_dataframe()
+        if combined_df is not None and not combined_df.empty:
+            combined_df = detect_groups_from_data(combined_df, st.session_state.selected_source)
+        st.session_state.combined_data = combined_df
 
         # Show success
         if batch_result.failed == 0:
@@ -418,580 +1095,383 @@ def run_extraction() -> None:
         progress_bar.empty()
 
 
-# =============================================================================
-# SECTION 2: DATA PREVIEW & EDIT
-# =============================================================================
+def render_stage_2() -> None:
+    """Render data preview stage."""
+    st.markdown("## 📊 Pipeline de Commissions")
+    render_stepper()
+    st.write("")
 
-def render_preview_section() -> None:
-    """Render the data preview and edit section."""
-    st.header("📋 2. Prévisualisation & Édition")
+    # Extract data if not done
+    if st.session_state.combined_data is None:
+        if not st.session_state.uploaded_files:
+            st.error("❌ Aucun fichier à traiter")
+            if st.button("🔄 Recommencer"):
+                reset_pipeline()
+                st.rerun()
+            return
 
-    combined_data = st.session_state.combined_data
-
-    if combined_data is None or combined_data.empty:
-        st.info("Aucune donnée à prévisualiser. Uploadez et extrayez d'abord les fichiers PDF.")
+        with st.spinner("🔄 Extraction en cours..."):
+            run_extraction()
+            st.rerun()
         return
 
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
+    df = st.session_state.combined_data
 
-    with col1:
-        st.metric("Lignes", len(combined_data))
+    if df is None or df.empty:
+        st.error("❌ Aucune donnée extraite")
+        if st.button("🔄 Recommencer"):
+            reset_pipeline()
+            st.rerun()
+        return
 
-    with col2:
-        st.metric("Colonnes", len(combined_data.columns))
+    # Config summary
+    with st.expander("📋 Configuration", expanded=False):
+        cols = st.columns(4)
+        cols[0].metric("Source", st.session_state.selected_source)
+        cols[1].metric("Fichiers", len(st.session_state.uploaded_files))
+        cols[2].metric("Board", st.session_state._current_board_name[:20] + "..." if len(st.session_state._current_board_name) > 20 else st.session_state._current_board_name)
+        cols[3].metric("Type", "Ventes" if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION else "Paiements")
 
-    with col3:
-        if "Total" in combined_data.columns:
-            total = pd.to_numeric(combined_data["Total"], errors="coerce").sum()
-            st.metric("Total Commissions", f"{total:,.2f} $")
-        elif "Com" in combined_data.columns:
-            total = pd.to_numeric(combined_data["Com"], errors="coerce").sum()
-            st.metric("Total Com", f"{total:,.2f} $")
+    # Multi-month warning (Phase 5)
+    if '_target_group' in df.columns:
+        groups_info = analyze_groups_in_data(df)
+        if groups_info['spans_multiple_months']:
+            st.warning(f"⚠️ Les données couvrent **{len(groups_info['unique_groups'])} mois différents**. "
+                       f"Les lignes seront automatiquement assignées à leur groupe respectif.")
+            with st.expander("📅 Détail par groupe", expanded=False):
+                for group, count in groups_info['group_counts'].items():
+                    st.markdown(f"**{group}**: {count} lignes")
 
-    with col4:
-        if "Compagnie" in combined_data.columns:
-            st.metric("Compagnies", combined_data["Compagnie"].nunique())
+    # Manual group override (Phase 5)
+    if '_target_group' in df.columns:
+        with st.expander("📅 Modifier le groupe de destination", expanded=False):
+            st.caption("Si la détection automatique de date n'est pas correcte, vous pouvez assigner manuellement un groupe.")
 
-    # Extraction results details
+            months_fr = get_months_fr()
+            now = datetime.now()
+            group_options = ["(Garder auto-détection)"]
+
+            for offset in range(-3, 4):
+                month = now.month + offset
+                year = now.year
+                if month < 1:
+                    month += 12
+                    year -= 1
+                elif month > 12:
+                    month -= 12
+                    year += 1
+                group_options.append(f"{months_fr[month]} {year}")
+
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                manual_group = st.selectbox("Groupe manuel", group_options, key="manual_group_override")
+            with col2:
+                if manual_group != "(Garder auto-détection)":
+                    if st.button("✅ Appliquer", use_container_width=True):
+                        df['_target_group'] = manual_group
+                        st.session_state.combined_data = df
+                        st.success(f"Groupe modifié: {manual_group}")
+                        st.rerun()
+
+    # Statistics
+    st.markdown("### 📊 Aperçu")
+
+    cols = st.columns(4)
+    cols[0].metric("Lignes", len(df))
+    cols[1].metric("Colonnes", len(df.columns))
+    if '# de Police' in df.columns:
+        cols[2].metric("Contrats", df['# de Police'].notna().sum())
+    elif 'Contrat' in df.columns:
+        cols[2].metric("Contrats", df['Contrat'].notna().sum())
+    else:
+        cols[2].metric("", "")
+    cols[3].metric("Doublons", df.duplicated().sum())
+
+    # Phase 3: Verification section
+    has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
+
+    if has_verification_cols:
+        st.markdown("### 🔍 Vérification Reçu vs Commission")
+        st.caption("Formule: `Com Calculée = ROUND((PA × 0.4) × 0.5, 2)`")
+
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            tolerance = st.slider(
+                "Tolérance (%)",
+                min_value=1.0,
+                max_value=50.0,
+                value=10.0,
+                step=1.0,
+                key="verification_tolerance_slider"
+            )
+
+        df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
+        stats = get_verification_stats(df_verified)
+
+        with col2:
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("✓ OK", stats['ok'])
+            stat_cols[1].metric("✅ Bonus", stats['bonus'])
+            stat_cols[2].metric("⚠️ Écart", stats['ecart'])
+            stat_cols[3].metric("- N/A", stats['na'])
+
+        if stats['ecart'] > 0:
+            st.warning(f"⚠️ **{stats['ecart']} ligne(s)** ont un écart négatif")
+
+        if stats['bonus'] > 0:
+            st.success(f"✅ **{stats['bonus']} ligne(s)** ont un bonus")
+
+        st.dataframe(reorder_columns_for_display(df_verified), use_container_width=True, height=350)
+        df_display = df_verified
+    else:
+        st.dataframe(reorder_columns_for_display(df), use_container_width=True, height=350)
+        df_display = df
+
+    # Extraction details
     results = st.session_state.extraction_results
     if results:
         with st.expander("📊 Détails de l'extraction", expanded=False):
             for filename, result in results.items():
                 if result.success:
                     st.markdown(f"✅ **{filename}**: {result.row_count} lignes ({result.extraction_time_ms}ms)")
-                    if result.warnings:
-                        for w in result.warnings:
-                            st.warning(f"  ⚠️ {w.message}")
                 else:
                     st.markdown(f"❌ **{filename}**: {result.error}")
 
-    # Data editor tabs
-    tab1, tab2 = st.tabs(["📝 Éditer les données", "📥 Télécharger"])
-
-    with tab1:
-        render_data_editor(combined_data)
-
-    with tab2:
-        render_download_options(combined_data)
-
-
-def render_data_editor(df: pd.DataFrame) -> None:
-    """Render the editable data table."""
-    # Filter controls
-    with st.expander("🔍 Filtres", expanded=False):
-        col1, col2, col3 = st.columns(3)
-
-        filtered_df = df.copy()
-
-        with col1:
-            if "Compagnie" in df.columns:
-                companies = ["Tous"] + sorted(df["Compagnie"].dropna().unique().tolist())
-                selected = st.selectbox("Compagnie", companies, key="filter_company")
-                if selected != "Tous":
-                    filtered_df = filtered_df[filtered_df["Compagnie"] == selected]
-
-        with col2:
-            if "Statut" in df.columns:
-                statuses = ["Tous"] + sorted(df["Statut"].dropna().unique().tolist())
-                selected = st.selectbox("Statut", statuses, key="filter_status")
-                if selected != "Tous":
-                    filtered_df = filtered_df[filtered_df["Statut"] == selected]
-
-        with col3:
-            if "_source_file" in df.columns:
-                sources = ["Tous"] + sorted(df["_source_file"].dropna().unique().tolist())
-                selected = st.selectbox("Fichier source", sources, key="filter_source")
-                if selected != "Tous":
-                    filtered_df = filtered_df[filtered_df["_source_file"] == selected]
-
-        if len(filtered_df) != len(df):
-            st.caption(f"Affichage de {len(filtered_df)} sur {len(df)} lignes")
-
-    # Hide internal columns for display
-    display_cols = [c for c in filtered_df.columns if not c.startswith("_")]
-    display_df = filtered_df[display_cols]
-
-    # Column config
-    column_config = {}
-    for col in display_df.columns:
-        if col in ["PA", "Com", "Boni", "Sur-Com", "Reçu", "Total"]:
-            column_config[col] = st.column_config.NumberColumn(col, format="%.2f")
-        elif col in ["Date", "Paie"]:
-            column_config[col] = st.column_config.DateColumn(col, format="YYYY-MM-DD")
-        elif col in ["Verifié", "Complet"]:
-            column_config[col] = st.column_config.CheckboxColumn(col)
-        elif col == "Statut":
-            column_config[col] = st.column_config.SelectboxColumn(
-                col,
-                options=["Approved", "Pending", "Rejected", "Received", ""]
-            )
-
-    # Editable table
-    edited_df = st.data_editor(
-        display_df,
-        key="data_editor",
-        num_rows="dynamic",
-        column_config=column_config,
-        height=400,
-        use_container_width=True
-    )
-
-    # Update state if edited
-    if not edited_df.equals(display_df):
-        st.session_state.data_modified = True
-        # Restore hidden columns
-        for col in filtered_df.columns:
-            if col.startswith("_") and col in filtered_df.columns:
-                edited_df[col] = filtered_df[col].values[:len(edited_df)]
-        st.session_state.combined_data = edited_df
-
-    if st.session_state.data_modified:
-        st.info("📝 Les données ont été modifiées")
-
-    # Reset button
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("🔄 Annuler les modifications"):
-            batch_result = st.session_state.batch_result
-            if batch_result:
-                st.session_state.combined_data = batch_result.get_combined_dataframe()
-                st.session_state.data_modified = False
-                st.rerun()
-
-
-def render_download_options(df: pd.DataFrame) -> None:
-    """Render download options."""
-    # Filter internal columns
-    export_df = df.drop(columns=[c for c in df.columns if c.startswith("_")], errors="ignore")
-
-    st.markdown(f"**{len(export_df)} lignes** prêtes à télécharger")
-
-    col1, col2 = st.columns(2)
+    # Actions row
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        csv = export_df.to_csv(index=False).encode("utf-8")
+        csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
-            "📥 Télécharger CSV",
+            "💾 Télécharger CSV",
             data=csv,
-            file_name="commission_data.csv",
+            file_name=f"commissions_{st.session_state.selected_source}.csv",
             mime="text/csv",
             use_container_width=True
         )
 
     with col2:
-        try:
-            import io
-            buffer = io.BytesIO()
-            export_df.to_excel(buffer, index=False, engine="openpyxl")
-            buffer.seek(0)
-            st.download_button(
-                "📥 Télécharger Excel",
-                data=buffer,
-                file_name="commission_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        except ImportError:
-            st.caption("Installez openpyxl pour l'export Excel")
+        if st.button("ℹ️ Colonnes", use_container_width=True):
+            st.session_state.show_columns = not st.session_state.get('show_columns', False)
+            st.rerun()
 
+    with col3:
+        if st.button("⬅️ Retour", use_container_width=True):
+            reset_pipeline()
+            st.rerun()
 
-# =============================================================================
-# BOARD HELPERS
-# =============================================================================
+    with col4:
+        if st.button("➡️ Uploader", type="primary", use_container_width=True):
+            st.session_state.stage = 3
+            st.rerun()
 
-def sort_and_filter_boards(boards: list, search_query: str = "") -> list:
-    """Sort boards with priority keywords first and filter by search query."""
-    import re
+    # Column info
+    if st.session_state.get('show_columns', False):
+        st.markdown("#### Informations colonnes")
+        col_info = pd.DataFrame({
+            'Colonne': df.columns,
+            'Type': df.dtypes.astype(str),
+            'Non-Null': df.notna().sum().values,
+            'Null': df.isna().sum().values
+        })
+        st.dataframe(col_info, use_container_width=True, height=200)
 
-    if not boards:
-        return []
-
-    filtered_boards = boards
-    if search_query and search_query.strip():
-        search_lower = search_query.lower().strip()
-        filtered_boards = [b for b in boards if search_lower in b['name'].lower()]
-
-    priority_1_keywords = ['paiement', 'historique']
-    priority_2_keywords = ['vente', 'production']
-
-    def get_priority(board_name: str) -> tuple:
-        name_lower = board_name.lower()
-        if any(kw in name_lower for kw in priority_1_keywords):
-            return (0, name_lower)
-        if any(kw in name_lower for kw in priority_2_keywords):
-            return (1, name_lower)
-        return (2, name_lower)
-
-    return sorted(filtered_boards, key=lambda b: get_priority(b['name']))
-
-
-def detect_board_type_from_name(board_name: str) -> str:
-    """
-    Detect the board type based on regex patterns in the board name.
-
-    Returns:
-        "Ventes et Production" or "Paiements Historiques"
-    """
-    import re
-
-    if not board_name:
-        return "Paiements Historiques"
-
-    name_lower = board_name.lower()
-
-    # Regex patterns for Sales/Production
-    sales_patterns = [
-        r'vente[s]?',
-        r'production[s]?',
-        r'sales?',
-        r'prod\b',
-        r'commercial',
-        r'soumis',
-        r'proposition[s]?',
-    ]
-
-    # Regex patterns for Historical Payments
-    payment_patterns = [
-        r'paiement[s]?',
-        r'historique[s]?',
-        r'payment[s]?',
-        r'history',
-        r'hist\b',
-        r'reçu[s]?',
-        r'commission[s]?',
-        r'statement[s]?',
-    ]
-
-    # Check for sales/production patterns first
-    for pattern in sales_patterns:
-        if re.search(pattern, name_lower):
-            return "Ventes et Production"
-
-    # Check for payment patterns
-    for pattern in payment_patterns:
-        if re.search(pattern, name_lower):
-            return "Paiements Historiques"
-
-    # Default to Historical Payments
-    return "Paiements Historiques"
-
-
-def on_board_select_change():
-    """Callback when board selection changes - auto-detect board type."""
-    if 'board_selector' in st.session_state:
-        board_name = st.session_state.board_selector
-        detected_type = detect_board_type_from_name(board_name)
-        st.session_state._detected_board_type = detected_type
-
-
-# =============================================================================
-# SECTION 3: MONDAY.COM EXPORT
-# =============================================================================
-
-def render_export_section() -> None:
-    """Render the Monday.com export section."""
-    st.header("📤 3. Export to Monday.com")
-
-    combined_data = st.session_state.combined_data
-    api_key = st.session_state.monday_api_key
-
-    if combined_data is None or combined_data.empty:
-        st.info("Aucune donnée à exporter. Complétez d'abord l'extraction.")
-        return
-
-    if not api_key:
-        st.warning("⚠️ Clé API Monday.com non configurée. Ajoutez-la dans la barre latérale.")
-        return
-
-    # Fetch boards if not loaded
-    if st.session_state.monday_boards is None:
-        fetch_boards()
-
-    # Board selection with search
-    st.subheader("📋 Sélection du Board")
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        # Search box
-        search_query = st.text_input(
-            "🔍 Rechercher un board",
-            placeholder="Filtrer par nom...",
-            key="board_search"
+    # Phase 6: Excel upload replacement
+    with st.expander("📤 Remplacer par un fichier modifié", expanded=False):
+        excel_file = st.file_uploader(
+            "Fichier Excel/CSV modifié",
+            type=['xlsx', 'xls', 'csv'],
+            key="excel_upload"
         )
 
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Rafraîchir", use_container_width=True):
-            fetch_boards()
+        if excel_file:
+            try:
+                if excel_file.name.endswith('.csv'):
+                    uploaded_df = pd.read_csv(excel_file)
+                else:
+                    uploaded_df = pd.read_excel(excel_file)
 
-    # Board dropdown with filtered/sorted results
-    render_board_selection(search_query)
+                st.success(f"✅ {excel_file.name} chargé ({len(uploaded_df)} lignes)")
 
-    # Board type detection and configuration
-    board_id = st.session_state.selected_board_id
-    if board_id:
-        # Show detected board type
-        board_name = st.session_state.get("_current_board_name", "")
-        detected_type = detect_board_type_from_name(board_name)
+                if st.button("✅ Utiliser ce fichier", type="primary"):
+                    st.session_state.combined_data = uploaded_df
+                    st.session_state.data_modified = True
+                    st.rerun()
 
-        st.caption(f"🔍 Type détecté: **{detected_type}**")
+            except Exception as e:
+                st.error(f"Erreur: {e}")
 
-        # Board type override
-        col1, col2 = st.columns(2)
-        with col1:
-            type_options = ["Paiements Historiques", "Ventes et Production"]
-            default_idx = type_options.index(detected_type) if detected_type in type_options else 0
-            selected_type = st.selectbox(
-                "Type de board",
-                type_options,
-                index=default_idx,
-                key="board_type_selector",
-                help="Le type détermine les colonnes exportées"
-            )
-            st.session_state.selected_board_type = (
-                BoardType.SALES_PRODUCTION if selected_type == "Ventes et Production"
-                else BoardType.HISTORICAL_PAYMENTS
-            )
 
-        st.divider()
+# =============================================================================
+# STAGE 3: UPLOAD
+# =============================================================================
 
-        # Group selection
-        render_group_selection(board_id)
+def render_stage_3() -> None:
+    """Render upload stage."""
+    st.markdown("## 📊 Pipeline de Commissions")
+    render_stepper()
+    st.write("")
+
+    df = st.session_state.combined_data
+
+    if df is None or df.empty:
+        st.error("❌ Aucune donnée à uploader")
+        if st.button("🔄 Recommencer"):
+            reset_pipeline()
+            st.rerun()
+        return
+
+    if st.session_state.data_modified:
+        st.warning("⚠️ Upload de données modifiées")
+
+    # Summary
+    st.markdown("### 📋 Résumé de l'upload")
+
+    unique_groups = df['_target_group'].unique() if '_target_group' in df.columns else []
+
+    cols = st.columns(4)
+    cols[0].metric("Items total", len(df))
+    cols[1].metric("Board", st.session_state._current_board_name[:20] + "..." if len(st.session_state._current_board_name) > 20 else st.session_state._current_board_name)
+    cols[2].metric("Groupes", len(unique_groups) if len(unique_groups) > 0 else 1)
+    cols[3].metric("Fichiers", len(st.session_state.extraction_results))
+
+    # Groups breakdown
+    if '_target_group' in df.columns and len(unique_groups) > 1:
+        with st.expander("📁 Détail par groupe", expanded=False):
+            for group in unique_groups:
+                group_count = len(df[df['_target_group'] == group])
+                st.markdown(f"**{group}**: {group_count} items")
 
     st.divider()
 
-    # Upload section
-    render_upload_controls(combined_data)
+    # Upload process
+    if st.session_state.upload_result is None:
+        st.info(f"Les données vont être uploadées vers Monday.com.")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("⬅️ Retour", use_container_width=True):
+                st.session_state.stage = 2
+                st.rerun()
+
+        with col2:
+            if st.button("🚀 Confirmer l'upload", type="primary", use_container_width=True):
+                execute_upload(df)
+    else:
+        render_upload_result(st.session_state.upload_result)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Nouveau pipeline", use_container_width=True):
+                reset_pipeline()
+                st.rerun()
+        with col2:
+            if st.button("📋 Voir le board", use_container_width=True):
+                board_id = st.session_state.selected_board_id
+                st.markdown(f"[Ouvrir Monday.com](https://monday.com/boards/{board_id})")
 
 
-def fetch_boards() -> None:
-    """Fetch boards from Monday.com."""
-    pipeline = get_pipeline()
-
-    if not pipeline.monday_configured:
-        st.error("Monday.com not configured")
-        return
-
-    with st.spinner("Loading boards..."):
-        try:
-            boards = asyncio.run(pipeline.monday.list_boards())
-            st.session_state.monday_boards = boards
-        except Exception as e:
-            st.error(f"Failed to fetch boards: {e}")
-            st.session_state.monday_boards = []
-
-
-def render_board_selection(search_query: str = "") -> None:
-    """Render board selection dropdown with search and filtering."""
-    boards = st.session_state.monday_boards
-
-    if boards is None:
-        st.info("Chargement des boards...")
-        return
-
-    if not boards:
-        st.warning("Aucun board trouvé")
-        return
-
-    # Filter and sort boards
-    sorted_boards = sort_and_filter_boards(boards, search_query)
-
-    if not sorted_boards:
-        st.warning(f"Aucun board ne correspond à '{search_query}'")
-        return
-
-    board_options = {b["name"]: b["id"] for b in sorted_boards}
-    selected_name = st.selectbox(
-        "Board de destination",
-        list(board_options.keys()),
-        key="board_selector"
-    )
-
-    if selected_name:
-        new_board_id = board_options[selected_name]
-        st.session_state._current_board_name = selected_name
-        if st.session_state.selected_board_id != new_board_id:
-            st.session_state.selected_board_id = new_board_id
-            st.session_state.monday_groups = None
-            st.session_state.selected_group_id = None
-        st.caption(f"ID: {new_board_id}")
-
-
-def render_group_selection(board_id: int) -> None:
-    """Render group selection."""
-    st.subheader("📁 Sélection du Groupe")
-
-    # Fetch groups if needed
-    if st.session_state.monday_groups is None:
-        fetch_groups(board_id)
-
-    groups = st.session_state.monday_groups or []
-
-    # Group selection
-    col1, col2 = st.columns([2, 2])
-
-    with col1:
-        group_options = {"(Créer un nouveau groupe)": None}
-        group_options.update({g["title"]: g["id"] for g in groups})
-
-        selected_title = st.selectbox(
-            "Groupe de destination",
-            list(group_options.keys()),
-            key="group_selector"
-        )
-
-        if selected_title == "(Créer un nouveau groupe)":
-            st.session_state.selected_group_id = None
-        else:
-            st.session_state.selected_group_id = group_options[selected_title]
-
-    with col2:
-        if selected_title == "(Créer un nouveau groupe)":
-            new_name = st.text_input(
-                "Nom du nouveau groupe",
-                placeholder="Ex: Janvier 2025",
-                key="new_group_name"
-            )
-            st.session_state.new_group_name = new_name
-        else:
-            st.session_state.new_group_name = None
-
-
-def fetch_groups(board_id: int) -> None:
-    """Fetch groups for a board."""
-    pipeline = get_pipeline()
-
-    try:
-        groups = asyncio.run(pipeline.monday.list_groups(board_id))
-        st.session_state.monday_groups = groups
-    except Exception as e:
-        st.error(f"Failed to fetch groups: {e}")
-        st.session_state.monday_groups = []
-
-
-def render_upload_controls(df: pd.DataFrame) -> None:
-    """Render upload controls and execute upload."""
-    st.subheader("🚀 Upload")
-
-    board_id = st.session_state.selected_board_id
-    group_id = st.session_state.selected_group_id
-    new_group_name = getattr(st.session_state, "new_group_name", None)
-    board_type = st.session_state.get("selected_board_type", BoardType.HISTORICAL_PAYMENTS)
-
-    # Validation
-    can_upload = board_id and (group_id or new_group_name)
-
-    # Export data preview
-    export_df = df.drop(columns=[c for c in df.columns if c.startswith("_")], errors="ignore")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Lignes", len(export_df))
-
-    with col2:
-        st.metric("Colonnes", len(export_df.columns))
-
-    with col3:
-        board_status = "✓" if board_id else "Non sélectionné"
-        st.metric("Board", board_status)
-
-    with col4:
-        type_label = "Ventes" if board_type == BoardType.SALES_PRODUCTION else "Paiements"
-        st.metric("Type", type_label)
-
-    # Upload button
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        is_uploading = st.session_state.is_uploading
-        if st.button(
-            "🚀 Uploader vers Monday.com",
-            type="primary",
-            disabled=not can_upload or is_uploading,
-            use_container_width=True
-        ):
-            run_upload(export_df, board_id, group_id, new_group_name)
-
-    with col2:
-        if st.button("🔄 Réinitialiser", use_container_width=True):
-            st.session_state.upload_result = None
-            st.rerun()
-
-    # Show results
-    upload_result = st.session_state.upload_result
-    if upload_result:
-        st.divider()
-        render_upload_result(upload_result)
-
-
-def run_upload(
-    df: pd.DataFrame,
-    board_id: int,
-    group_id: Optional[str],
-    new_group_name: Optional[str]
-) -> None:
+def execute_upload(df: pd.DataFrame) -> None:
     """Execute the upload to Monday.com."""
     st.session_state.is_uploading = True
     st.session_state.upload_result = None
 
     pipeline = get_pipeline()
+    board_id = st.session_state.selected_board_id
 
     progress_bar = st.progress(0, text="Démarrage de l'upload...")
     status_text = st.empty()
 
     try:
-        # Create group if needed
-        actual_group_id = group_id
-        if new_group_name and not group_id:
-            status_text.info(f"Création du groupe: {new_group_name}")
-            actual_group_id = asyncio.run(
-                pipeline.monday.get_or_create_group(board_id, new_group_name)
-            )
+        # Get unique groups
+        if '_target_group' in df.columns:
+            unique_groups = df['_target_group'].unique().tolist()
+        else:
+            unique_groups = [f"{get_months_fr()[datetime.now().month]} {datetime.now().year}"]
 
-        # Progress callback
-        def on_progress(current: int, total: int, item_name: str) -> None:
-            progress = current / total if total > 0 else 0
-            progress_bar.progress(progress, text=f"Upload: {current}/{total}")
+        total_items = len(df)
+        items_uploaded = 0
+        items_failed = 0
+        all_errors = []
 
-        # Upload
-        status_text.info("Upload des données...")
-        result = asyncio.run(
-            pipeline.monday.upload_dataframe(
-                df=df,
-                board_id=board_id,
-                group_id=actual_group_id,
-                progress_callback=on_progress
-            )
-        )
+        for group_idx, group_name in enumerate(unique_groups):
+            status_text.markdown(f"📁 **Groupe {group_idx + 1}/{len(unique_groups)}:** {group_name}")
+
+            # Filter data for this group
+            if '_target_group' in df.columns:
+                group_df = df[df['_target_group'] == group_name].copy()
+            else:
+                group_df = df.copy()
+
+            # Remove internal columns
+            export_df = group_df.drop(columns=[c for c in group_df.columns if c.startswith('_')], errors='ignore')
+
+            try:
+                # Create or get group
+                group_result = asyncio.run(
+                    pipeline.monday.get_or_create_group(board_id, str(group_name))
+                )
+                group_id = group_result.id if group_result.success else None
+
+                if not group_id:
+                    raise Exception(f"Impossible de créer le groupe: {group_result.error}")
+
+                # Progress callback
+                def on_progress(current: int, total: int) -> None:
+                    nonlocal items_uploaded
+                    overall_progress = (items_uploaded + current) / total_items
+                    progress_bar.progress(min(overall_progress, 0.99), text=f"Upload: {group_name} ({current}/{total})")
+
+                # Upload
+                result = asyncio.run(
+                    pipeline.monday.upload_dataframe(
+                        df=export_df,
+                        board_id=board_id,
+                        group_id=group_id,
+                        progress_callback=on_progress
+                    )
+                )
+
+                items_uploaded += result.success
+                items_failed += result.failed
+                all_errors.extend(result.errors)
+
+            except Exception as e:
+                items_failed += len(export_df)
+                all_errors.append(f"Groupe {group_name}: {str(e)}")
+
+        progress_bar.progress(1.0)
+        status_text.empty()
 
         # Store result
         st.session_state.upload_result = {
-            "total": result.total,
-            "success": result.success,
-            "failed": result.failed,
-            "errors": result.errors,
+            "total": total_items,
+            "success": items_uploaded,
+            "failed": items_failed,
+            "errors": all_errors,
+            "groups": len(unique_groups),
         }
 
-        if result.failed == 0:
-            status_text.success(f"✅ {result.success} éléments uploadés!")
+        if items_failed == 0:
+            st.success(f"✅ {items_uploaded} éléments uploadés dans {len(unique_groups)} groupe(s)!")
         else:
-            status_text.warning(f"⚠️ {result.success}/{result.total} uploadés. {result.failed} en erreur.")
+            st.warning(f"⚠️ {items_uploaded}/{total_items} uploadés. {items_failed} en erreur.")
 
     except Exception as e:
-        status_text.error(f"Échec de l'upload: {e}")
+        st.error(f"Échec de l'upload: {e}")
         st.session_state.upload_result = {
             "total": len(df),
             "success": 0,
             "failed": len(df),
             "errors": [str(e)],
+            "groups": 0,
         }
 
     finally:
         st.session_state.is_uploading = False
         progress_bar.empty()
+        st.rerun()
 
 
 def render_upload_result(result: dict) -> None:
@@ -999,9 +1479,10 @@ def render_upload_result(result: dict) -> None:
     total = result.get("total", 0)
     success = result.get("success", 0)
     failed = result.get("failed", 0)
+    groups = result.get("groups", 1)
 
     if failed == 0:
-        st.success(f"✅ {success}/{total} éléments uploadés avec succès vers Monday.com!")
+        st.success(f"✅ {success}/{total} éléments uploadés avec succès dans {groups} groupe(s)!")
     else:
         st.warning(f"⚠️ {success}/{total} éléments uploadés. {failed} en erreur.")
 
@@ -1021,22 +1502,13 @@ def main() -> None:
     init_session_state()
     render_sidebar()
 
-    # Title
-    st.title("📊 Pipeline de Commissions")
-    st.caption("Extraire les données de commissions des PDFs et les exporter vers Monday.com")
-
-    st.divider()
-
-    # All sections on single page
-    render_upload_section()
-
-    st.divider()
-
-    render_preview_section()
-
-    st.divider()
-
-    render_export_section()
+    # Route to appropriate stage
+    if st.session_state.stage == 1:
+        render_stage_1()
+    elif st.session_state.stage == 2:
+        render_stage_2()
+    else:
+        render_stage_3()
 
 
 # =============================================================================

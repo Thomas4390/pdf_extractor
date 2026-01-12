@@ -123,6 +123,13 @@ class Advisor:
         return self.first_name
 
     @property
+    def display_name_compact(self) -> str:
+        """Return compact display name: 'Prénom, X' (e.g., 'Guillaume, S')."""
+        if self.last_name:
+            return f"{self.first_name}, {self.last_name[0].upper()}"
+        return self.first_name
+
+    @property
     def full_name(self) -> str:
         """Return full name for matching."""
         return f"{self.first_name} {self.last_name}"
@@ -516,6 +523,56 @@ class AdvisorMatcher:
 
         return None
 
+    def match_compact(self, name: str, use_fuzzy: bool = True) -> Optional[str]:
+        """
+        Match a name to an advisor and return the compact display name.
+
+        Args:
+            name: The name to match
+            use_fuzzy: Whether to use fuzzy matching as fallback
+
+        Returns:
+            Compact display name (e.g., "Guillaume, S"), or None if no match
+        """
+        if not name or not isinstance(name, str):
+            return None
+
+        name = str(name).strip()
+        if not name or name.lower() in ['none', 'nan', 'null']:
+            return None
+
+        # Normalize the input
+        normalized_name = self._normalize_text(name)
+
+        # Try regex pattern matching first
+        for pattern, advisor in self._compiled_patterns:
+            if pattern.search(normalized_name):
+                return advisor.display_name_compact
+
+        # If no pattern match and fuzzy matching is enabled
+        if use_fuzzy:
+            best_match = None
+            best_score = 0.0
+
+            for advisor in self.advisors:
+                for term in advisor.get_all_searchable_terms():
+                    normalized_term = self._normalize_text(term)
+                    score = self._fuzzy_match(normalized_name, normalized_term)
+
+                    if score > best_score and score >= self.fuzzy_threshold:
+                        best_score = score
+                        best_match = advisor
+
+            if best_match:
+                return best_match.display_name_compact
+
+        return None
+
+    def match_compact_or_original(self, name: str, use_fuzzy: bool = True) -> str:
+        """Match a name and return the compact name, or the original if no match."""
+        result = self.match_compact(name, use_fuzzy)
+        return result if result else name
+
     def match_or_original(self, name: str, use_fuzzy: bool = True) -> str:
         """Match a name and return the standardized name, or the original if no match."""
         result = self.match(name, use_fuzzy)
@@ -576,3 +633,37 @@ def normalize_advisor_name_or_original(name: str) -> str:
 
     matcher = get_advisor_matcher()
     return matcher.match_or_original(name, use_fuzzy=True)
+
+
+def normalize_advisor_name_compact(name: str) -> Optional[str]:
+    """
+    Normalize an advisor name to compact format (e.g., "Guillaume, S").
+
+    Args:
+        name: The advisor name to normalize
+
+    Returns:
+        Compact normalized name, or None if no match
+    """
+    if not name:
+        return None
+
+    matcher = get_advisor_matcher()
+    return matcher.match_compact(name, use_fuzzy=True)
+
+
+def normalize_advisor_name_compact_or_original(name: str) -> str:
+    """
+    Normalize an advisor name to compact format, returning original if no match.
+
+    Args:
+        name: The advisor name to normalize
+
+    Returns:
+        Compact normalized name, or original if no match
+    """
+    if not name:
+        return name
+
+    matcher = get_advisor_matcher()
+    return matcher.match_compact_or_original(name, use_fuzzy=True)
