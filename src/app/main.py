@@ -594,7 +594,7 @@ def render_sidebar() -> None:
         current_stage_name = stage_names.get(st.session_state.stage, "Inconnu")
 
         files_count = len(st.session_state.uploaded_files) if st.session_state.uploaded_files else 0
-        rows_count = len(st.session_state.combined_df) if st.session_state.combined_df is not None else 0
+        rows_count = len(st.session_state.combined_data) if st.session_state.combined_data is not None else 0
 
         st.markdown(f"""
         <div class="sidebar-stats">
