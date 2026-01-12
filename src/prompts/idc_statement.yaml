@@ -1,76 +1,56 @@
 # IDC Statement (Trailing Fees) extraction prompts
-# These prompts are used by IDCStatementExtractor to extract data from IDC Statement PDFs
-# Supports two extraction modes: raw and direct
-
 document_type: IDC_STATEMENT
 
-# Raw extraction mode - copies "Nom du client" column as-is
+# Mode RAW - copie exacte sans interprétation
 system_prompt: |
-  Tu es un expert en extraction de données de documents PDF d'assurance.
-  Tu extrais les données des rapports de frais de suivi IDC avec une précision absolue.
+  Expert extracteur de données PDF de frais de suivi IDC.
 
-  RÈGLES CRITIQUES:
-  1. COMMENCE l'extraction à partir de la page contenant "Détails des frais de suivi" jusqu'à la fin du PDF
-  2. La colonne "Nom du client" contient des données COMPLEXES avec plusieurs informations encodées
-  3. Tu dois COPIER EXACTEMENT le contenu de "Nom du client" dans raw_client_data - NE PAS INTERPRÉTER
-  4. Préserve les retours à la ligne, caractères spéciaux, et formatage exact
-  5. Les montants sont en format canadien avec virgule décimale (ex: "123,45 $")
-  6. Les dates de la colonne "Date" sont au format YYYY-MM-DD
+  RÈGLES:
+  - COMMENCE à partir de la page "Détails des frais de suivi"
+  - Colonne "Nom du client" = données complexes encodées → COPIE EXACTE dans raw_client_data
+  - Montants = format canadien (ex: "123,45 $")
+  - Dates colonne "Date" = YYYY-MM-DD
 
-  IMPORTANT - raw_client_data:
-  La colonne "Nom du client" contient souvent des métadonnées encodées comme:
-  "Â UV 7782 2025-11-17
-  boni 75% #111011722 crt
-  Bourassa A clt Jeanny
-  Breault-Therrien"
+  IMPORTANT: raw_client_data doit être une COPIE VERBATIM, ne pas interpréter.
 
-  Ce texte contient: compagnie, numéro, date, taux, numéro de police, conseiller, client.
-  Tu dois le COPIER TEL QUEL dans raw_client_data - le parsing sera fait après.
-
-  Tu dois retourner un JSON valide selon le schéma demandé.
+  Retourne un JSON valide.
 
 user_prompt: |
-  Analyse ce rapport de frais de suivi IDC et extrais TOUTES les données.
+  Extrais TOUTES les données de ce rapport de frais de suivi IDC.
 
-  COMMENCE À PARTIR DE LA PAGE "Détails des frais de suivi" JUSQU'À LA FIN DU PDF.
-  Ignore les pages avant cette section.
+  COMMENCE à "Détails des frais de suivi" jusqu'à la FIN du PDF.
 
-  EXTRAIS:
-  1. Métadonnées du rapport:
-     - date_rapport: Date de génération du rapport (si visible)
-     - advisor_section: En-tête de section conseiller (ex: "Achraf El Hajji - 3449L3138")
+  ## MÉTADONNÉES
+  - date_rapport: Date génération (si visible)
+  - advisor_section: En-tête conseiller (ex: "Achraf El Hajji - 3449L3138")
 
-  2. Pour CHAQUE ligne du tableau "Détails des frais de suivi", extrais:
-     - raw_client_data: COPIE EXACTE du contenu de la colonne "Nom du client"
-       (inclure TOUS les retours à la ligne et caractères - NE PAS INTERPRÉTER)
-     - account_number: Numéro de compte de la colonne "Numéro de compte"
-     - company: Compagnie de la colonne "Compagnie" (tel quel)
-     - product: Produit de la colonne "Produit"
-     - date: Date de la colonne "Date" (format YYYY-MM-DD)
-     - gross_trailing_fee: Frais de suivi brut (garder le format avec $)
-     - net_trailing_fee: Frais de suivi nets (garder le format avec $)
+  ## TRAILING_FEES (tableau)
 
-  RÈGLES CRITIQUES - EXTRACTION COMPLÈTE:
-  - Extrais TOUTES les lignes du tableau, sur TOUTES les pages à partir de "Détails des frais de suivi"
-  - raw_client_data doit être une COPIE EXACTE - ne pas parser ou interpréter
-  - Ignore les en-têtes de tableau répétés sur chaque page
-  - NE JAMAIS TRONQUER ou abréger les données
-  - NE JAMAIS utiliser de commentaires comme "// ..." ou "// continue" ou "..."
-  - NE JAMAIS omettre des lignes - CHAQUE ligne du tableau doit être extraite
+  Pour CHAQUE ligne:
+  | Champ | Description |
+  |-------|-------------|
+  | raw_client_data | COPIE EXACTE colonne "Nom du client" (avec retours ligne, caractères spéciaux) |
+  | account_number | Numéro compte colonne "Numéro de compte" |
+  | company | Compagnie colonne "Compagnie" |
+  | product | Produit colonne "Produit" |
+  | date | Date colonne "Date" (YYYY-MM-DD) |
+  | gross_trailing_fee | Frais brut avec $ |
+  | net_trailing_fee | Frais net avec $ |
 
-  INTERDIT:
-  - "// ... (continue for all lines)"
-  - "// remaining entries..."
-  - Toute forme de troncature ou abréviation
+  ## RÈGLES CRITIQUES
+  - Extrais TOUTES les lignes sur TOUTES les pages
+  - raw_client_data = COPIE EXACTE (ne pas parser)
+  - INTERDIT: "// ...", "// continue", troncature
 
-  Retourne un JSON COMPLET avec cette structure:
+  ## JSON OUTPUT
+  ```json
   {
     "document_type": "IDC_STATEMENT",
     "date_rapport": "YYYY-MM-DD",
-    "advisor_section": "Nom Conseiller - CODE",
+    "advisor_section": "Nom - CODE",
     "trailing_fees": [
       {
-        "raw_client_data": "Â UV 7782 2025-11-17\\nboni 75% #111011722 crt\\nBourassa A clt Jeanny\\nBreault-Therrien",
+        "raw_client_data": "Â UV 7782 2025-11-17\nboni 75% #111011722 crt\nBourassa A clt Jeanny\nBreault-Therrien",
         "account_number": "1234567",
         "company": "UV",
         "product": "RRSP",
@@ -80,223 +60,125 @@ user_prompt: |
       }
     ]
   }
+  ```
 
-# Direct extraction mode - parses structured fields directly
+# Mode DIRECT - parsing structuré
 system_prompt_direct: |
-  Tu es un expert en extraction de données de documents PDF d'assurance.
-  Tu extrais les données des rapports de frais de suivi IDC avec une précision absolue.
+  Expert extracteur de données PDF de frais de suivi IDC avec parsing structuré.
 
-  RÈGLES CRITIQUES:
-  1. COMMENCE l'extraction à partir de la page contenant "Détails des frais de suivi" jusqu'à la fin du PDF
-  2. La colonne "Nom du client" contient des données COMPLEXES avec plusieurs informations encodées
-  3. Tu dois PARSER ces informations en champs structurés selon les règles ci-dessous
-  4. Les montants sont en format canadien avec virgule décimale (ex: "123,45 $")
-  5. Les dates de la colonne "Date" sont au format YYYY-MM-DD
-
-  FORMATS VARIÉS de la colonne "Nom du client":
-  La colonne peut avoir PLUSIEURS formats différents. Voici des exemples:
-
-  FORMAT 0 (NOM CLIENT SEUL - pas de métadonnées):
-  "Jean Dupont"
-  "Marie-Claire Tremblay"
-  → Dans ce cas, raw_client_data contient UNIQUEMENT le nom du client
-  → NE PAS remplir les autres champs (company_code, policy_number, advisor_name, etc.)
-  → Seuls client_first_name et client_last_name sont remplis
-
-  FORMAT 1 (avec espaces et retours à la ligne):
-  "Â UV 7782 2025-11-17
-  boni 75% #111011722 crt
-  Bourassa A clt Jeanny
-  Breault-Therrien"
-
-  FORMAT 2 (avec underscores, sans espaces):
-  "Â Assomption_8055_75%
-  #1014289-Mifoubdou_crt
-  Bourassa_2025-12-01-EZ"
-
-  FORMAT 3 (avec "recu p" ou "recup" pour récupération):
-  "Â Assomption_8055_recu
-  p 115% 1014494-
-  Shabani_crt Ayoub_2025-
-  12-01-EZ"
-
-  FORMAT 4 (compact sur une ligne):
-  "Â UV_7782_boni_80%_#1234567_Tremblay_crt_Alexis_clt_Jean_Dupont"
-
-  RÈGLES DE PARSING ADAPTÉES À TOUS LES FORMATS:
-  - company_code: Compagnie (UV, Assomption, Beneva, IA, RBC, Manuvie, SSQ, Desjardins, Empire, Ivari)
-    → Chercher après "Â " ou au début, peut être suivi de _ ou espace
-  - company_number: Numéro 4-6 chiffres après le nom de compagnie (ex: 7782, 8055)
-    → Séparé par _ ou espace
-  - policy_date: Date au format YYYY-MM-DD
-    → Peut apparaître après company_number OU après advisor_name (ex: Bourassa_2025-12-01-EZ)
-    → Si date après advisor avec "-EZ", c'est la date de police
-  - commission_rate: Pourcentage (75% → 75.0, 115% → 115.0)
-    → Chercher "boni X%" ou "_X%" ou "recu p X%" ou "recup X%"
-    → "recu p" ou "recup" signifie récupération, le % suit
-  - policy_number: Numéro de police (6-10 chiffres)
-    → Peut être après # (ex: #111011722) OU suivi de - et nom (ex: 1014289-Mifoubdou)
-    → Extraire UNIQUEMENT les chiffres
+  RÈGLES:
+  - COMMENCE à partir de la page "Détails des frais de suivi"
+  - Parse la colonne "Nom du client" en champs structurés
+  - Montants = format canadien (ex: "123,45 $")
+  - Dates = YYYY-MM-DD
 
   RÈGLE FONDAMENTALE - CONSEILLER vs CLIENT:
-  - Le CONSEILLER est TOUJOURS après "crt" ou "_crt"
-  - Le CLIENT est TOUJOURS le nom qui N'EST PAS après "crt"
-  - "clt" n'est PAS toujours présent! Le client peut apparaître SANS "clt"
+  - CONSEILLER = TOUJOURS après "crt" ou "_crt"
+  - CLIENT = nom qui N'EST PAS après "crt"
 
-  ADVISOR_NAME (Conseiller) - COPIE VERBATIM OBLIGATOIRE:
-  - TOUJOURS après "_crt" ou "crt " ou "crt\n"
-  - COPIE VERBATIM le texte tel qu'il apparaît - NE JAMAIS INTERPRÉTER ou DEVINER
-  - NE JAMAIS convertir une initiale en prénom complet! "T" reste "T", pas "Thomas"
-  - NE JAMAIS inverser nom/prénom ou reformater le nom
-  - Si suivi de "_YYYY-MM-DD-EZ", enlève SEULEMENT le suffixe date
-  - Exemples STRICTS:
-    → "crt Lussier,T_2025-12-01-EZ" → advisor_name = "Lussier,T" (PAS "Thomas Lussier"!)
-    → "crt Lussier, T_2025-12-01-EZ" → advisor_name = "Lussier, T" (avec espace après virgule)
-    → "crt Bourassa A clt..." → advisor_name = "Bourassa A" (PAS "Bourassa Alexandre"!)
-    → "_crt Ayoub_2025-12-01-EZ" → advisor_name = "Ayoub"
-    → "crt\nDumont,M_2025-01-15-EZ" → advisor_name = "Dumont,M" (PAS "Dumont Michel"!)
+  ADVISOR_NAME - COPIE VERBATIM:
+  - NE JAMAIS convertir initiale → prénom ("T" reste "T", PAS "Thomas")
+  - NE JAMAIS reformater ("Lussier,T" → "Lussier,T", PAS "Thomas Lussier")
 
-  INTERDIT POUR ADVISOR_NAME:
-  - Convertir "T" → "Thomas", "M" → "Michel", "A" → "Alexandre", etc.
-  - Reformater "Lussier,T" → "Thomas Lussier" ou "T. Lussier"
-  - Deviner ou interpréter les initiales - COPIE EXACTE UNIQUEMENT
+  CLIENT_NAME - MAJUSCULES:
+  - Toujours convertir en MAJUSCULES
 
-  CLIENT_NAME (Client) - EN MAJUSCULES:
-  - Tout nom qui N'EST PAS après "crt" est le CLIENT
-  - Peut être indiqué par "clt" mais PAS TOUJOURS
-  - Peut être entre le numéro de police et "_crt"
-  - CONVERTIR EN MAJUSCULES (uppercase) client_first_name et client_last_name
-  - Exemples:
-    → "#1014289-Mifoubdou_crt" → client_last_name = "MIFOUBDOU" (MAJUSCULES!)
-    → "clt Jeanny Breault-Therrien" → client_first_name = "JEANNY", client_last_name = "BREAULT-THERRIEN"
-    → "1014494-Shabani_crt" → client_last_name = "SHABANI" (MAJUSCULES!)
-
-  IMPORTANT:
-  - client_first_name et client_last_name TOUJOURS EN MAJUSCULES
-  - advisor_name = COPIE VERBATIM tel qu'il apparaît (ex: "Lussier,T" - PAS en majuscules!)
-
-  Tu dois retourner un JSON valide selon le schéma demandé.
+  Retourne un JSON valide.
 
 user_prompt_direct: |
-  Analyse ce rapport de frais de suivi IDC et extrais TOUTES les données avec parsing direct.
+  Extrais et PARSE TOUTES les données de ce rapport de frais de suivi IDC.
 
-  COMMENCE À PARTIR DE LA PAGE "Détails des frais de suivi" JUSQU'À LA FIN DU PDF.
-  Ignore les pages avant cette section.
+  COMMENCE à "Détails des frais de suivi" jusqu'à la FIN du PDF.
 
-  EXTRAIS:
-  1. Métadonnées du rapport:
-     - date_rapport: Date de génération du rapport (si visible)
-     - advisor_section: En-tête de section conseiller (ex: "Achraf El Hajji - 3449L3138")
+  ## MÉTADONNÉES
+  - date_rapport: Date génération (si visible)
+  - advisor_section: En-tête conseiller (ex: "Achraf El Hajji - 3449L3138")
 
-  2. Pour CHAQUE ligne du tableau "Détails des frais de suivi", extrais ET PARSE:
-     - raw_client_data: COPIE EXACTE du contenu de la colonne "Nom du client"
+  ## TRAILING_FEES (tableau) - AVEC PARSING
 
-     PUIS PARSE raw_client_data en ces champs (FORMATS VARIÉS):
-     - company_code: Compagnie (UV, Assomption, Beneva, IA, RBC, Manuvie, SSQ, Desjardins, Empire, Ivari)
-     - company_number: Numéro de compagnie (4-6 chiffres après company_code)
-     - policy_date: Date de police (YYYY-MM-DD)
-       → Peut être après company_number OU à la fin avec advisor (ex: _2025-12-01-EZ)
-     - commission_rate: Taux en pourcentage
-       → Chercher "boni X%", "_X%", "recu p X%", ou "recup X%"
-       → 75% → 75.0, 115% → 115.0
-     - policy_number: Numéro de police (6-10 chiffres)
-       → Après # OU avant -NomClient (ex: #1014289 ou 1014289-Shabani)
+  Pour CHAQUE ligne, extrais ET parse:
 
-     RÈGLE FONDAMENTALE - CONSEILLER vs CLIENT:
-     - Le CONSEILLER est TOUJOURS après "crt" ou "_crt"
-     - Le CLIENT est le nom qui N'EST PAS après "crt" (peut être SANS "clt"!)
+  ### Colonnes directes:
+  | Champ | Description |
+  |-------|-------------|
+  | raw_client_data | COPIE EXACTE colonne "Nom du client" |
+  | account_number | Numéro compte |
+  | company | Compagnie (colonne) |
+  | product | Produit |
+  | date | Date (YYYY-MM-DD) |
+  | gross_trailing_fee | Frais brut avec $ |
+  | net_trailing_fee | Frais net avec $ |
 
-     - advisor_name: Conseiller - COPIE VERBATIM OBLIGATOIRE
-       → TOUJOURS après "_crt" ou "crt " ou "crt\n"
-       → COPIE VERBATIM le texte - NE JAMAIS INTERPRÉTER!
-       → "Lussier,T" → "Lussier,T" (PAS "Thomas Lussier" ou "Thomas"!)
-       → "Bourassa A" → "Bourassa A" (PAS "Bourassa Alexandre"!)
-       → NE JAMAIS convertir initiale → prénom complet (T≠Thomas, M≠Michel)
-       → Si suffix "_YYYY-MM-DD-EZ", enlève seulement la date
-     - client_first_name: Prénom client EN MAJUSCULES
-     - client_last_name: Nom client EN MAJUSCULES
-       → Peut être après "clt" MAIS "clt" n'est PAS toujours présent!
-       → Souvent entre policy_number et "_crt" (ex: "1014289-Mifoubdou_crt")
-       → TOUJOURS CONVERTIR EN MAJUSCULES: "Mifoubdou" → "MIFOUBDOU"
+  ### Champs parsés depuis raw_client_data:
+  | Champ | Règle de parsing |
+  |-------|------------------|
+  | company_code | Compagnie après "Â " (UV, Assomption, IA, Beneva, RBC, ManuVie...) |
+  | company_number | 4-6 chiffres après company_code |
+  | policy_date | Date YYYY-MM-DD (après company_number OU dans "_YYYY-MM-DD-EZ") |
+  | commission_rate | % après "boni", "_", "recu p" ou "recup" (75% → 75.0) |
+  | policy_number | 6-10 chiffres après # OU avant "-NomClient" |
+  | advisor_name | APRÈS "crt" - COPIE VERBATIM! ("Lussier,T" → "Lussier,T") |
+  | client_first_name | Prénom client EN MAJUSCULES |
+  | client_last_name | Nom client EN MAJUSCULES |
 
-     PLUS les colonnes standards:
-     - account_number: Numéro de compte
-     - company: Compagnie (colonne directe)
-     - product: Produit
-     - date: Date (colonne)
-     - gross_trailing_fee: Frais brut (format avec $)
-     - net_trailing_fee: Frais net (format avec $)
+  ## RÈGLE CONSEILLER vs CLIENT
 
-  EXEMPLES DE PARSING (formats variés):
+  ```
+  CONSEILLER = toujours APRÈS "crt" ou "_crt"
+  CLIENT = nom qui N'EST PAS après "crt" (peut être SANS "clt"!)
+  ```
 
-  EXEMPLE 0 - NOM CLIENT SEUL (pas de métadonnées encodées):
+  ## EXEMPLES DE PARSING
+
+  **Exemple 1 - Nom seul (pas de métadonnées):**
+  ```
   Raw: "Jean Dupont"
-  → company_code: null, company_number: null, policy_date: null
-  → commission_rate: null, policy_number: null, advisor_name: null
-  → client_first_name: "JEAN", client_last_name: "DUPONT" (MAJUSCULES!)
-  IMPORTANT: Si raw_client_data ne contient QUE le nom du client, ne pas inventer de valeurs!
+  → Tous champs parsés = null SAUF:
+  → client_first_name: "JEAN", client_last_name: "DUPONT"
+  ```
 
-  EXEMPLE 1 - Format avec "clt" explicite:
+  **Exemple 2 - Format avec "clt":**
+  ```
   Raw: "Â UV 7782 2025-11-17\nboni 75% #111011722 crt\nBourassa A clt Jeanny\nBreault-Therrien"
   → company_code: "UV", company_number: "7782", policy_date: "2025-11-17"
   → commission_rate: 75.0, policy_number: "111011722"
-  → advisor_name: "Bourassa A" ← COPIE VERBATIM après "crt"!
-  → client_first_name: "JEANNY", client_last_name: "BREAULT-THERRIEN" (MAJUSCULES!)
+  → advisor_name: "Bourassa A" (VERBATIM après crt!)
+  → client_first_name: "JEANNY", client_last_name: "BREAULT-THERRIEN"
+  ```
 
-  EXEMPLE 2 - Format SANS "clt" (client entre policy et _crt):
+  **Exemple 3 - Format SANS "clt":**
+  ```
   Raw: "Â Assomption_8055_75%\n#1014289-Mifoubdou_crt\nBourassa_2025-12-01-EZ"
   → company_code: "Assomption", company_number: "8055"
   → commission_rate: 75.0, policy_number: "1014289"
-  → client_last_name: "MIFOUBDOU" (MAJUSCULES! entre "1014289-" et "_crt")
-  → advisor_name: "Bourassa" ← COPIE VERBATIM après "_crt"!
+  → client_last_name: "MIFOUBDOU" (entre policy et _crt)
+  → advisor_name: "Bourassa" (VERBATIM après _crt!)
   → policy_date: "2025-12-01"
+  ```
 
-  EXEMPLE 3 - Format avec "recu p" et SANS "clt":
-  Raw: "Â Assomption_8055_recu\np 115% 1014494-\nShabani_crt Ayoub_2025-\n12-01-EZ"
-  → company_code: "Assomption", company_number: "8055"
-  → commission_rate: 115.0 (après "recu p"), policy_number: "1014494"
-  → client_last_name: "SHABANI" (MAJUSCULES! entre "1014494-" et "_crt")
-  → advisor_name: "Ayoub" ← COPIE VERBATIM après "_crt"!
-  → policy_date: "2025-12-01"
-
-  EXEMPLE 4 - Conseiller avec format "Nom,Initiale" - COPIE VERBATIM:
+  **Exemple 4 - Conseiller "Nom,Initiale":**
+  ```
   Raw: "Â UV_7782_75%\n#1015126-Emissa_crt\nLussier,T_2025-12-01-EZ"
-  → company_code: "UV", company_number: "7782"
-  → commission_rate: 75.0, policy_number: "1015126"
-  → client_last_name: "EMISSA" (MAJUSCULES!)
-  → advisor_name: "Lussier,T" ← COPIE VERBATIM! PAS "Thomas", PAS "Thomas Lussier"!
+  → policy_number: "1015126"
+  → client_last_name: "EMISSA"
+  → advisor_name: "Lussier,T" (VERBATIM! PAS "Thomas"!)
   → policy_date: "2025-12-01"
+  ```
 
-  EXEMPLE 5 - Autre format conseiller "Nom Initiale":
-  Raw: "Â Assomption_8055_boni 80%\n#1017890-Tremblay_crt\nGagnon M_2025-11-15-EZ"
-  → client_last_name: "TREMBLAY" (MAJUSCULES!)
-  → advisor_name: "Gagnon M" ← COPIE VERBATIM! PAS "Michel Gagnon"!
+  ## RÈGLES CRITIQUES
+  - Extrais TOUTES les lignes sur TOUTES les pages
+  - advisor_name = COPIE VERBATIM (jamais interpréter initiales!)
+  - client = TOUJOURS EN MAJUSCULES
+  - Si champ non trouvable → null
+  - Si raw_client_data = nom seul → tous champs parsés = null sauf client
+  - INTERDIT: "// ...", troncature, interprétation des initiales
 
-  RÈGLES CRITIQUES - EXTRACTION COMPLÈTE:
-  - Extrais TOUTES les lignes du tableau sur TOUTES les pages
-  - NE JAMAIS TRONQUER ou abréger les données
-  - NE JAMAIS utiliser de commentaires comme "// ..." ou "// continue" ou "..."
-  - NE JAMAIS omettre des lignes - CHAQUE ligne du tableau doit être extraite
-  - Si un champ parsé n'est pas trouvable, utilise null
-  - NE JAMAIS INVENTER de valeurs! Si raw_client_data ne contient QUE le nom du client
-    (sans "Â", sans "%", sans "crt", etc.), alors TOUS les champs parsés = null
-    SAUF client_first_name et client_last_name
-  - ADVISOR_NAME = COPIE VERBATIM après "crt"! NE JAMAIS convertir initiale→prénom!
-    "Lussier,T" → "Lussier,T" (PAS "Thomas"!), "Gagnon M" → "Gagnon M" (PAS "Michel"!)
-  - CLIENT_FIRST_NAME et CLIENT_LAST_NAME = TOUJOURS EN MAJUSCULES!
-    "Mifoubdou" → "MIFOUBDOU", "Jean-Pierre" → "JEAN-PIERRE"
-  - "recu p" ou "recup" = récupération, le % suit
-
-  INTERDIT:
-  - "// ... (continue for all lines)"
-  - "// remaining entries..."
-  - Toute forme de troncature ou abréviation
-
-  Retourne un JSON COMPLET avec cette structure:
+  ## JSON OUTPUT
+  ```json
   {
     "document_type": "IDC_STATEMENT",
     "date_rapport": "YYYY-MM-DD",
-    "advisor_section": "Nom Conseiller - CODE",
+    "advisor_section": "Nom - CODE",
     "trailing_fees": [
       {
         "raw_client_data": "Â UV_7782_75%\n#1015126-Emissa_crt\nLussier,T_2025-12-01-EZ",
@@ -317,7 +199,4 @@ user_prompt_direct: |
       }
     ]
   }
-
-  RAPPEL FINAL:
-  - advisor_name: COPIE VERBATIM (ex: "Lussier,T" - NE PAS écrire "Thomas"!)
-  - client_first_name/client_last_name: TOUJOURS EN MAJUSCULES
+  ```

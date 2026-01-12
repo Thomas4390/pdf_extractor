@@ -191,18 +191,43 @@ def get_pages_for_extraction(
     Returns:
         List of 0-indexed page numbers to extract
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     config = get_model_config(document_type)
     page_config = config.page_config
 
     if page_config is None:
         # No page config means extract all pages
+        logger.debug(f"{document_type}: Extracting all {total_pages} pages")
         return list(range(total_pages))
 
     if page_config.pages:
         # Specific pages are defined, filter to valid ones
-        return [p for p in page_config.pages if 0 <= p < total_pages]
+        pages = [p for p in page_config.pages if 0 <= p < total_pages]
+        logger.debug(f"{document_type}: Extracting specific pages {pages} from {total_pages} total")
+        return pages
 
     # Use skip_first and skip_last
-    start = page_config.skip_first
-    end = total_pages - page_config.skip_last
-    return list(range(start, max(start, end)))
+    skip_first = page_config.skip_first
+    skip_last = page_config.skip_last
+
+    # Ensure we don't skip more pages than available
+    # If skipping would leave no pages, extract all pages instead
+    if skip_first + skip_last >= total_pages:
+        logger.warning(
+            f"{document_type}: PDF has only {total_pages} pages but config wants to skip "
+            f"{skip_first} from start and {skip_last} from end. Extracting all pages instead."
+        )
+        return list(range(total_pages))
+
+    start = skip_first
+    end = total_pages - skip_last
+    pages = list(range(start, end))
+
+    logger.debug(
+        f"{document_type}: Skipping first {skip_first}, last {skip_last} pages. "
+        f"Extracting pages {pages} from {total_pages} total"
+    )
+
+    return pages
