@@ -2028,8 +2028,14 @@ def main() -> None:
     """Main application entry point."""
     # Clear prompt cache once per session to ensure fresh prompts are loaded
     if '_prompt_cache_cleared' not in st.session_state:
-        from ..utils.prompt_loader import clear_prompt_cache
-        clear_prompt_cache()
+        # Use functools to clear the LRU cache directly
+        from functools import lru_cache
+        import sys
+        # Find and clear the prompt_loader cache if loaded
+        for module_name, module in list(sys.modules.items()):
+            if 'prompt_loader' in module_name and hasattr(module, 'load_prompts'):
+                if hasattr(module.load_prompts, 'cache_clear'):
+                    module.load_prompts.cache_clear()
         st.session_state._prompt_cache_cleared = True
 
     init_session_state()
