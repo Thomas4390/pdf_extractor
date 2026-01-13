@@ -5,11 +5,14 @@ Defines the abstract interface that all source-specific extractors must implemen
 Supports both vision (images) and text extraction modes.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, TypeVar, Union
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from ..clients.cache import ExtractionCache
 from ..clients.openrouter import OpenRouterClient
@@ -135,12 +138,20 @@ class BaseExtractor(ABC, Generic[T]):
         total_pages = get_pdf_page_count(pdf_path)
         pages = get_pages_for_extraction(self.document_type, total_pages)
 
+        logger.info(
+            f"[{self.document_type}] PDF '{pdf_path.name}' has {total_pages} pages, "
+            f"extracting pages: {pages}"
+        )
+
         if pages == list(range(total_pages)):
             # All pages - use default behavior
-            return pdf_to_images(pdf_path, dpi=settings.pdf_dpi)
+            images = pdf_to_images(pdf_path, dpi=settings.pdf_dpi)
         else:
             # Specific pages
-            return pdf_to_images(pdf_path, dpi=settings.pdf_dpi, pages=pages)
+            images = pdf_to_images(pdf_path, dpi=settings.pdf_dpi, pages=pages)
+
+        logger.info(f"[{self.document_type}] Converted {len(images)} page(s) to images")
+        return images
 
     def get_text(self, pdf_path: Union[str, Path]) -> str:
         """
@@ -159,12 +170,20 @@ class BaseExtractor(ABC, Generic[T]):
         total_pages = get_pdf_page_count(pdf_path)
         pages = get_pages_for_extraction(self.document_type, total_pages)
 
+        logger.info(
+            f"[{self.document_type}] PDF '{pdf_path.name}' has {total_pages} pages, "
+            f"extracting text from pages: {pages}"
+        )
+
         if pages == list(range(total_pages)):
             # All pages - use default behavior
-            return pdf_to_text(pdf_path)
+            text = pdf_to_text(pdf_path)
         else:
             # Specific pages
-            return pdf_to_text(pdf_path, pages=pages)
+            text = pdf_to_text(pdf_path, pages=pages)
+
+        logger.info(f"[{self.document_type}] Extracted {len(text)} characters of text")
+        return text
 
     async def extract(
         self,

@@ -105,6 +105,8 @@ class OpenRouterClient:
             "total_completion_tokens": 0,
             "total_cost": 0.0,
             "request_count": 0,
+            "last_model_used": None,  # Track the actual model used (including fallbacks)
+            "models_used": [],  # List of all models used in this session
         }
 
     def _format_number(self, num: int) -> str:
@@ -143,6 +145,9 @@ class OpenRouterClient:
         self.session_usage["total_completion_tokens"] += completion_tokens
         self.session_usage["total_cost"] += cost
         self.session_usage["request_count"] += 1
+        self.session_usage["last_model_used"] = model
+        if model not in self.session_usage["models_used"]:
+            self.session_usage["models_used"].append(model)
 
         # Build display
         model_short = model.split("/")[-1] if "/" in model else model
@@ -235,6 +240,17 @@ class OpenRouterClient:
                 {"role": "user", "content": user_prompt},
             ]
 
+    # Preferred provider order - prioritize reliable providers
+    PREFERRED_PROVIDERS = [
+        "Google",           # Google AI (most reliable for Gemini)
+        "Anthropic",        # Anthropic (most reliable for Claude)
+        "DeepInfra",        # Usually reliable
+        "Together",         # Usually reliable
+        "Fireworks",        # Usually reliable
+        "Lepton",           # Usually reliable
+        # GMICloud, Novita, etc. are less reliable - not included
+    ]
+
     async def _make_request(
         self,
         messages: list[dict],
@@ -249,6 +265,11 @@ class OpenRouterClient:
             "temperature": temperature,
             "usage": {"include": True},  # Request usage/cost data in response
             # Note: response_format removed - causes 404 with some OpenRouter data policies
+            # Provider ordering - prefer reliable providers
+            "provider": {
+                "order": self.PREFERRED_PROVIDERS,
+                "allow_fallbacks": True,  # Allow other providers if preferred ones unavailable
+            },
         }
 
         # Add max_tokens if specified (important for long extractions)
@@ -412,7 +433,13 @@ class OpenRouterClient:
 
                 content = choices[0].get("message", {}).get("content", "")
                 if not content:
-                    raise ValueError(f"Empty content in response: {result}")
+                    # Empty response - likely provider issue, skip to fallback immediately
+                    provider = result.get("provider", "unknown")
+                    model_used = result.get("model", self.model)
+                    logger.warning(f"Empty response from {provider} ({model_used}), trying fallback...")
+                    print(f"\n⚠️ Empty response from provider '{provider}' - skipping to fallback model")
+                    last_error = ValueError(f"Empty content from {provider}")
+                    break  # Exit retry loop, go directly to fallback
 
                 last_content = content
                 parsed = self._parse_json_response(content)
@@ -505,18 +532,16 @@ class OpenRouterClient:
 
             last_error = error
 
-        # Try secondary fallback model (e.g., text model)
+        # Try secondary fallback model (vision model like Gemini 3 Pro)
         if self.secondary_fallback_model and self.secondary_fallback_model != self.model:
             print("\n" + "=" * 70)
             print(f"🔄 FALLBACK FAILED - Trying secondary: {self.secondary_fallback_model}")
             print("=" * 70 + "\n")
             logger.info(f"Attempting secondary fallback: {self.secondary_fallback_model}")
 
-            # For text models, rebuild messages without images
-            text_messages = self._build_messages(system_prompt, user_prompt, images=None)
-
+            # Keep images for vision models (Gemini 3 Pro supports vision)
             result, error, content = await self._try_model_extraction(
-                text_messages, temperature, self.secondary_fallback_model, "secondary"
+                messages, temperature, self.secondary_fallback_model, "secondary", max_tokens=max_tokens
             )
 
             if result is not None:

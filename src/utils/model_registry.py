@@ -57,56 +57,57 @@ class ModelConfig:
 # Default models
 DEFAULT_VISION_MODEL = "google/gemini-3-flash-preview"  # Primary: Gemini 3 Flash
 FALLBACK_VISION_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"  # Fallback: Qwen 3 VL
+SECONDARY_FALLBACK_MODEL = "google/gemini-3-pro-preview"  # Secondary fallback: Gemini 3 Pro
 LEGACY_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct"  # Legacy: Qwen 2.5 VL
 DEFAULT_TEXT_MODEL = "deepseek/deepseek-chat"  # Text fallback (V3 stable)
 
 # Document type to model configuration mapping
 MODEL_REGISTRY: dict[str, ModelConfig] = {
-    # UV Assurance - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # UV Assurance - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # All pages are relevant
     "UV": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=None,  # Use all pages
     ),
 
-    # Assomption Vie - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # Assomption Vie - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # Pages: 1 (summary), 3 (commissions), 5 (bonuses) - 0-indexed: 0, 2, 4
     "ASSOMPTION": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=PageConfig(pages=[0, 2, 4]),  # Summary, Commissions, Bonuses
     ),
 
-    # IDC Propositions - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # IDC Propositions - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # All pages are relevant
     "IDC": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=None,  # Use all pages
     ),
 
-    # IDC Statements (trailing fees) - Gemini 3 Flash → Qwen3 VL → DeepSeek
+    # IDC Statements (trailing fees) - Gemini 3 Flash → Qwen3 VL → Gemini 3 Pro
     # Skip first 2 pages (cover and summary)
     "IDC_STATEMENT": ModelConfig(
         model_id=DEFAULT_VISION_MODEL,
         mode=ExtractionMode.VISION,
         fallback_model_id=FALLBACK_VISION_MODEL,
         fallback_mode=ExtractionMode.VISION,
-        secondary_fallback_model_id=DEFAULT_TEXT_MODEL,
-        secondary_fallback_mode=ExtractionMode.TEXT,
+        secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
+        secondary_fallback_mode=ExtractionMode.VISION,
         page_config=PageConfig(skip_first=2),  # Skip cover and summary pages
     ),
 }
@@ -160,6 +161,22 @@ def get_default_text_model() -> str:
     return DEFAULT_TEXT_MODEL
 
 
+# Available models for selection in UI
+AVAILABLE_MODELS: dict[str, str] = {
+    "google/gemini-3-flash-preview": "Gemini 3 Flash (Rapide, Économique)",
+    "google/gemini-3-pro-preview": "Gemini 3 Pro (Précis, Plus cher)",
+    "qwen/qwen3-vl-235b-a22b-instruct": "Qwen 3 VL 235B (Haute qualité)",
+    "qwen/qwen2.5-vl-72b-instruct": "Qwen 2.5 VL 72B (Legacy)",
+    "anthropic/claude-sonnet-4": "Claude Sonnet 4 (Vision avancée)",
+    "openai/gpt-4o": "GPT-4o (OpenAI Vision)",
+}
+
+
+def get_available_models() -> dict[str, str]:
+    """Get dictionary of available models for UI selection."""
+    return AVAILABLE_MODELS.copy()
+
+
 def get_pages_for_extraction(
     document_type: str,
     total_pages: int,
@@ -174,18 +191,43 @@ def get_pages_for_extraction(
     Returns:
         List of 0-indexed page numbers to extract
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     config = get_model_config(document_type)
     page_config = config.page_config
 
     if page_config is None:
         # No page config means extract all pages
+        logger.debug(f"{document_type}: Extracting all {total_pages} pages")
         return list(range(total_pages))
 
     if page_config.pages:
         # Specific pages are defined, filter to valid ones
-        return [p for p in page_config.pages if 0 <= p < total_pages]
+        pages = [p for p in page_config.pages if 0 <= p < total_pages]
+        logger.debug(f"{document_type}: Extracting specific pages {pages} from {total_pages} total")
+        return pages
 
     # Use skip_first and skip_last
-    start = page_config.skip_first
-    end = total_pages - page_config.skip_last
-    return list(range(start, max(start, end)))
+    skip_first = page_config.skip_first
+    skip_last = page_config.skip_last
+
+    # Ensure we don't skip more pages than available
+    # If skipping would leave no pages, extract all pages instead
+    if skip_first + skip_last >= total_pages:
+        logger.warning(
+            f"{document_type}: PDF has only {total_pages} pages but config wants to skip "
+            f"{skip_first} from start and {skip_last} from end. Extracting all pages instead."
+        )
+        return list(range(total_pages))
+
+    start = skip_first
+    end = total_pages - skip_last
+    pages = list(range(start, end))
+
+    logger.debug(
+        f"{document_type}: Skipping first {skip_first}, last {skip_last} pages. "
+        f"Extracting pages {pages} from {total_pages} total"
+    )
+
+    return pages

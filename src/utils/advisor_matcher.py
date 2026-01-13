@@ -166,11 +166,10 @@ class Advisor:
 
 class AdvisorMatcher:
     """
-    Robust advisor name matcher with fuzzy matching and persistent storage.
+    Robust advisor name matcher with fuzzy matching and Google Sheets storage.
 
-    Supports two storage backends:
-    1. Google Sheets (primary, cloud-based) - uses GOOGLE_SHEETS_* env vars
-    2. Local JSON file (fallback)
+    Storage backend: Google Sheets ONLY (cloud-based) - uses GOOGLE_SHEETS_* env vars
+    Local storage is NOT supported - Google Sheets must be configured.
 
     Usage:
         matcher = AdvisorMatcher()
@@ -184,8 +183,6 @@ class AdvisorMatcher:
         result = matcher.match("Lussier")  # Returns "Thomas"
     """
 
-    # Default data file in project root
-    DEFAULT_DATA_FILE = Path(__file__).parent.parent.parent / "advisors_data.json"
     GSHEETS_WORKSHEET_NAME = "Advisors"
 
     # Singleton instance
@@ -203,35 +200,41 @@ class AdvisorMatcher:
         """Reset the singleton instance (useful for testing)."""
         cls._instance = None
 
-    def __init__(self, data_file: Optional[Path] = None, fuzzy_threshold: float = 0.85,
-                 use_gsheets: Optional[bool] = None):
+    def __init__(self, fuzzy_threshold: float = 0.85, require_gsheets: bool = False):
         """
-        Initialize the advisor matcher.
+        Initialize the advisor matcher with Google Sheets storage.
 
         Args:
-            data_file: Path to JSON file for fallback storage. Uses default if None.
             fuzzy_threshold: Minimum similarity ratio for fuzzy matching (0.0 to 1.0).
                             Higher = stricter matching. Default 0.85.
-            use_gsheets: Force Google Sheets on/off. If None, auto-detect from env vars.
+            require_gsheets: If True, raise error if Google Sheets unavailable.
+                            If False (default), work without advisors if not configured.
         """
-        self.data_file = data_file or self.DEFAULT_DATA_FILE
         self.fuzzy_threshold = fuzzy_threshold
         self.advisors: List[Advisor] = []
         self._compiled_patterns: List[Tuple[re.Pattern, Advisor]] = []
+        self._gsheets_error: Optional[str] = None
 
-        # Initialize Google Sheets client if available
+        # Initialize Google Sheets client
         self._gsheets_client: Optional[Any] = None
         self._worksheet: Optional[Any] = None
         self._use_gsheets = False
 
-        if use_gsheets is None:
-            # Auto-detect: use Google Sheets if env vars are set and library is available
-            self._init_gsheets()
-        elif use_gsheets and GSHEETS_AVAILABLE:
-            self._init_gsheets()
+        # Try to initialize Google Sheets
+        self._init_gsheets()
 
-        # Load existing data
-        self._load()
+        if not self._use_gsheets:
+            self._gsheets_error = (
+                "Google Sheets non configuré. "
+                "Configurez GOOGLE_SHEETS_SPREADSHEET_ID et les credentials GCP."
+            )
+            if require_gsheets:
+                raise RuntimeError(self._gsheets_error)
+            # Continue without Google Sheets - matcher will return None for all matches
+
+        # Load existing data from Google Sheets (if available)
+        if self._use_gsheets:
+            self._load()
 
     def _init_gsheets(self):
         """Initialize Google Sheets connection."""
@@ -271,7 +274,17 @@ class AdvisorMatcher:
     @property
     def storage_backend(self) -> str:
         """Return the current storage backend being used."""
-        return "google_sheets" if self._use_gsheets else "local"
+        return "google_sheets" if self._use_gsheets else "none"
+
+    @property
+    def is_configured(self) -> bool:
+        """Return True if Google Sheets is properly configured."""
+        return self._use_gsheets
+
+    @property
+    def configuration_error(self) -> Optional[str]:
+        """Return the configuration error message, if any."""
+        return self._gsheets_error
 
     # Common encoding issues (UTF-8 mojibake)
     ENCODING_FIXES = {
@@ -395,11 +408,8 @@ class AdvisorMatcher:
         return SequenceMatcher(None, text, target).ratio()
 
     def _load(self):
-        """Load advisors from storage (Google Sheets or local JSON)."""
-        if self._use_gsheets:
-            self._load_from_gsheets()
-        else:
-            self._load_from_json()
+        """Load advisors from Google Sheets."""
+        self._load_from_gsheets()
 
     def _load_from_gsheets(self):
         """Load advisors from Google Sheets."""
@@ -422,57 +432,38 @@ class AdvisorMatcher:
                 self.advisors.append(advisor)
             self._build_patterns()
         except Exception as e:
-            print(f"Warning: Could not load advisors from Google Sheets: {e}")
-            self._use_gsheets = False
-            self._load_from_json()
-
-    def _load_from_json(self):
-        """Load advisors from local JSON file."""
-        if self.data_file.exists():
-            try:
-                with open(self.data_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.advisors = [Advisor.from_dict(a) for a in data.get('advisors', [])]
-                    self._build_patterns()
-            except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not load advisors data: {e}")
-                self.advisors = []
-        else:
-            self.advisors = []
+            raise RuntimeError(f"Could not load advisors from Google Sheets: {e}")
 
     def _save(self):
-        """Save advisors to storage."""
-        if not self._use_gsheets:
-            self._save_to_json()
+        """Rebuild patterns after changes (data is already saved to Google Sheets)."""
         self._build_patterns()
-
-    def _save_to_json(self):
-        """Save advisors to local JSON file."""
-        data = {'advisors': [a.to_dict() for a in self.advisors]}
-        with open(self.data_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
 
     def add_advisor(self, first_name: str, last_name: str,
                     variations: Optional[List[str]] = None) -> Advisor:
-        """Add a new advisor."""
+        """Add a new advisor to Google Sheets."""
+        if not self._use_gsheets:
+            raise RuntimeError(
+                "Cannot add advisor: Google Sheets is not configured. "
+                "Please configure GOOGLE_SHEETS_SPREADSHEET_ID and GCP credentials."
+            )
+
         advisor = Advisor(
             first_name=first_name.strip(),
             last_name=last_name.strip(),
             variations=variations or []
         )
 
-        if self._use_gsheets:
-            try:
-                all_values = self._worksheet.col_values(1)
-                ids = [int(v) for v in all_values[1:] if v.isdigit()]
-                new_id = max(ids) + 1 if ids else 1
-                variations_str = ', '.join(advisor.variations)
-                self._worksheet.append_row([
-                    new_id, advisor.first_name, advisor.last_name, variations_str
-                ])
-                advisor._row_id = new_id
-            except Exception as e:
-                print(f"Warning: Could not save advisor to Google Sheets: {e}")
+        try:
+            all_values = self._worksheet.col_values(1)
+            ids = [int(v) for v in all_values[1:] if v.isdigit()]
+            new_id = max(ids) + 1 if ids else 1
+            variations_str = ', '.join(advisor.variations)
+            self._worksheet.append_row([
+                new_id, advisor.first_name, advisor.last_name, variations_str
+            ])
+            advisor._row_id = new_id
+        except Exception as e:
+            raise RuntimeError(f"Could not save advisor to Google Sheets: {e}")
 
         self.advisors.append(advisor)
         self._save()
