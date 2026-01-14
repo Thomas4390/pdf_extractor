@@ -443,10 +443,11 @@ class DataUnifier:
             # Sur-Com n'est pas directement disponible dans UV, on le met à None
             on_commission = None
 
-            # Construire le texte avec taux de partage et taux de commission
+            # Construire le texte avec protection, taux de partage et taux de commission
             sharing_rate_str = f"{int(sharing_rate)}%" if sharing_rate else "?"
             commission_rate_str = f"{int(commission_rate)}%" if commission_rate else "?"
-            texte = f"{act.type_commission} (Partage: {sharing_rate_str}, Com: {commission_rate_str})"
+            protection_str = act.protection or "N/A"
+            texte = f"{protection_str} | {act.type_commission} (Partage: {sharing_rate_str}, Com: {commission_rate_str})"
 
             # Déterminer le statut basé sur la PA (prime annualisée)
             if premium is not None:

@@ -5,11 +5,82 @@ These models represent the structure of data extracted from UV Assurance
 PDF reports, faithful to the original document format.
 """
 
-from decimal import Decimal
-from typing import Optional
+from decimal import Decimal, InvalidOperation
+from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
+
+# =============================================================================
+# FLEXIBLE TYPE COERCION
+# =============================================================================
+
+def coerce_decimal(v: Any) -> Optional[Decimal]:
+    """
+    Coerce various input types to Decimal, handling common VLM output formats.
+
+    Handles:
+    - None, empty string, "N/A", "n/a" → None
+    - Strings with currency symbols: "1 196,00 $" → 1196.00
+    - Strings with percentage: "55,000 %" → 55.0
+    - French decimal format: "1,5" → 1.5
+    - Already Decimal/float/int → Decimal
+    """
+    if v is None:
+        return None
+
+    if isinstance(v, Decimal):
+        return v
+
+    if isinstance(v, (int, float)):
+        return Decimal(str(v))
+
+    if isinstance(v, str):
+        v = v.strip()
+        # Handle empty/null-like strings
+        if not v or v.lower() in ("", "none", "null", "n/a", "nan", "-"):
+            return None
+
+        # Clean currency and percentage symbols
+        v = v.replace("$", "").replace("%", "").replace(" ", "")
+        # Handle French decimal format (comma as decimal separator)
+        v = v.replace(",", ".")
+        # Handle multiple dots (thousands separator)
+        parts = v.split(".")
+        if len(parts) > 2:
+            # Assume last part is decimal, rest is thousands
+            v = "".join(parts[:-1]) + "." + parts[-1]
+
+        try:
+            return Decimal(v) if v else None
+        except InvalidOperation:
+            return None
+
+    return None
+
+
+def coerce_string(v: Any) -> Optional[str]:
+    """
+    Coerce input to string, handling None and empty values gracefully.
+    """
+    if v is None:
+        return None
+
+    v_str = str(v).strip()
+    if not v_str or v_str.lower() in ("none", "null", "nan"):
+        return None
+
+    return v_str
+
+
+# Type aliases for flexible fields
+FlexibleDecimal = Annotated[Optional[Decimal], BeforeValidator(coerce_decimal)]
+FlexibleString = Annotated[Optional[str], BeforeValidator(coerce_string)]
+
+
+# =============================================================================
+# MODELS
+# =============================================================================
 
 class UVActivity(BaseModel):
     """
@@ -20,74 +91,73 @@ class UVActivity(BaseModel):
     """
 
     # Sub-advisor for this activity (appears at top of each table section)
-    sous_conseiller: Optional[str] = Field(
+    sous_conseiller: FlexibleString = Field(
         default=None,
         description="Sub-advisor for this activity (e.g., '21622 - ACHRAF EL HAJJI')",
         examples=["21622 - ACHRAF EL HAJJI", "21650 - DEREK POIRIER", None],
     )
 
-    contrat: str = Field(
-        ...,
+    # Contract identification - required but flexible
+    contrat: FlexibleString = Field(
+        default=None,
         description="Contract number (e.g., '110970886')",
         examples=["110970886", "110971504"],
     )
-    assure: str = Field(
-        ...,
+    assure: FlexibleString = Field(
+        default=None,
         description="Insured person's name",
         examples=["BALDWIN RAYMOND", "MADJIGUENE SOW"],
     )
-    protection: str = Field(
-        ...,
+    protection: FlexibleString = Field(
+        default=None,
         description="Protection type",
         examples=["Vie entière Valeurs Élevées"],
     )
-    montant_base: Decimal = Field(
-        ...,
+
+    # Financial data - flexible decimals
+    montant_base: FlexibleDecimal = Field(
+        default=None,
         description="Base amount in CAD",
         examples=[1196.00, 699.00],
     )
-    taux_partage: Decimal = Field(
-        ...,
+    taux_partage: FlexibleDecimal = Field(
+        default=None,
         description="Sharing rate as percentage (e.g., 100.0 for 100%)",
         examples=[100.0, 40.0],
     )
-    taux_commission: Decimal = Field(
-        ...,
+    taux_commission: FlexibleDecimal = Field(
+        default=None,
         description="Commission rate as percentage",
         examples=[55.0],
     )
-    resultat: Decimal = Field(
-        ...,
+    resultat: FlexibleDecimal = Field(
+        default=None,
         description="Result amount in CAD",
         examples=[657.80, 384.45],
     )
-    type_commission: str = Field(
-        ...,
+    type_commission: FlexibleString = Field(
+        default=None,
         description="Commission type",
         examples=["Boni 1ère année vie"],
     )
-    taux_boni: Decimal = Field(
-        ...,
+    taux_boni: FlexibleDecimal = Field(
+        default=None,
         description="Bonus rate as percentage",
         examples=[175.0],
     )
-    remuneration: Decimal = Field(
-        ...,
+    remuneration: FlexibleDecimal = Field(
+        default=None,
         description="Final remuneration in CAD",
         examples=[1151.15, 672.79],
     )
 
-    @field_validator("contrat")
+    @field_validator("assure", mode="after")
     @classmethod
-    def validate_contrat(cls, v: str) -> str:
-        """Ensure contract number is clean."""
-        return str(v).strip()
-
-    @field_validator("assure")
-    @classmethod
-    def validate_assure(cls, v: str) -> str:
+    def normalize_assure(cls, v: Optional[str]) -> Optional[str]:
         """Clean and normalize insured name."""
-        return " ".join(str(v).upper().split())
+        if v:
+            return " ".join(v.upper().split())
+        return v
 
 
 class UVReport(BaseModel):
@@ -102,18 +172,18 @@ class UVReport(BaseModel):
         default="UV",
         description="Document type identifier",
     )
-    date_rapport: str = Field(
-        ...,
+    date_rapport: FlexibleString = Field(
+        default=None,
         description="Report date in YYYY-MM-DD format",
         examples=["2025-10-13"],
     )
-    nom_conseiller: str = Field(
-        ...,
+    nom_conseiller: FlexibleString = Field(
+        default=None,
         description="Main advisor name or company name",
         examples=["9491-1377 QUEBEC INC"],
     )
-    numero_conseiller: str = Field(
-        ...,
+    numero_conseiller: FlexibleString = Field(
+        default=None,
         description="Main advisor number",
         examples=["21621"],
     )
@@ -122,17 +192,20 @@ class UVReport(BaseModel):
         description="List of activity lines from the report",
     )
 
-    @field_validator("date_rapport")
+    @field_validator("date_rapport", mode="after")
     @classmethod
-    def validate_date(cls, v: str) -> str:
-        """Ensure date format is correct."""
+    def validate_date(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure date format is correct if provided."""
+        if not v:
+            return v
+
         v = str(v).strip()
-        # Accept both YYYY-MM-DD and common variations
+        # Accept YYYY-MM-DD format
         if len(v) == 10 and v[4] == "-" and v[7] == "-":
             return v
-        # Try to parse other formats
-        import re
 
+        # Try to extract date from string
+        import re
         match = re.search(r"(\d{4})-(\d{2})-(\d{2})", v)
         if match:
             return match.group(0)
@@ -141,7 +214,7 @@ class UVReport(BaseModel):
     @property
     def nombre_contrats(self) -> int:
         """Number of unique contracts in the report."""
-        return len({a.contrat for a in self.activites})
+        return len({a.contrat for a in self.activites if a.contrat})
 
     @property
     def nombre_activites(self) -> int:
@@ -178,7 +251,9 @@ class UVReport(BaseModel):
 
     def calculer_total(self) -> Decimal:
         """Calculate total remuneration from activities."""
-        return sum(a.remuneration for a in self.activites)
+        return sum(
+            (a.remuneration or Decimal(0)) for a in self.activites
+        )
 
     def calculer_total_par_sous_conseiller(self) -> dict[str, Decimal]:
         """Calculate total remuneration per sub-advisor.
@@ -191,5 +266,5 @@ class UVReport(BaseModel):
             key = a.sous_conseiller or "Principal"
             if key not in totals:
                 totals[key] = Decimal(0)
-            totals[key] += a.remuneration
+            totals[key] += a.remuneration or Decimal(0)
         return totals
