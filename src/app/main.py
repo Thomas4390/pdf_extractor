@@ -1957,13 +1957,6 @@ def render_stage_3() -> None:
         else:
             st.info("Les données vont être uploadées vers Monday.com.")
 
-            # Confirmation checkbox for safety
-            confirm_upload = st.checkbox(
-                "✅ Je confirme vouloir uploader ces données vers Monday.com",
-                value=False,
-                key="confirm_upload_checkbox"
-            )
-
             footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
             with footer_col1:
@@ -1973,17 +1966,13 @@ def render_stage_3() -> None:
 
             with footer_col3:
                 if st.button(
-                    "Confirmer l'upload",
+                    "🚀 Confirmer l'upload",
                     type="primary",
-                    width="stretch",
-                    disabled=not confirm_upload
+                    width="stretch"
                 ):
                     # Set uploading state and rerun to hide the button
                     st.session_state.is_uploading = True
                     st.rerun()
-
-            if not confirm_upload:
-                st.caption("⚠️ Cochez la case de confirmation pour activer le bouton d'upload")
     else:
         render_upload_result(st.session_state.upload_result)
 
