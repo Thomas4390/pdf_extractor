@@ -101,9 +101,9 @@ class MondayClient:
         # Text columns
         '# de Police': ColumnType.TEXT,
         'Nom Client': ColumnType.TEXT,
-        'Compagnie': ColumnType.TEXT,
-        'Conseiller': ColumnType.TEXT,
-        'Lead/MC': ColumnType.TEXT,
+        'Compagnie': ColumnType.STATUS,
+        'Conseiller': ColumnType.STATUS,
+        'Lead/MC': ColumnType.STATUS,
 
         # Numeric columns
         'PA': ColumnType.NUMBERS,
@@ -604,7 +604,8 @@ class MondayClient:
                     return {"date": value[:10]}
                 return None
 
-            elif actual_type == "status":
+            elif actual_type in ("status", "color", "dropdown"):
+                # Monday.com returns "color" for status columns, not "status"
                 return {"label": str(value)}
 
             elif actual_type == "checkbox" or actual_type == "boolean":
@@ -638,7 +639,7 @@ class MondayClient:
                 return {"date": value[:10]}
             return None
 
-        elif col_type == ColumnType.STATUS:
+        elif col_type in (ColumnType.STATUS, ColumnType.DROPDOWN):
             return {"label": str(value)}
 
         elif col_type == ColumnType.CHECKBOX:

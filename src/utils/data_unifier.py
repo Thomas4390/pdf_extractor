@@ -448,11 +448,22 @@ class DataUnifier:
             commission_rate_str = f"{int(commission_rate)}%" if commission_rate else "?"
             texte = f"{act.type_commission} (Partage: {sharing_rate_str}, Com: {commission_rate_str})"
 
+            # Déterminer le statut basé sur la PA (prime annualisée)
+            if premium is not None:
+                if premium > 0:
+                    status = 'Payé'
+                elif premium < 0:
+                    status = 'Charge back'
+                else:
+                    status = None
+            else:
+                status = None
+
             row = {
                 '# de Police': str(act.contrat),
                 'Nom Client': act.assure,
                 'Compagnie': insurer_name,
-                'Statut': 'Approuvé',  # UV = toujours approuvé
+                'Statut': status,
                 'Conseiller': advisor_name,
                 'Verifié': None,
                 'PA': premium,
