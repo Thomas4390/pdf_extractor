@@ -97,7 +97,7 @@ SOURCE_BOARDS = {
     ),
     "ae_tracker": SourceBoardConfig(
         display_name="AE Tracker",
-        aggregate_column="Cash Collected",
+        aggregate_column="$$$ Recues",
         date_column="Date",
         output_column_name="AE CA",
         advisor_column="group_title",  # Advisor name is in group title
