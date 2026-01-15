@@ -212,12 +212,14 @@ __marimo__/
 # Streamlit Cloud Deployment
 # Exclude directories not needed for deployment
 notebooks/
-other/
+old/
 pdf/
 results/
 temp/
+scripts/
+cache/
 .idea/
 .vscode/
 # Credentials
 service_account.json
-scripts/service_account.json
+.streamlit/secrets.toml
