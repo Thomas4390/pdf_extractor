@@ -159,7 +159,7 @@ def render_agg_step_3_preview() -> None:
                 p.display_name,
                 key=f"step3_period_{p.value}",
                 type=btn_type,
-                use_container_width=True,
+                width="stretch",
             ):
                 if p != period:
                     st.session_state.agg_period = p

@@ -30,13 +30,13 @@ def render_sidebar() -> None:
         # Mode toggle buttons
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📄 Extraction", key="mode_extraction", use_container_width=True,
+            if st.button("📄 Extraction", key="mode_extraction", width="stretch",
                         type="primary" if current_mode == "extraction" else "secondary"):
                 if current_mode != "extraction":
                     st.session_state.app_mode = "extraction"
                     st.rerun()
         with col2:
-            if st.button("📊 Agrégation", key="mode_aggregation", use_container_width=True,
+            if st.button("📊 Agrégation", key="mode_aggregation", width="stretch",
                         type="primary" if current_mode == "aggregation" else "secondary"):
                 if current_mode != "aggregation":
                     st.session_state.app_mode = "aggregation"

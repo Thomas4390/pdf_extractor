@@ -69,7 +69,7 @@ def render_aggregation_stepper(current_step: int) -> None:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button(f"← Retour", key=f"agg_stepper_nav_{step_num}", use_container_width=True):
+                if st.button(f"← Retour", key=f"agg_stepper_nav_{step_num}", width="stretch"):
                     st.session_state.agg_step = step_num
                     st.rerun()
 
@@ -313,7 +313,7 @@ def render_period_selection(
                 period.display_name,
                 key=f"period_btn_{period.value}",
                 type=btn_type,
-                use_container_width=True,
+                width="stretch",
             ):
                 selected_period = period
 
@@ -438,7 +438,7 @@ def render_source_data_preview(
                 display_df[value_col] = display_df[value_col].apply(
                     lambda x: f"{x:,.2f}" if pd.notna(x) else "-"
                 )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            st.dataframe(display_df, width="stretch", hide_index=True)
         else:
             st.warning("Aucune donnée après filtrage.")
 
@@ -490,7 +490,7 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
                 lambda x: f"{x:,.2f}" if pd.notna(x) and isinstance(x, (int, float)) else x
             )
 
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.dataframe(display_df, width="stretch", hide_index=True)
 
 
 def render_editable_preview(
@@ -573,7 +573,7 @@ def render_editable_preview(
     edited_df = st.data_editor(
         combined_df,
         column_config=column_config,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="fixed",  # Don't allow adding/removing rows
         key="agg_data_editor",
