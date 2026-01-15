@@ -199,13 +199,13 @@ class DataUnifier:
         """
         Normalise un nom de conseiller via l'AdvisorMatcher.
 
-        Retourne le format compact "Prénom, Initiale" (ex: "Guillaume, S")
+        Retourne le nom complet "Prénom Nom" (ex: "Guillaume St-Pierre")
         en matchant avec la base de données des conseillers.
         """
         if not name or not self.advisor_matcher:
             return name
-        # Utilise match_compact pour obtenir le format "Prénom, Initiale"
-        result = self.advisor_matcher.match_compact(str(name))
+        # Utilise match_full_name pour obtenir le format "Prénom Nom"
+        result = self.advisor_matcher.match_full_name(str(name))
         return result if result else name
 
     def _aggregate_by_policy(self, df: pd.DataFrame) -> pd.DataFrame:

@@ -499,5 +499,157 @@ def get_css() -> str:
         text-transform: uppercase;
         color: var(--text-secondary);
     }
+
+    /* ===========================================
+       AGGREGATION UI COMPONENTS
+       =========================================== */
+
+    /* Section card */
+    .section-card {
+        margin-bottom: 1rem;
+    }
+    .section-card .section-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
+    }
+    .section-card .section-description {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+
+    /* Info card for displaying key information */
+    .info-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: linear-gradient(135deg, rgba(56, 178, 172, 0.08) 0%, rgba(56, 178, 172, 0.03) 100%);
+        border: 1px solid rgba(56, 178, 172, 0.2);
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .info-card .info-icon {
+        font-size: 1.5rem;
+        flex-shrink: 0;
+    }
+    .info-card .info-content {
+        flex: 1;
+    }
+    .info-card .info-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        margin-bottom: 2px;
+    }
+    .info-card .info-value {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    /* Source card for aggregation sources */
+    .source-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        transition: all 0.2s ease;
+    }
+    .source-card:hover {
+        border-color: var(--accent-500);
+        box-shadow: var(--shadow-sm);
+    }
+    .source-card.active {
+        border-color: var(--accent-500);
+        background: rgba(56, 178, 172, 0.05);
+    }
+    .source-card .source-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+    }
+    .source-card .source-name {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .source-card .source-column {
+        font-size: 0.8rem;
+        color: var(--accent-600);
+        background: rgba(56, 178, 172, 0.1);
+        padding: 2px 8px;
+        border-radius: 4px;
+    }
+
+    /* Summary stats row */
+    .summary-stats {
+        display: flex;
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    .summary-stat {
+        flex: 1;
+        background: var(--surface-hover);
+        border-radius: 10px;
+        padding: 0.75rem;
+        text-align: center;
+    }
+    .summary-stat .stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--accent-600);
+    }
+    .summary-stat .stat-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+    }
+
+    /* ===========================================
+       MODE TOGGLE BUTTONS
+       =========================================== */
+
+    .mode-toggle-container {
+        display: none; /* Hidden - using Streamlit buttons instead */
+    }
+
+    /* Style the mode toggle Streamlit buttons */
+    [data-testid="column"] .stButton > button {
+        font-size: 0.85rem;
+        padding: 0.5rem 0.75rem;
+    }
+
+    /* Sidebar mode buttons - make them more compact */
+    section[data-testid="stSidebar"] [data-testid="column"] {
+        padding: 0 0.15rem;
+    }
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button {
+        font-size: 0.75rem;
+        padding: 0.4rem 0.5rem;
+        border-radius: 10px;
+    }
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[kind="primary"],
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[data-testid="baseButton-primary"] {
+        background: linear-gradient(135deg, var(--accent-500) 0%, var(--accent-600) 100%);
+        border: none;
+        box-shadow: 0 4px 12px rgba(56, 178, 172, 0.25);
+    }
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[kind="secondary"],
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[data-testid="baseButton-secondary"] {
+        background: var(--surface-hover);
+        border: 1.5px solid var(--border);
+        color: var(--text-secondary);
+    }
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[data-testid="baseButton-secondary"]:hover {
+        border-color: var(--accent-500);
+        color: var(--accent-600);
+        background: rgba(56, 178, 172, 0.08);
+    }
 </style>
 """

@@ -803,8 +803,448 @@ class MondayClient:
         return result
 
     # -------------------------------------------------------------------------
+    # Data extraction (read operations)
+    # -------------------------------------------------------------------------
+
+    async def extract_board_data(
+        self,
+        board_id: int,
+        group_id: Optional[str] = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """
+        Extract all items from a board with pagination.
+
+        Args:
+            board_id: Board ID to extract from
+            group_id: Optional group ID to filter by
+            limit: Items per page (max 500)
+
+        Returns:
+            List of item dictionaries with column values
+        """
+        all_items = []
+        cursor = None
+
+        while True:
+            # Build cursor argument
+            cursor_arg = f', cursor: "{cursor}"' if cursor else ""
+
+            # Build query based on whether we're filtering by group
+            if group_id:
+                query = f"""
+                {{
+                    boards(ids: {board_id}) {{
+                        groups(ids: ["{group_id}"]) {{
+                            items_page(limit: {limit}{cursor_arg}) {{
+                                cursor
+                                items {{
+                                    id
+                                    name
+                                    group {{
+                                        id
+                                        title
+                                    }}
+                                    column_values {{
+                                        id
+                                        text
+                                        value
+                                        column {{
+                                            title
+                                            type
+                                        }}
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+                """
+            else:
+                query = f"""
+                {{
+                    boards(ids: {board_id}) {{
+                        items_page(limit: {limit}{cursor_arg}) {{
+                            cursor
+                            items {{
+                                id
+                                name
+                                group {{
+                                    id
+                                    title
+                                }}
+                                column_values {{
+                                    id
+                                    text
+                                    value
+                                    column {{
+                                        title
+                                        type
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+                """
+
+            result = await self._execute_query(query)
+
+            # Extract items based on query structure
+            if group_id:
+                groups = result["data"]["boards"][0]["groups"]
+                if not groups:
+                    break
+                items_page = groups[0]["items_page"]
+            else:
+                items_page = result["data"]["boards"][0]["items_page"]
+
+            items = items_page["items"]
+            cursor = items_page["cursor"]
+
+            if not items:
+                break
+
+            all_items.extend(items)
+
+            if not cursor:
+                break
+
+        return all_items
+
+    def board_items_to_dataframe(
+        self,
+        items: list[dict],
+        include_item_id: bool = True,
+        include_group: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Convert Monday.com items to a pandas DataFrame.
+
+        Args:
+            items: List of items from extract_board_data
+            include_item_id: Include item ID column
+            include_group: Include group info columns
+
+        Returns:
+            DataFrame with item data
+        """
+        if not items:
+            return pd.DataFrame()
+
+        rows = []
+        for item in items:
+            row = {"item_name": item["name"]}
+
+            if include_item_id:
+                row["item_id"] = item["id"]
+
+            if include_group and item.get("group"):
+                row["group_id"] = item["group"]["id"]
+                row["group_title"] = item["group"]["title"]
+
+            # Extract column values
+            for col_val in item.get("column_values", []):
+                col_title = col_val["column"]["title"]
+                col_type = col_val["column"]["type"]
+
+                # Use text representation for most columns
+                # For numbers, try to parse the value
+                if col_type == "numbers" or col_type == "numeric":
+                    try:
+                        raw_value = col_val.get("value")
+                        if raw_value:
+                            import json as json_module
+                            parsed = json_module.loads(raw_value)
+                            row[col_title] = float(parsed) if parsed else None
+                        else:
+                            row[col_title] = None
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        row[col_title] = col_val.get("text")
+                else:
+                    row[col_title] = col_val.get("text")
+
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    async def get_items_by_column_value(
+        self,
+        board_id: int,
+        column_id: str,
+        column_value: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """
+        Search for items by a specific column value.
+
+        Args:
+            board_id: Board ID to search in
+            column_id: Column ID to search by
+            column_value: Value to search for
+            limit: Maximum items to return
+
+        Returns:
+            List of matching items
+        """
+        query = f"""
+        {{
+            items_page_by_column_values(
+                board_id: {board_id},
+                limit: {limit},
+                columns: [{{column_id: "{column_id}", column_values: ["{column_value}"]}}]
+            ) {{
+                items {{
+                    id
+                    name
+                    group {{
+                        id
+                        title
+                    }}
+                    column_values {{
+                        id
+                        text
+                        value
+                        column {{
+                            title
+                            type
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(query)
+        return result["data"]["items_page_by_column_values"]["items"]
+
+    async def update_item_column_values(
+        self,
+        item_id: str,
+        board_id: int,
+        column_values: dict,
+        create_labels_if_missing: bool = True,
+    ) -> bool:
+        """
+        Update column values for an existing item.
+
+        Args:
+            item_id: Item ID to update
+            board_id: Board ID containing the item
+            column_values: Dict of column_id -> value
+            create_labels_if_missing: Create status labels if they don't exist
+
+        Returns:
+            True if successful
+        """
+        column_values_json = json.dumps(json.dumps(column_values))
+
+        mutation = f"""
+        mutation {{
+            change_multiple_column_values(
+                item_id: {item_id},
+                board_id: {board_id},
+                column_values: {column_values_json},
+                create_labels_if_missing: {str(create_labels_if_missing).lower()}
+            ) {{
+                id
+            }}
+        }}
+        """
+
+        try:
+            await self._execute_query(mutation)
+            return True
+        except MondayError:
+            return False
+
+    async def move_item_to_group(
+        self,
+        item_id: str,
+        group_id: str,
+    ) -> bool:
+        """
+        Move an item to a different group.
+
+        Args:
+            item_id: Item ID to move
+            group_id: Target group ID
+
+        Returns:
+            True if successful
+        """
+        mutation = f"""
+        mutation {{
+            move_item_to_group(
+                item_id: {item_id},
+                group_id: "{group_id}"
+            ) {{
+                id
+            }}
+        }}
+        """
+
+        try:
+            await self._execute_query(mutation)
+            return True
+        except MondayError:
+            return False
+
+    async def upsert_by_advisor(
+        self,
+        board_id: int,
+        group_id: str,
+        advisor_column_id: str,
+        data: pd.DataFrame,
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None,
+        advisor_column_name: str = "Conseiller",
+        progress_callback: Optional[callable] = None,
+    ) -> dict:
+        """
+        Upsert data by advisor - update existing items or create new ones.
+
+        Args:
+            board_id: Target board ID
+            group_id: Target group ID
+            advisor_column_id: Column ID for the advisor column
+            data: DataFrame with aggregated data (must have advisor_column_name)
+            column_id_map: column_name -> column_id mapping
+            column_type_map: column_name -> column_type mapping (optional)
+            advisor_column_name: Name of advisor column in DataFrame
+            progress_callback: Optional callback(current, total, action)
+
+        Returns:
+            Dict with {updated: int, created: int, errors: list}
+        """
+        result = {"updated": 0, "created": 0, "moved": 0, "errors": []}
+        column_type_map = column_type_map or {}
+        total = len(data)
+
+        for idx, row in data.iterrows():
+            advisor_name = row.get(advisor_column_name)
+            if not advisor_name or pd.isna(advisor_name):
+                result["errors"].append(f"Row {idx}: missing advisor name")
+                continue
+
+            # Search for existing item with this advisor
+            try:
+                existing_items = await self.get_items_by_column_value(
+                    board_id=board_id,
+                    column_id=advisor_column_id,
+                    column_value=str(advisor_name),
+                    limit=10,
+                )
+            except MondayError as e:
+                result["errors"].append(f"Search error for {advisor_name}: {e}")
+                continue
+
+            # Build column values for update/create
+            column_values = {}
+            for col_name, col_id in column_id_map.items():
+                if col_name == advisor_column_name:
+                    continue  # Don't update the advisor column itself
+                if col_name in row.index:
+                    actual_type = column_type_map.get(col_name)
+                    formatted = self._format_column_value(row[col_name], col_name, actual_type)
+                    if formatted is not None:
+                        column_values[col_id] = formatted
+
+            if existing_items:
+                # Update existing item
+                item = existing_items[0]
+                item_id = item["id"]
+                current_group_id = item.get("group", {}).get("id")
+
+                try:
+                    # Update column values
+                    if column_values:
+                        await self.update_item_column_values(
+                            item_id=item_id,
+                            board_id=board_id,
+                            column_values=column_values,
+                        )
+
+                    # Move to correct group if needed
+                    if current_group_id != group_id:
+                        await self.move_item_to_group(item_id, group_id)
+                        result["moved"] += 1
+
+                    result["updated"] += 1
+                except MondayError as e:
+                    result["errors"].append(f"Update error for {advisor_name}: {e}")
+            else:
+                # Create new item
+                # Add advisor to column values
+                column_values[advisor_column_id] = {"label": str(advisor_name)}
+
+                try:
+                    create_result = await self.create_item(
+                        board_id=board_id,
+                        item_name=str(advisor_name),
+                        group_id=group_id,
+                        column_values=column_values,
+                    )
+                    if create_result.success:
+                        result["created"] += 1
+                    else:
+                        result["errors"].append(f"Create error for {advisor_name}: {create_result.error}")
+                except MondayError as e:
+                    result["errors"].append(f"Create error for {advisor_name}: {e}")
+
+            # Rate limiting
+            await asyncio.sleep(RATE_LIMIT_DELAY)
+
+            if progress_callback:
+                current = idx + 1 if isinstance(idx, int) else data.index.get_loc(idx) + 1
+                progress_callback(current, total, "upsert")
+
+        return result
+
+    # -------------------------------------------------------------------------
     # Synchronous wrappers
     # -------------------------------------------------------------------------
+
+    def extract_board_data_sync(
+        self,
+        board_id: int,
+        group_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Synchronous wrapper for extract_board_data."""
+        return asyncio.run(self.extract_board_data(board_id, group_id))
+
+    def upsert_by_advisor_sync(
+        self,
+        board_id: int,
+        group_id: str,
+        advisor_column_id: str,
+        data: pd.DataFrame,
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None,
+        advisor_column_name: str = "Conseiller",
+        progress_callback: Optional[callable] = None,
+    ) -> dict:
+        """Synchronous wrapper for upsert_by_advisor."""
+        return asyncio.run(
+            self.upsert_by_advisor(
+                board_id=board_id,
+                group_id=group_id,
+                advisor_column_id=advisor_column_id,
+                data=data,
+                column_id_map=column_id_map,
+                column_type_map=column_type_map,
+                advisor_column_name=advisor_column_name,
+                progress_callback=progress_callback,
+            )
+        )
+
+    def get_or_create_group_sync(
+        self,
+        board_id: int,
+        group_name: str,
+        group_color: Optional[str] = None,
+    ) -> CreateResult:
+        """Synchronous wrapper for get_or_create_group."""
+        return asyncio.run(self.get_or_create_group(board_id, group_name, group_color))
 
     def upload_dataframe_sync(
         self,

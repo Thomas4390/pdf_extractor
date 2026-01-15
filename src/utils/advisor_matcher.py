@@ -514,6 +514,56 @@ class AdvisorMatcher:
 
         return None
 
+    def match_full_name(self, name: str, use_fuzzy: bool = True) -> Optional[str]:
+        """
+        Match a name to an advisor and return the full name (first + last).
+
+        Args:
+            name: The name to match
+            use_fuzzy: Whether to use fuzzy matching as fallback
+
+        Returns:
+            Full name (e.g., "Thomas Lussier"), or None if no match
+        """
+        if not name or not isinstance(name, str):
+            return None
+
+        name = str(name).strip()
+        if not name or name.lower() in ['none', 'nan', 'null']:
+            return None
+
+        # Normalize the input
+        normalized_name = self._normalize_text(name)
+
+        # Try regex pattern matching first
+        for pattern, advisor in self._compiled_patterns:
+            if pattern.search(normalized_name):
+                return advisor.full_name
+
+        # If no pattern match and fuzzy matching is enabled
+        if use_fuzzy:
+            best_match = None
+            best_score = 0.0
+
+            for advisor in self.advisors:
+                for term in advisor.get_all_searchable_terms():
+                    normalized_term = self._normalize_text(term)
+                    score = self._fuzzy_match(normalized_name, normalized_term)
+
+                    if score > best_score and score >= self.fuzzy_threshold:
+                        best_score = score
+                        best_match = advisor
+
+            if best_match:
+                return best_match.full_name
+
+        return None
+
+    def match_full_name_or_original(self, name: str, use_fuzzy: bool = True) -> str:
+        """Match a name and return the full name, or the original if no match."""
+        result = self.match_full_name(name, use_fuzzy)
+        return result if result else name
+
     def match_compact(self, name: str, use_fuzzy: bool = True) -> Optional[str]:
         """
         Match a name to an advisor and return the compact display name.
@@ -658,3 +708,37 @@ def normalize_advisor_name_compact_or_original(name: str) -> str:
 
     matcher = get_advisor_matcher()
     return matcher.match_compact_or_original(name, use_fuzzy=True)
+
+
+def normalize_advisor_name_full(name: str) -> Optional[str]:
+    """
+    Normalize an advisor name to full name format (first + last).
+
+    Args:
+        name: The advisor name to normalize
+
+    Returns:
+        Full name (e.g., "Thomas Lussier"), or None if no match
+    """
+    if not name:
+        return None
+
+    matcher = get_advisor_matcher()
+    return matcher.match_full_name(name, use_fuzzy=True)
+
+
+def normalize_advisor_name_full_or_original(name: str) -> str:
+    """
+    Normalize an advisor name to full name format, returning original if no match.
+
+    Args:
+        name: The advisor name to normalize
+
+    Returns:
+        Full name (e.g., "Thomas Lussier"), or original if no match
+    """
+    if not name:
+        return name
+
+    matcher = get_advisor_matcher()
+    return matcher.match_full_name_or_original(name, use_fuzzy=True)
