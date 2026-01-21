@@ -327,18 +327,55 @@ def render_agg_step_2_period_preview() -> None:
             # Get list of advisors from combined data
             advisors = sorted(combined_df["Conseiller"].unique().tolist())
 
-            # Advisor selector
-            selected_advisor = st.selectbox(
-                "Sélectionner un conseiller",
-                options=["Tous"] + advisors,
-                key="agg_advisor_detail_selector",
-            )
+            # Get list of sources
+            source_names = []
+            for source_key in st.session_state.agg_selected_sources.keys():
+                config = SOURCE_BOARDS.get(source_key)
+                if config:
+                    source_names.append(config.display_name)
+
+            # Get current selections from session state (persist across period changes)
+            current_advisor = st.session_state.get("agg_detail_advisor", "Tous")
+            current_source = st.session_state.get("agg_detail_source", "Toutes")
+
+            # Validate current selections still exist in data
+            if current_advisor != "Tous" and current_advisor not in advisors:
+                current_advisor = "Tous"
+            if current_source != "Toutes" and current_source not in source_names:
+                current_source = "Toutes"
+
+            # Filter selectors in columns
+            col_advisor, col_source = st.columns(2)
+
+            with col_advisor:
+                advisor_index = (["Tous"] + advisors).index(current_advisor) if current_advisor in ["Tous"] + advisors else 0
+                selected_advisor = st.selectbox(
+                    "👤 Conseiller",
+                    options=["Tous"] + advisors,
+                    index=advisor_index,
+                    key="agg_advisor_detail_selector",
+                )
+                st.session_state.agg_detail_advisor = selected_advisor
+
+            with col_source:
+                source_index = (["Toutes"] + source_names).index(current_source) if current_source in ["Toutes"] + source_names else 0
+                selected_source = st.selectbox(
+                    "📊 Source",
+                    options=["Toutes"] + source_names,
+                    index=source_index,
+                    key="agg_source_detail_selector",
+                )
+                st.session_state.agg_detail_source = selected_source
 
             # Combine filtered data from all sources for display
             all_filtered_rows = []
             for source_key in st.session_state.agg_selected_sources.keys():
                 config = SOURCE_BOARDS.get(source_key)
                 if not config:
+                    continue
+
+                # Skip if source filter is active and doesn't match
+                if selected_source != "Toutes" and config.display_name != selected_source:
                     continue
 
                 filtered_df = st.session_state.agg_filtered_data.get(source_key, pd.DataFrame())
@@ -365,17 +402,30 @@ def render_agg_step_2_period_preview() -> None:
                     detail_df = detail_df[detail_df["Conseiller"] == selected_advisor]
 
                 if not detail_df.empty:
-                    # Show summary for selected advisor(s)
+                    # Build summary message
+                    unique_advisors_in_view = detail_df["Conseiller"].nunique()
+                    unique_sources_in_view = detail_df["_source"].nunique()
+
+                    summary_parts = [f"**{len(detail_df)} transactions**"]
                     if selected_advisor == "Tous":
-                        st.info(f"📊 **{len(detail_df)} transactions** pour **{len(advisors)} conseillers**")
+                        summary_parts.append(f"**{unique_advisors_in_view} conseillers**")
                     else:
-                        st.info(f"📊 **{len(detail_df)} transactions** pour **{selected_advisor}**")
+                        summary_parts.append(f"**{selected_advisor}**")
+                    if selected_source == "Toutes":
+                        summary_parts.append(f"**{unique_sources_in_view} sources**")
+                    else:
+                        summary_parts.append(f"**{selected_source}**")
+
+                    st.info(f"📊 {' · '.join(summary_parts)}")
+
+                    # Columns to put at the end (technical/metadata columns)
+                    end_columns = ["item_id", "group_id", "group_title", "Sous-éléments"]
 
                     # Select columns to display (prioritize important ones)
                     display_cols = ["Conseiller", "_source"]
                     # Add date columns
                     for col in detail_df.columns:
-                        if "date" in col.lower() and col not in display_cols:
+                        if "date" in col.lower() and col not in display_cols and col not in end_columns:
                             display_cols.append(col)
                     # Add value columns from configs
                     for source_key in st.session_state.agg_selected_sources.keys():
@@ -383,9 +433,13 @@ def render_agg_step_2_period_preview() -> None:
                         if config and config.aggregate_column in detail_df.columns:
                             if config.aggregate_column not in display_cols:
                                 display_cols.append(config.aggregate_column)
-                    # Add remaining columns
+                    # Add remaining columns (except end columns and internal columns)
                     for col in detail_df.columns:
-                        if col not in display_cols and not col.startswith("_"):
+                        if col not in display_cols and not col.startswith("_") and col not in end_columns:
+                            display_cols.append(col)
+                    # Add end columns last
+                    for col in end_columns:
+                        if col in detail_df.columns and col not in display_cols:
                             display_cols.append(col)
 
                     # Filter to existing columns only
@@ -402,7 +456,7 @@ def render_agg_step_2_period_preview() -> None:
                         height=400,
                     )
                 else:
-                    st.warning("Aucune transaction pour ce conseiller.")
+                    st.warning("Aucune transaction pour ces filtres.")
             else:
                 st.warning("Aucune donnée filtrée disponible.")
         else:

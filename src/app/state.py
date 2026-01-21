@@ -160,6 +160,8 @@ def init_session_state() -> None:
         "agg_use_custom_group": False,  # Toggle for manual group name
         "agg_custom_group_name": "",  # Custom group name input
         "agg_unknown_advisors": [],  # List of unknown advisor names filtered out
+        "agg_detail_advisor": "Tous",  # Selected advisor in detail tab
+        "agg_detail_source": "Toutes",  # Selected source in detail tab
     }
 
     for key, default in defaults.items():
@@ -224,3 +226,5 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_use_custom_group = False
     st.session_state.agg_custom_group_name = ""
     st.session_state.agg_unknown_advisors = []
+    st.session_state.agg_detail_advisor = "Tous"
+    st.session_state.agg_detail_source = "Toutes"
