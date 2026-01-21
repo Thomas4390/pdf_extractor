@@ -1103,6 +1103,10 @@ class MondayClient:
         """
         Upsert data by advisor - update existing items or create new ones.
 
+        IMPORTANT: Only updates items within the target group. Items in other
+        groups are NOT moved or modified, preserving historical data in
+        separate period groups.
+
         Args:
             board_id: Target board ID
             group_id: Target group ID
@@ -1116,7 +1120,7 @@ class MondayClient:
         Returns:
             Dict with {updated: int, created: int, errors: list}
         """
-        result = {"updated": 0, "created": 0, "moved": 0, "errors": []}
+        result = {"updated": 0, "created": 0, "errors": []}
         column_type_map = column_type_map or {}
         total = len(data)
 
@@ -1132,11 +1136,18 @@ class MondayClient:
                     board_id=board_id,
                     column_id=advisor_column_id,
                     column_value=str(advisor_name),
-                    limit=10,
+                    limit=50,  # Increased limit to find items across groups
                 )
             except MondayError as e:
                 result["errors"].append(f"Search error for {advisor_name}: {e}")
                 continue
+
+            # Filter to only items in the TARGET GROUP
+            # This ensures we don't modify items in other period groups
+            items_in_target_group = [
+                item for item in existing_items
+                if item.get("group", {}).get("id") == group_id
+            ]
 
             # Build column values for update/create
             column_values = {}
@@ -1149,11 +1160,10 @@ class MondayClient:
                     if formatted is not None:
                         column_values[col_id] = formatted
 
-            if existing_items:
-                # Update existing item
-                item = existing_items[0]
+            if items_in_target_group:
+                # Update existing item in target group
+                item = items_in_target_group[0]
                 item_id = item["id"]
-                current_group_id = item.get("group", {}).get("id")
 
                 try:
                     # Update column values
@@ -1164,17 +1174,12 @@ class MondayClient:
                             column_values=column_values,
                         )
 
-                    # Move to correct group if needed
-                    if current_group_id != group_id:
-                        await self.move_item_to_group(item_id, group_id)
-                        result["moved"] += 1
-
                     result["updated"] += 1
                 except MondayError as e:
                     result["errors"].append(f"Update error for {advisor_name}: {e}")
             else:
-                # Create new item
-                # Add advisor to column values
+                # Create new item in target group
+                # (advisor doesn't exist in this group yet, even if in other groups)
                 column_values[advisor_column_id] = {"label": str(advisor_name)}
 
                 try:
