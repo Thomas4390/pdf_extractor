@@ -284,8 +284,9 @@ def render_agg_step_2_period_preview() -> None:
     combined_df = st.session_state.agg_combined_data
 
     # Create tabs for different views
-    tab_combined, tab_sources, tab_upload = st.tabs([
+    tab_combined, tab_advisors, tab_sources, tab_upload = st.tabs([
         "📋 Résumé",
+        "👤 Détail par conseiller",
         "📊 Détail par source",
         "📤 Aperçu upload"
     ])
@@ -320,7 +321,94 @@ def render_agg_step_2_period_preview() -> None:
         else:
             st.warning("Aucune donnée pour cette période.")
 
-    # Tab 2: Source-by-source detail
+    # Tab 2: Detail by advisor (shows all transactions per advisor)
+    with tab_advisors:
+        if combined_df is not None and not combined_df.empty:
+            # Get list of advisors from combined data
+            advisors = sorted(combined_df["Conseiller"].unique().tolist())
+
+            # Advisor selector
+            selected_advisor = st.selectbox(
+                "Sélectionner un conseiller",
+                options=["Tous"] + advisors,
+                key="agg_advisor_detail_selector",
+            )
+
+            # Combine filtered data from all sources for display
+            all_filtered_rows = []
+            for source_key in st.session_state.agg_selected_sources.keys():
+                config = SOURCE_BOARDS.get(source_key)
+                if not config:
+                    continue
+
+                filtered_df = st.session_state.agg_filtered_data.get(source_key, pd.DataFrame())
+                if filtered_df.empty:
+                    continue
+
+                # Add source column for identification
+                display_df = filtered_df.copy()
+                display_df["_source"] = config.display_name
+
+                # Rename advisor column to standard name if different
+                advisor_col = config.advisor_column
+                if advisor_col != "Conseiller" and advisor_col in display_df.columns:
+                    display_df = display_df.rename(columns={advisor_col: "Conseiller"})
+
+                all_filtered_rows.append(display_df)
+
+            if all_filtered_rows:
+                # Combine all sources
+                detail_df = pd.concat(all_filtered_rows, ignore_index=True)
+
+                # Filter by selected advisor if not "Tous"
+                if selected_advisor != "Tous":
+                    detail_df = detail_df[detail_df["Conseiller"] == selected_advisor]
+
+                if not detail_df.empty:
+                    # Show summary for selected advisor(s)
+                    if selected_advisor == "Tous":
+                        st.info(f"📊 **{len(detail_df)} transactions** pour **{len(advisors)} conseillers**")
+                    else:
+                        st.info(f"📊 **{len(detail_df)} transactions** pour **{selected_advisor}**")
+
+                    # Select columns to display (prioritize important ones)
+                    display_cols = ["Conseiller", "_source"]
+                    # Add date columns
+                    for col in detail_df.columns:
+                        if "date" in col.lower() and col not in display_cols:
+                            display_cols.append(col)
+                    # Add value columns from configs
+                    for source_key in st.session_state.agg_selected_sources.keys():
+                        config = SOURCE_BOARDS.get(source_key)
+                        if config and config.aggregate_column in detail_df.columns:
+                            if config.aggregate_column not in display_cols:
+                                display_cols.append(config.aggregate_column)
+                    # Add remaining columns
+                    for col in detail_df.columns:
+                        if col not in display_cols and not col.startswith("_"):
+                            display_cols.append(col)
+
+                    # Filter to existing columns only
+                    display_cols = [c for c in display_cols if c in detail_df.columns]
+
+                    # Rename _source to Source for display
+                    detail_df = detail_df.rename(columns={"_source": "Source"})
+                    display_cols = ["Source" if c == "_source" else c for c in display_cols]
+
+                    st.dataframe(
+                        detail_df[display_cols],
+                        hide_index=True,
+                        use_container_width=True,
+                        height=400,
+                    )
+                else:
+                    st.warning("Aucune transaction pour ce conseiller.")
+            else:
+                st.warning("Aucune donnée filtrée disponible.")
+        else:
+            st.warning("Aucune donnée pour cette période.")
+
+    # Tab 3: Source-by-source detail
     with tab_sources:
         for source_key in st.session_state.agg_selected_sources.keys():
             config = SOURCE_BOARDS.get(source_key)
