@@ -193,9 +193,9 @@ def render_agg_step_1_config() -> None:
     )
 
     if go_next:
-        # Set default period if not set
+        # Set default period if not set (MONTH_1 = last month)
         if st.session_state.agg_period is None:
-            st.session_state.agg_period = DatePeriod.LAST_MONTH
+            st.session_state.agg_period = DatePeriod.MONTH_1
         # Filter and aggregate with the period
         filter_and_aggregate_data()
         st.session_state.agg_step = 2
@@ -207,55 +207,64 @@ def render_agg_step_2_period_preview() -> None:
     boards = st.session_state.monday_boards
     target_board_id = st.session_state.agg_target_board_id
 
-    # Get current period (default to LAST_MONTH)
+    # Get current period (default to MONTH_1 = last month)
     current_period = st.session_state.agg_period
     if current_period is None:
-        current_period = DatePeriod.LAST_MONTH
+        current_period = DatePeriod.MONTH_1
         st.session_state.agg_period = current_period
 
     # Period selection header
-    st.subheader("📅 Période de filtrage")
+    st.subheader("📅 Sélection du mois")
 
-    # Period selector as pill buttons
-    period_cols = st.columns(len(DatePeriod))
-    for idx, period in enumerate(DatePeriod):
-        with period_cols[idx]:
-            is_selected = period == current_period
-            btn_type = "primary" if is_selected else "secondary"
-            if st.button(
-                period.display_name,
-                key=f"period_btn_{period.value}",
-                type=btn_type,
-                width="stretch",
-            ):
-                if period != current_period:
-                    st.session_state.agg_period = period
-                    # Re-filter and aggregate with new period (instant, no API call)
-                    filter_and_aggregate_data()
-                    st.rerun()
+    # Create month options for selectbox
+    month_options = list(DatePeriod)
+    month_labels = {period: period.display_name for period in month_options}
 
-    # Show date range info
-    start_date, end_date = get_period_date_range(current_period)
-    col1, col2 = st.columns(2)
-    with col1:
+    # Find current index
+    current_index = month_options.index(current_period) if current_period in month_options else 1
+
+    # Month selector as selectbox
+    col_select, col_info = st.columns([2, 3])
+
+    with col_select:
+        selected_period = st.selectbox(
+            "Mois à agréger",
+            options=month_options,
+            index=current_index,
+            format_func=lambda p: f"{p.display_name} ({p.short_label})",
+            key="agg_month_selector",
+            label_visibility="collapsed",
+        )
+
+        if selected_period != current_period:
+            st.session_state.agg_period = selected_period
+            # Re-filter and aggregate with new period (instant, no API call)
+            filter_and_aggregate_data()
+            st.rerun()
+
+    with col_info:
+        # Show date range info
+        start_date, end_date = get_period_date_range(selected_period)
         st.info(f"📆 **Du** {start_date.strftime('%d/%m/%Y')} **au** {end_date.strftime('%d/%m/%Y')}")
-    with col2:
-        # Group name options
-        use_custom_group = st.session_state.get("agg_use_custom_group", False)
-        custom_group_name = st.session_state.get("agg_custom_group_name", "")
-        auto_group_name = get_group_name_for_period(current_period)
 
+    # Group name options
+    use_custom_group = st.session_state.get("agg_use_custom_group", False)
+    custom_group_name = st.session_state.get("agg_custom_group_name", "")
+    auto_group_name = get_group_name_for_period(selected_period)
+
+    col_group1, col_group2 = st.columns([1, 2])
+    with col_group1:
         group_mode = st.radio(
             "Groupe cible",
             options=["auto", "manual"],
-            format_func=lambda x: f"🔄 {auto_group_name}" if x == "auto" else "✏️ Personnalisé",
+            format_func=lambda x: f"🔄 Auto ({auto_group_name})" if x == "auto" else "✏️ Personnalisé",
             index=1 if use_custom_group else 0,
             key="agg_group_mode_step2",
             horizontal=True,
         )
-
         st.session_state.agg_use_custom_group = (group_mode == "manual")
 
+    with col_group2:
         if group_mode == "manual":
             custom_name = st.text_input(
                 "Nom du groupe",
@@ -267,6 +276,7 @@ def render_agg_step_2_period_preview() -> None:
             final_group_name = custom_name
         else:
             final_group_name = auto_group_name
+            st.markdown(f"**Groupe:** {final_group_name}")
 
     st.markdown("---")
 

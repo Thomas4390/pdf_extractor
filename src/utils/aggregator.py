@@ -47,24 +47,66 @@ QUARTERS_FR = {
 # =============================================================================
 
 class DatePeriod(Enum):
-    """Available date filtering periods."""
-    CURRENT_WEEK = "current_week"
-    CURRENT_MONTH = "current_month"
-    LAST_MONTH = "last_month"
-    CURRENT_QUARTER = "current_quarter"
-    CURRENT_YEAR = "current_year"
+    """Available date filtering periods - month-based selection."""
+    MONTH_0 = 0   # Current month
+    MONTH_1 = 1   # 1 month ago
+    MONTH_2 = 2   # 2 months ago
+    MONTH_3 = 3   # 3 months ago
+    MONTH_4 = 4   # 4 months ago
+    MONTH_5 = 5   # 5 months ago
+    MONTH_6 = 6   # 6 months ago
+    MONTH_7 = 7   # 7 months ago
+    MONTH_8 = 8   # 8 months ago
+    MONTH_9 = 9   # 9 months ago
+    MONTH_10 = 10  # 10 months ago
+    MONTH_11 = 11  # 11 months ago
+
+    @property
+    def months_ago(self) -> int:
+        """Number of months ago from current month."""
+        return self.value
 
     @property
     def display_name(self) -> str:
-        """Human-readable name for UI."""
-        names = {
-            DatePeriod.CURRENT_WEEK: "Semaine courante",
-            DatePeriod.CURRENT_MONTH: "Mois courant",
-            DatePeriod.LAST_MONTH: "Mois dernier",
-            DatePeriod.CURRENT_QUARTER: "Trimestre courant",
-            DatePeriod.CURRENT_YEAR: "Année courante",
-        }
-        return names[self]
+        """Human-readable name showing actual month and year."""
+        target_date = get_month_from_offset(self.value)
+        return f"{MONTHS_FR[target_date.month]} {target_date.year}"
+
+    @property
+    def short_label(self) -> str:
+        """Short label for UI buttons."""
+        if self.value == 0:
+            return "Ce mois"
+        elif self.value == 1:
+            return "Mois dernier"
+        else:
+            return f"-{self.value} mois"
+
+
+def get_month_from_offset(months_ago: int, reference_date: Optional[date] = None) -> date:
+    """
+    Get the first day of a month N months ago.
+
+    Args:
+        months_ago: Number of months to go back (0 = current month)
+        reference_date: Reference date (defaults to today)
+
+    Returns:
+        First day of the target month
+    """
+    if reference_date is None:
+        reference_date = date.today()
+
+    # Calculate target year and month
+    year = reference_date.year
+    month = reference_date.month - months_ago
+
+    # Handle year rollover
+    while month <= 0:
+        month += 12
+        year -= 1
+
+    return date(year, month, 1)
 
 
 # =============================================================================
@@ -122,7 +164,7 @@ def get_period_date_range(
     Get start and end dates for a given period.
 
     Args:
-        period: The date period to calculate
+        period: The date period to calculate (month-based)
         reference_date: Reference date (defaults to today)
 
     Returns:
@@ -131,45 +173,14 @@ def get_period_date_range(
     if reference_date is None:
         reference_date = date.today()
 
-    if period == DatePeriod.CURRENT_WEEK:
-        # Monday to Sunday of current week
-        start = reference_date - timedelta(days=reference_date.weekday())
-        end = start + timedelta(days=6)
+    # Get the first day of the target month
+    start = get_month_from_offset(period.months_ago, reference_date)
 
-    elif period == DatePeriod.CURRENT_MONTH:
-        # First to last day of current month
-        start = reference_date.replace(day=1)
-        # Go to next month, then back one day
-        if reference_date.month == 12:
-            end = reference_date.replace(year=reference_date.year + 1, month=1, day=1) - timedelta(days=1)
-        else:
-            end = reference_date.replace(month=reference_date.month + 1, day=1) - timedelta(days=1)
-
-    elif period == DatePeriod.LAST_MONTH:
-        # First to last day of previous month
-        first_of_current = reference_date.replace(day=1)
-        end = first_of_current - timedelta(days=1)
-        start = end.replace(day=1)
-
-    elif period == DatePeriod.CURRENT_QUARTER:
-        # First day of quarter to last day of quarter
-        quarter = (reference_date.month - 1) // 3 + 1
-        start_month = (quarter - 1) * 3 + 1
-        start = reference_date.replace(month=start_month, day=1)
-        # End of quarter
-        end_month = quarter * 3
-        if end_month == 12:
-            end = reference_date.replace(month=12, day=31)
-        else:
-            end = reference_date.replace(month=end_month + 1, day=1) - timedelta(days=1)
-
-    elif period == DatePeriod.CURRENT_YEAR:
-        # Jan 1 to Dec 31 of current year
-        start = reference_date.replace(month=1, day=1)
-        end = reference_date.replace(month=12, day=31)
-
+    # Calculate the last day of the month
+    if start.month == 12:
+        end = date(start.year + 1, 1, 1) - timedelta(days=1)
     else:
-        raise ValueError(f"Unknown period: {period}")
+        end = date(start.year, start.month + 1, 1) - timedelta(days=1)
 
     return start, end
 
@@ -181,40 +192,23 @@ def get_group_name_for_period(
     """
     Get the target group name for a given period.
 
+    Since all periods are now month-based, returns "Month Year" format.
+
     Examples:
-        - LAST_MONTH (in January 2026) → "Décembre 2025"
-        - CURRENT_MONTH (in January 2026) → "Janvier 2026"
-        - CURRENT_QUARTER (in Q1 2026) → "Q1 2026"
-        - CURRENT_YEAR (in 2026) → "2026"
-        - CURRENT_WEEK (week of Jan 13, 2026) → "Semaine 3 - 2026"
+        - MONTH_0 (in January 2026) → "Janvier 2026"
+        - MONTH_1 (in January 2026) → "Décembre 2025"
+        - MONTH_2 (in January 2026) → "Novembre 2025"
 
     Args:
-        period: The date period
+        period: The date period (month-based)
         reference_date: Reference date (defaults to today)
 
     Returns:
-        French group name string
+        French group name string (e.g., "Janvier 2026")
     """
-    start_date, end_date = get_period_date_range(period, reference_date)
-
-    if period in (DatePeriod.CURRENT_MONTH, DatePeriod.LAST_MONTH):
-        # Use month name + year
-        month_name = MONTHS_FR[start_date.month]
-        return f"{month_name} {start_date.year}"
-
-    elif period == DatePeriod.CURRENT_QUARTER:
-        quarter = (start_date.month - 1) // 3 + 1
-        return f"Q{quarter} {start_date.year}"
-
-    elif period == DatePeriod.CURRENT_YEAR:
-        return str(start_date.year)
-
-    elif period == DatePeriod.CURRENT_WEEK:
-        week_number = start_date.isocalendar()[1]
-        return f"Semaine {week_number} - {start_date.year}"
-
-    else:
-        raise ValueError(f"Unknown period: {period}")
+    start_date, _ = get_period_date_range(period, reference_date)
+    month_name = MONTHS_FR[start_date.month]
+    return f"{month_name} {start_date.year}"
 
 
 # =============================================================================
