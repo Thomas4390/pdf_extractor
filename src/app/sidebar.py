@@ -42,7 +42,7 @@ def render_sidebar() -> None:
                     st.session_state.app_mode = "aggregation"
                     st.session_state.agg_step = 1
                     if st.session_state.agg_period is None:
-                        st.session_state.agg_period = DatePeriod.LAST_MONTH
+                        st.session_state.agg_period = DatePeriod.MONTH_1
                     st.rerun()
 
         st.markdown("---")
