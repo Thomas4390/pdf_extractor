@@ -102,7 +102,7 @@ class MondayClient:
         '# de Police': ColumnType.TEXT,
         'Nom Client': ColumnType.TEXT,
         'Compagnie': ColumnType.STATUS,
-        'Conseiller': ColumnType.STATUS,
+        'Conseiller': ColumnType.TEXT,  # Must be TEXT for unique advisor names (not STATUS)
         'Lead/MC': ColumnType.STATUS,
 
         # Numeric columns
@@ -576,6 +576,10 @@ class MondayClient:
     # Batch upload
     # -------------------------------------------------------------------------
 
+    # Columns that must ALWAYS be treated as TEXT, even if Monday.com says STATUS
+    # This is for columns with unique per-item values (like advisor names)
+    FORCE_TEXT_COLUMNS = {"Conseiller", "conseiller"}
+
     def _format_column_value(
         self,
         value: Any,
@@ -591,6 +595,11 @@ class MondayClient:
         """
         if pd.isna(value) or value is None or value == "":
             return None
+
+        # Force TEXT format for columns that need unique per-item values
+        # STATUS columns don't work for unique values (all items share the same labels)
+        if column_name in self.FORCE_TEXT_COLUMNS:
+            return str(value) if value else None
 
         # Use actual Monday.com type if provided, otherwise fall back to our mapping
         if actual_type:
