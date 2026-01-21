@@ -122,6 +122,9 @@ def filter_and_aggregate_data() -> None:
             advisor_column=config.advisor_column,
         )
         aggregated_data[source_key] = aggregated_df
+        # Ensure unknown_names is a list (defensive coding for edge cases)
+        if not isinstance(unknown_names, list):
+            unknown_names = []
         all_unknown_names.extend(unknown_names)
 
     # Remove duplicates while preserving order
