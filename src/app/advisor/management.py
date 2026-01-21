@@ -18,8 +18,12 @@ def render_advisor_management_tab() -> None:
         st.error("Module advisor_matcher non disponible")
         return
 
-    # Initialize matcher
-    if st.session_state.advisor_matcher is None:
+    # Initialize matcher (or reset if outdated version without find_advisor method)
+    if (st.session_state.advisor_matcher is None or
+        not hasattr(st.session_state.advisor_matcher, 'find_advisor')):
+        # Reset the module-level singleton to get a fresh instance
+        from src.utils import advisor_matcher as am_module
+        am_module._matcher_instance = None
         st.session_state.advisor_matcher = get_advisor_matcher()
 
     matcher = st.session_state.advisor_matcher
