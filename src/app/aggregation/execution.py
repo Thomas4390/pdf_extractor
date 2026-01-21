@@ -97,7 +97,7 @@ def filter_and_aggregate_data() -> None:
 
     filtered_data = {}
     aggregated_data = {}
-    total_filtered_count = 0
+    all_unknown_names = []
 
     for source_key, df in source_data.items():
         config = SOURCE_BOARDS.get(source_key)
@@ -115,18 +115,21 @@ def filter_and_aggregate_data() -> None:
         filtered_data[source_key] = filtered_df
 
         # Aggregate by advisor (using config's advisor_column)
-        # Returns tuple: (aggregated_df, filtered_count)
-        aggregated_df, filtered_count = aggregate_by_advisor(
+        # Returns tuple: (aggregated_df, list of unknown advisor names)
+        aggregated_df, unknown_names = aggregate_by_advisor(
             df=filtered_df,
             value_column=config.aggregate_column,
             advisor_column=config.advisor_column,
         )
         aggregated_data[source_key] = aggregated_df
-        total_filtered_count += filtered_count
+        all_unknown_names.extend(unknown_names)
+
+    # Remove duplicates while preserving order
+    unique_unknown_names = list(dict.fromkeys(all_unknown_names))
 
     st.session_state.agg_filtered_data = filtered_data
     st.session_state.agg_aggregated_data = aggregated_data
-    st.session_state.agg_unknown_advisors_count = total_filtered_count
+    st.session_state.agg_unknown_advisors = unique_unknown_names
 
     # Combine aggregations
     st.session_state.agg_combined_data = combine_aggregations(aggregated_data)

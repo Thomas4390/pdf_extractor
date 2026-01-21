@@ -225,7 +225,7 @@ def normalize_advisor_column(
     df: pd.DataFrame,
     advisor_column: str = "Conseiller",
     filter_unknown: bool = True,
-) -> tuple[pd.DataFrame, int]:
+) -> tuple[pd.DataFrame, list[str]]:
     """
     Normalize advisor names in a DataFrame column to full name format.
 
@@ -238,32 +238,41 @@ def normalize_advisor_column(
         filter_unknown: If True, filter out rows where advisor is not in database
 
     Returns:
-        Tuple of (DataFrame with normalized advisor names, count of filtered rows)
+        Tuple of (DataFrame with normalized advisor names, list of unknown advisor names)
     """
     if df.empty:
-        return df, 0
+        return df, []
 
     if advisor_column not in df.columns:
-        return df, 0
+        return df, []
 
     # Make a copy to avoid modifying original
     df = df.copy()
+
+    # Store original names before normalization for tracking unknowns
+    df["_original_advisor"] = df[advisor_column].astype(str)
 
     # Apply normalization to the advisor column (returns None if not found)
     df[advisor_column] = df[advisor_column].apply(
         lambda x: normalize_advisor_name_full(str(x)) if pd.notna(x) else None
     )
 
-    # Count and filter out unknown advisors
-    filtered_count = 0
+    # Collect and filter out unknown advisors
+    unknown_names = []
     if filter_unknown:
-        # Count rows with None/empty advisor
+        # Find rows with None/empty advisor
         unknown_mask = df[advisor_column].isna() | (df[advisor_column] == "") | (df[advisor_column].astype(str).str.strip() == "")
-        filtered_count = unknown_mask.sum()
+        # Get unique original names that couldn't be matched
+        unknown_names = df.loc[unknown_mask, "_original_advisor"].unique().tolist()
+        # Clean up the names (remove empty/nan)
+        unknown_names = [n for n in unknown_names if n and n.lower() not in ["nan", "none", ""]]
         # Filter them out
         df = df[~unknown_mask]
 
-    return df, filtered_count
+    # Remove temporary column
+    df = df.drop(columns=["_original_advisor"], errors="ignore")
+
+    return df, unknown_names
 
 
 def filter_by_date(
@@ -314,7 +323,7 @@ def aggregate_by_advisor(
     value_column: str,
     advisor_column: str = "Conseiller",
     normalize_names: bool = True,
-) -> tuple[pd.DataFrame, int]:
+) -> tuple[pd.DataFrame, list[str]]:
     """
     Aggregate values by advisor.
 
@@ -329,24 +338,24 @@ def aggregate_by_advisor(
 
     Returns:
         Tuple of (DataFrame with columns [advisor_column, value_column] aggregated by advisor,
-                  count of rows filtered out due to unknown advisors)
+                  list of unknown advisor names that were filtered out)
     """
     if df.empty:
-        return pd.DataFrame(columns=[advisor_column, value_column]), 0
+        return pd.DataFrame(columns=[advisor_column, value_column]), []
 
     if advisor_column not in df.columns:
-        return pd.DataFrame(columns=[advisor_column, value_column]), 0
+        return pd.DataFrame(columns=[advisor_column, value_column]), []
 
     if value_column not in df.columns:
-        return pd.DataFrame(columns=[advisor_column, value_column]), 0
+        return pd.DataFrame(columns=[advisor_column, value_column]), []
 
     # Make a copy
     df = df.copy()
 
     # Normalize advisor names before aggregation (also filters unknown advisors)
-    filtered_count = 0
+    unknown_names = []
     if normalize_names:
-        df, filtered_count = normalize_advisor_column(df, advisor_column, filter_unknown=True)
+        df, unknown_names = normalize_advisor_column(df, advisor_column, filter_unknown=True)
 
     # Convert value column to numeric
     df[value_column] = pd.to_numeric(df[value_column], errors="coerce").fillna(0)
@@ -358,7 +367,7 @@ def aggregate_by_advisor(
         .sort_values(value_column, ascending=False)
     )
 
-    return result, filtered_count
+    return result, unknown_names
 
 
 def combine_aggregations(

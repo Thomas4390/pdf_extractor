@@ -296,11 +296,13 @@ def render_agg_step_2_period_preview() -> None:
                     st.metric(f"Total {col}", f"{total:,.2f}")
 
             # Show info about filtered unknown advisors
-            unknown_count = st.session_state.get("agg_unknown_advisors_count", 0)
-            if unknown_count > 0:
+            unknown_advisors = st.session_state.get("agg_unknown_advisors", [])
+            if unknown_advisors:
+                names_list = ", ".join(f"**{name}**" for name in unknown_advisors[:10])
+                if len(unknown_advisors) > 10:
+                    names_list += f", ... (+{len(unknown_advisors) - 10} autres)"
                 st.info(
-                    f"ℹ️ **{unknown_count} ligne(s) ignorée(s)** : conseillers non trouvés dans la base de données. "
-                    "Seuls les conseillers enregistrés dans la gestion des conseillers sont inclus."
+                    f"ℹ️ **{len(unknown_advisors)} conseiller(s) ignoré(s)** (non trouvés dans la base de données) : {names_list}"
                 )
 
             st.markdown("---")

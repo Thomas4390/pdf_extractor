@@ -159,7 +159,7 @@ def init_session_state() -> None:
         "agg_is_executing": False,
         "agg_use_custom_group": False,  # Toggle for manual group name
         "agg_custom_group_name": "",  # Custom group name input
-        "agg_unknown_advisors_count": 0,  # Count of rows filtered due to unknown advisors
+        "agg_unknown_advisors": [],  # List of unknown advisor names filtered out
     }
 
     for key, default in defaults.items():
@@ -223,4 +223,4 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_is_executing = False
     st.session_state.agg_use_custom_group = False
     st.session_state.agg_custom_group_name = ""
-    st.session_state.agg_unknown_advisors_count = 0
+    st.session_state.agg_unknown_advisors = []
