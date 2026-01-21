@@ -586,7 +586,11 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                 group_summary = {}
                 for filename in unique_files:
                     file_df = df[df['_source_file'] == filename]
-                    group = file_df['_target_group'].iloc[0] if '_target_group' in file_df.columns else "Auto"
+                    # Check both column existence AND non-empty DataFrame
+                    if '_target_group' in file_df.columns and not file_df.empty:
+                        group = file_df['_target_group'].iloc[0]
+                    else:
+                        group = "Auto"
                     if group not in group_summary:
                         group_summary[group] = []
                     group_summary[group].append((filename, len(file_df)))
@@ -621,7 +625,11 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
 
             for filename in unique_files:
                 file_df = df[df['_source_file'] == filename]
-                current_group = file_df['_target_group'].iloc[0] if '_target_group' in file_df.columns else "Auto"
+                # Check both column existence AND non-empty DataFrame
+                if '_target_group' in file_df.columns and not file_df.empty:
+                    current_group = file_df['_target_group'].iloc[0]
+                else:
+                    current_group = "Auto"
                 row_count = len(file_df)
 
                 # Use container with border for better visibility

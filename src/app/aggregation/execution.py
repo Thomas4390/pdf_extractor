@@ -151,7 +151,7 @@ def execute_aggregation_upsert() -> None:
         # Use edited data if available, otherwise use combined data
         data_df = st.session_state.get("agg_edited_data")
         if data_df is None or (hasattr(data_df, 'empty') and data_df.empty):
-            data_df = st.session_state.agg_combined_data
+            data_df = st.session_state.get("agg_combined_data")
 
         if data_df is None or data_df.empty:
             st.error("Pas de données à upserter.")

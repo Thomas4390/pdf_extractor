@@ -481,6 +481,11 @@ class MondayClient:
                 col_id = existing_map[col_name_lower]
                 col_type = existing_type_map.get(col_name_lower, "text")
 
+                # Skip if column ID is missing (malformed data)
+                if not col_id:
+                    print(f"Skipping column '{col_name}' with missing ID")
+                    continue
+
                 # Skip read-only column types
                 if col_type in self.READ_ONLY_COLUMN_TYPES:
                     print(f"Skipping read-only column '{col_name}' (type: {col_type})")

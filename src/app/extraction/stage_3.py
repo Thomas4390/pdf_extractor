@@ -115,6 +115,10 @@ def execute_upload(df: pd.DataFrame) -> None:
             unique_groups = [f"{get_months_fr()[datetime.now().month]} {datetime.now().year}"]
 
         total_items = len(df)
+        if total_items == 0:
+            st.warning("Aucune donnée à uploader.")
+            return
+
         items_uploaded = 0
         items_failed = 0
         all_errors = []
