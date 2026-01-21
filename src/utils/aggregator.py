@@ -415,4 +415,12 @@ def combine_aggregations(
         if col != advisor_column:
             result[col] = result[col].fillna(0)
 
+    # Reorder columns: Conseiller first, then PA Vendues, Collected, AE CA
+    desired_order = [advisor_column, "PA Vendues", "Collected", "AE CA"]
+    # Keep only columns that exist in the result
+    ordered_cols = [c for c in desired_order if c in result.columns]
+    # Add any remaining columns not in desired order
+    remaining_cols = [c for c in result.columns if c not in ordered_cols]
+    result = result[ordered_cols + remaining_cols]
+
     return result.sort_values(advisor_column)
