@@ -148,7 +148,8 @@ def init_session_state() -> None:
         "agg_selected_sources": get_default_selected_sources(),  # {source_key: board_id}
         "agg_period": None,  # DatePeriod enum
         "agg_target_board_id": None,
-        "agg_source_data": {},  # {source_key: DataFrame}
+        "agg_source_data": {},  # {source_key: DataFrame} - raw data from Monday.com
+        "agg_data_loaded": False,  # True when raw data has been loaded
         "agg_filtered_data": {},  # {source_key: DataFrame}
         "agg_aggregated_data": {},  # {source_key: DataFrame}
         "agg_combined_data": None,  # Combined DataFrame
@@ -211,6 +212,7 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_period = None
     st.session_state.agg_target_board_id = None
     st.session_state.agg_source_data = {}
+    st.session_state.agg_data_loaded = False
     st.session_state.agg_filtered_data = {}
     st.session_state.agg_aggregated_data = {}
     st.session_state.agg_combined_data = None

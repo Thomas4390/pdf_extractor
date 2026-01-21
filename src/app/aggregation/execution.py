@@ -19,29 +19,32 @@ from src.utils.aggregator import (
 from src.app.utils.async_helpers import run_async
 
 
-def load_and_aggregate_data() -> None:
-    """Load data from sources, filter by period, and aggregate by advisor."""
+def load_source_data() -> bool:
+    """
+    Load raw data from all selected source boards.
+
+    This only loads the raw data from Monday.com. Filtering and aggregation
+    are done separately to allow real-time period changes without reloading.
+
+    Returns:
+        True if data was loaded successfully, False otherwise.
+    """
     from src.clients.monday import MondayClient
 
     client = MondayClient(api_key=st.session_state.monday_api_key)
-    period = st.session_state.agg_period
 
     source_data = {}
-    filtered_data = {}
-    aggregated_data = {}
-
-    # Get selected sources
     selected_sources = st.session_state.agg_selected_sources
     total_sources = len(selected_sources)
 
     if total_sources == 0:
-        st.warning("Aucune source sélectionnée.")
-        return
+        return False
 
     # Progress bar for loading
     progress_bar = st.progress(0)
     status_text = st.empty()
 
+    success = True
     for idx, (source_key, board_id) in enumerate(selected_sources.items()):
         config = SOURCE_BOARDS.get(source_key)
         if not config:
@@ -50,50 +53,88 @@ def load_and_aggregate_data() -> None:
         # Update progress
         progress = idx / total_sources
         progress_bar.progress(progress)
-        status_text.text(f"Chargement de {config.display_name}...")
+        status_text.text(f"📥 Chargement de {config.display_name}...")
 
         try:
             # Extract board data
             items = client.extract_board_data_sync(board_id)
             df = client.board_items_to_dataframe(items)
             source_data[source_key] = df
-
-            # Filter by date
-            filtered_df = filter_by_date(
-                df=df,
-                period=period,
-                date_column=config.date_column,
-            )
-            filtered_data[source_key] = filtered_df
-
-            # Aggregate by advisor (using config's advisor_column)
-            aggregated_df = aggregate_by_advisor(
-                df=filtered_df,
-                value_column=config.aggregate_column,
-                advisor_column=config.advisor_column,
-            )
-            aggregated_data[source_key] = aggregated_df
-
         except Exception as e:
             st.error(f"Erreur lors du chargement de {config.display_name}: {e}")
             source_data[source_key] = pd.DataFrame()
-            filtered_data[source_key] = pd.DataFrame()
-            aggregated_data[source_key] = pd.DataFrame()
+            success = False
 
     # Complete progress
     progress_bar.progress(1.0)
-    status_text.text("Agrégation des données...")
+    status_text.text("✅ Données chargées!")
 
+    # Store raw source data
     st.session_state.agg_source_data = source_data
+    st.session_state.agg_data_loaded = True
+
+    # Clear progress indicators after a short delay
+    import time
+    time.sleep(0.5)
+    progress_bar.empty()
+    status_text.empty()
+
+    return success
+
+
+def filter_and_aggregate_data() -> None:
+    """
+    Filter and aggregate the loaded source data based on the selected period.
+
+    This function uses the raw data already loaded in session state and applies
+    filtering/aggregation. It's designed to be fast for real-time period changes.
+    """
+    period = st.session_state.agg_period
+    source_data = st.session_state.get("agg_source_data", {})
+
+    if not source_data:
+        return
+
+    filtered_data = {}
+    aggregated_data = {}
+
+    for source_key, df in source_data.items():
+        config = SOURCE_BOARDS.get(source_key)
+        if not config or df.empty:
+            filtered_data[source_key] = pd.DataFrame()
+            aggregated_data[source_key] = pd.DataFrame()
+            continue
+
+        # Filter by date
+        filtered_df = filter_by_date(
+            df=df,
+            period=period,
+            date_column=config.date_column,
+        )
+        filtered_data[source_key] = filtered_df
+
+        # Aggregate by advisor (using config's advisor_column)
+        aggregated_df = aggregate_by_advisor(
+            df=filtered_df,
+            value_column=config.aggregate_column,
+            advisor_column=config.advisor_column,
+        )
+        aggregated_data[source_key] = aggregated_df
+
     st.session_state.agg_filtered_data = filtered_data
     st.session_state.agg_aggregated_data = aggregated_data
 
     # Combine aggregations
     st.session_state.agg_combined_data = combine_aggregations(aggregated_data)
 
-    # Clear progress indicators
-    progress_bar.empty()
-    status_text.empty()
+
+def load_and_aggregate_data() -> None:
+    """
+    Legacy function for backward compatibility.
+    Loads data and aggregates in one step.
+    """
+    load_source_data()
+    filter_and_aggregate_data()
 
 
 def execute_aggregation_upsert() -> None:
