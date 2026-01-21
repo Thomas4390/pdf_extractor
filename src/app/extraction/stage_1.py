@@ -190,7 +190,7 @@ def render_pdf_extraction_tab() -> None:
         options=range(len(model_options)),
         format_func=lambda i: model_labels[i],
         index=current_idx,
-        help="Le modèle utilisé pour l'extraction des données. Gemini 3 Pro offre la meilleure précision.",
+        help="Le modèle utilisé pour l'extraction des données. Gemini 3 Flash est rapide et économique.",
         key="model_select"
     )
 
@@ -198,9 +198,9 @@ def render_pdf_extraction_tab() -> None:
 
     # Show model info
     if model_options[selected_model_idx] == default_model:
-        st.caption("✅ Modèle par défaut - Meilleur rapport qualité/fiabilité")
-    elif "flash" in model_options[selected_model_idx].lower():
-        st.caption("⚡ Modèle rapide - Idéal pour les gros volumes")
+        st.caption("✅ Modèle par défaut - Rapide et économique")
+    elif "pro" in model_options[selected_model_idx].lower():
+        st.caption("🎯 Haute précision - Pour documents complexes")
 
     force_refresh = st.checkbox(
         "Forcer la ré-extraction (ignorer le cache)",

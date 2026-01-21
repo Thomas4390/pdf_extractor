@@ -55,8 +55,8 @@ class ModelConfig:
 
 
 # Default models
-DEFAULT_VISION_MODEL = "google/gemini-3-pro-preview"  # Primary: Gemini 3 Pro (best quality)
-FALLBACK_VISION_MODEL = "google/gemini-3-flash-preview"  # Fallback: Gemini 3 Flash (faster)
+DEFAULT_VISION_MODEL = "google/gemini-3-flash-preview"  # Primary: Gemini 3 Flash (fast, economical)
+FALLBACK_VISION_MODEL = "google/gemini-3-pro-preview"  # Fallback: Gemini 3 Pro (best quality)
 SECONDARY_FALLBACK_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"  # Secondary fallback: Qwen 3 VL
 LEGACY_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct"  # Legacy: Qwen 2.5 VL
 DEFAULT_TEXT_MODEL = "deepseek/deepseek-chat"  # Text fallback (V3 stable)
@@ -163,8 +163,8 @@ def get_default_text_model() -> str:
 
 # Available models for selection in UI (ordered by preference)
 AVAILABLE_MODELS: dict[str, str] = {
-    "google/gemini-3-pro-preview": "Gemini 3 Pro (Défaut - Haute précision)",
-    "google/gemini-3-flash-preview": "Gemini 3 Flash (Rapide, Économique)",
+    "google/gemini-3-flash-preview": "Gemini 3 Flash (Défaut - Rapide)",
+    "google/gemini-3-pro-preview": "Gemini 3 Pro (Haute précision)",
     "qwen/qwen3-vl-235b-a22b-instruct": "Qwen 3 VL 235B (Alternative)",
     "qwen/qwen2.5-vl-72b-instruct": "Qwen 2.5 VL 72B (Legacy)",
     "anthropic/claude-sonnet-4": "Claude Sonnet 4 (Vision avancée)",
