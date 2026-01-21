@@ -175,11 +175,11 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    if st.button("✏️ Modifier", key=f"edit_btn_{advisor_id}", use_container_width=True):
+                    if st.button("✏️ Modifier", key=f"edit_btn_{advisor_id}", width="stretch"):
                         st.session_state[f'editing_advisor_{advisor_id}'] = True
 
                 with col2:
-                    if st.button("🗑️ Supprimer", key=f"delete_btn_{advisor_id}", type="secondary", use_container_width=True):
+                    if st.button("🗑️ Supprimer", key=f"delete_btn_{advisor_id}", type="secondary", width="stretch"):
                         try:
                             matcher.delete_advisor(advisor)
                             st.success(f"✅ Conseiller supprimé")

@@ -72,7 +72,7 @@ def render_aggregation_stepper(current_step: int) -> None:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button(f"← Retour", key=f"agg_stepper_nav_{step_num}", use_container_width=True):
+                if st.button(f"← Retour", key=f"agg_stepper_nav_{step_num}", width="stretch"):
                     st.session_state.agg_step = step_num
                     st.rerun()
 
@@ -132,7 +132,7 @@ def render_agg_step_1_config() -> None:
         st.dataframe(
             pd.DataFrame(source_info),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.warning("Aucune source configurée.")
@@ -226,7 +226,7 @@ def render_agg_step_2_period_preview() -> None:
                 period.display_name,
                 key=f"period_btn_{period.value}",
                 type=btn_type,
-                use_container_width=True,
+                width="stretch",
             ):
                 if period != current_period:
                     st.session_state.agg_period = period
