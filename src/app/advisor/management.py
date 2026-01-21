@@ -22,9 +22,11 @@ def render_advisor_management_tab() -> None:
     required_methods = ['find_advisor', 'update_advisor', 'delete_advisor']
     if (st.session_state.advisor_matcher is None or
         not all(hasattr(st.session_state.advisor_matcher, m) for m in required_methods)):
-        # Reset the module-level singleton to get a fresh instance
+        # Reset both the module-level singleton and class-level singleton
         from src.utils import advisor_matcher as am_module
+        from src.utils.advisor_matcher import AdvisorMatcher
         am_module._matcher_instance = None
+        AdvisorMatcher._instance = None
         st.session_state.advisor_matcher = get_advisor_matcher()
 
     matcher = st.session_state.advisor_matcher
@@ -178,29 +180,16 @@ def _render_advisors_list(advisors: list, matcher) -> None:
 
                 with col2:
                     if st.button("🗑️ Supprimer", key=f"delete_btn_{advisor_id}", type="secondary", use_container_width=True):
-                        st.session_state[f'confirm_delete_{advisor_id}'] = True
-
-                # Delete confirmation
-                if st.session_state.get(f'confirm_delete_{advisor_id}', False):
-                    st.warning(f"⚠️ Êtes-vous sûr de vouloir supprimer **{advisor.first_name} {advisor.last_name}** ?")
-                    col_yes, col_no = st.columns(2)
-                    with col_yes:
-                        if st.button("✅ Oui, supprimer", key=f"confirm_yes_{advisor_id}", type="primary"):
-                            try:
-                                matcher.delete_advisor(advisor)
-                                st.success(f"✅ Conseiller supprimé")
-                                # Reset singleton and session state
-                                from src.utils import advisor_matcher as am_module
-                                am_module._matcher_instance = None
-                                st.session_state.advisor_matcher = None
-                                del st.session_state[f'confirm_delete_{advisor_id}']
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Erreur: {e}")
-                    with col_no:
-                        if st.button("❌ Annuler", key=f"confirm_no_{advisor_id}"):
-                            del st.session_state[f'confirm_delete_{advisor_id}']
+                        try:
+                            matcher.delete_advisor(advisor)
+                            st.success(f"✅ Conseiller supprimé")
+                            # Reset singleton and session state
+                            from src.utils import advisor_matcher as am_module
+                            am_module._matcher_instance = None
+                            st.session_state.advisor_matcher = None
                             st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erreur: {e}")
 
                 # Edit form
                 if st.session_state.get(f'editing_advisor_{advisor_id}', False):
