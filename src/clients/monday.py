@@ -1185,7 +1185,11 @@ class MondayClient:
             else:
                 # Create new item in target group
                 # (advisor doesn't exist in this group yet, even if in other groups)
-                column_values[advisor_column_id] = {"label": str(advisor_name)}
+                # Format advisor column value based on actual column type
+                advisor_type = column_type_map.get(advisor_column_name)
+                advisor_formatted = self._format_column_value(advisor_name, advisor_column_name, advisor_type)
+                if advisor_formatted is not None:
+                    column_values[advisor_column_id] = advisor_formatted
 
                 try:
                     create_result = await self.create_item(
