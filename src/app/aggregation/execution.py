@@ -97,6 +97,7 @@ def filter_and_aggregate_data() -> None:
 
     filtered_data = {}
     aggregated_data = {}
+    total_filtered_count = 0
 
     for source_key, df in source_data.items():
         config = SOURCE_BOARDS.get(source_key)
@@ -114,15 +115,18 @@ def filter_and_aggregate_data() -> None:
         filtered_data[source_key] = filtered_df
 
         # Aggregate by advisor (using config's advisor_column)
-        aggregated_df = aggregate_by_advisor(
+        # Returns tuple: (aggregated_df, filtered_count)
+        aggregated_df, filtered_count = aggregate_by_advisor(
             df=filtered_df,
             value_column=config.aggregate_column,
             advisor_column=config.advisor_column,
         )
         aggregated_data[source_key] = aggregated_df
+        total_filtered_count += filtered_count
 
     st.session_state.agg_filtered_data = filtered_data
     st.session_state.agg_aggregated_data = aggregated_data
+    st.session_state.agg_unknown_advisors_count = total_filtered_count
 
     # Combine aggregations
     st.session_state.agg_combined_data = combine_aggregations(aggregated_data)

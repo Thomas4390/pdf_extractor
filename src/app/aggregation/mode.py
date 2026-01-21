@@ -295,6 +295,14 @@ def render_agg_step_2_period_preview() -> None:
                     total = combined_df[col].sum()
                     st.metric(f"Total {col}", f"{total:,.2f}")
 
+            # Show info about filtered unknown advisors
+            unknown_count = st.session_state.get("agg_unknown_advisors_count", 0)
+            if unknown_count > 0:
+                st.info(
+                    f"ℹ️ **{unknown_count} ligne(s) ignorée(s)** : conseillers non trouvés dans la base de données. "
+                    "Seuls les conseillers enregistrés dans la gestion des conseillers sont inclus."
+                )
+
             st.markdown("---")
             render_combined_preview(combined_df)
         else:
