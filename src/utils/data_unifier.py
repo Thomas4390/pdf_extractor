@@ -421,24 +421,31 @@ class DataUnifier:
             is_corporate = self._is_corporate_advisor(report.nom_conseiller)
             insurer_name = 'UV Inc' if is_corporate else 'UV Perso'
 
-            # Extraire le nom du sous-conseiller si présent
+            # UV: Toujours laisser le conseiller vide
+            # Le nom du conseiller n'est pas extrait pour les rapports UV
             advisor_name = None
-            if act.sous_conseiller:
-                # Format: "21622 - ACHRAF EL HAJJI"
-                parts = act.sous_conseiller.split(' - ', 1)
-                advisor_name = parts[1] if len(parts) > 1 else act.sous_conseiller
-            else:
-                advisor_name = report.nom_conseiller
 
             # Convertir les valeurs Decimal - utiliser les valeurs EXTRAITES du PDF
             premium = self._decimal_to_float(act.montant_base)
-            commission = self._decimal_to_float(act.resultat)  # Commission extraite du PDF
+            commission_base = self._decimal_to_float(act.resultat)  # Commission extraite du PDF
             remuneration = self._decimal_to_float(act.remuneration)  # Total reçu
             bonus_rate = self._decimal_to_float(act.taux_boni) / 100 if act.taux_boni else None
             commission_rate = self._decimal_to_float(act.taux_commission)
 
-            # Calculer le boni basé sur la commission extraite
-            bonus = round(commission * bonus_rate, 2) if commission and bonus_rate else None
+            # Détecter si c'est un type Boni (ex: 'Boni 1ère année vie')
+            is_bonus_type = act.type_commission and 'boni' in str(act.type_commission).lower()
+
+            # Calculer la commission et le boni selon le type
+            # Si type Boni ou taux de boni != 0%, multiplier la commission par le facteur boni
+            # pour obtenir une comparaison correcte avec le reçu
+            if (is_bonus_type or (bonus_rate and bonus_rate > 0)) and commission_base and bonus_rate:
+                # Commission ajustée = commission_base * (1 + bonus_rate)
+                # Cela correspond au total reçu (commission + bonus)
+                commission = round(commission_base * (1 + bonus_rate), 2)
+                bonus = None  # Boni déjà inclus dans la commission ajustée
+            else:
+                commission = commission_base
+                bonus = round(commission_base * bonus_rate, 2) if commission_base and bonus_rate else None
 
             # Sur-Com n'est pas directement disponible dans UV, on le met à None
             on_commission = None
@@ -503,8 +510,8 @@ class DataUnifier:
 
         rows = []
         for prop in report.propositions:
-            # Normaliser le nom de l'assureur vers les abréviations standardisées
-            insurer_name = self._normalize_insurer_name(prop.assureur)
+            # IDC: Toujours utiliser "IDC" comme nom de compagnie
+            insurer_name = 'IDC'
 
             # Convertir les valeurs extraites du JSON
             premium = self._clean_currency(prop.prime_police)
@@ -585,8 +592,8 @@ class DataUnifier:
                 # Try to extract company from raw_client_data
                 company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
 
-            # Normalize company name using the standard mapping
-            company_name = self._normalize_insurer_name(company_name) if company_name else fee.company
+            # IDC Statement: Toujours utiliser "IDC" comme nom de compagnie
+            company_name = 'IDC'
 
             # Convertir le montant des frais de suivi
             trailing_fee = self._clean_currency(fee.net_trailing_fee)

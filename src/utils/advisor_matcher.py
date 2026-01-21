@@ -623,6 +623,30 @@ class AdvisorMatcher:
         """Get all advisors."""
         return self.advisors.copy()
 
+    def find_advisor(self, first_name: str, last_name: str) -> Optional[Advisor]:
+        """
+        Find an advisor by exact first name and last name match.
+
+        Args:
+            first_name: The first name to search for
+            last_name: The last name to search for
+
+        Returns:
+            The matching Advisor if found, None otherwise
+        """
+        if not first_name or not last_name:
+            return None
+
+        first_normalized = self._normalize_text(first_name)
+        last_normalized = self._normalize_text(last_name)
+
+        for advisor in self.advisors:
+            if (self._normalize_text(advisor.first_name) == first_normalized and
+                self._normalize_text(advisor.last_name) == last_normalized):
+                return advisor
+
+        return None
+
     def reload(self):
         """Force reload advisors from storage."""
         self._load()
