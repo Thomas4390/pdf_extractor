@@ -18,9 +18,10 @@ def render_advisor_management_tab() -> None:
         st.error("Module advisor_matcher non disponible")
         return
 
-    # Initialize matcher (or reset if outdated version without find_advisor method)
+    # Initialize matcher (or reset if outdated version missing required methods)
+    required_methods = ['find_advisor', 'update_advisor', 'delete_advisor']
     if (st.session_state.advisor_matcher is None or
-        not hasattr(st.session_state.advisor_matcher, 'find_advisor')):
+        not all(hasattr(st.session_state.advisor_matcher, m) for m in required_methods)):
         # Reset the module-level singleton to get a fresh instance
         from src.utils import advisor_matcher as am_module
         am_module._matcher_instance = None
@@ -83,7 +84,7 @@ def render_advisor_management_tab() -> None:
     st.divider()
 
     # List existing advisors
-    _render_advisors_list(advisors)
+    _render_advisors_list(advisors, matcher)
 
     st.divider()
 
@@ -145,14 +146,17 @@ def _render_add_advisor_form(matcher) -> None:
                 st.error("❌ Veuillez entrer le prénom et le nom de famille")
 
 
-def _render_advisors_list(advisors: list) -> None:
-    """Render the list of existing advisors."""
+def _render_advisors_list(advisors: list, matcher) -> None:
+    """Render the list of existing advisors with edit/delete options."""
+    from src.utils.advisor_matcher import get_advisor_matcher
+
     st.markdown("#### 📋 Conseillers existants")
 
     if not advisors:
         st.info("Aucun conseiller enregistré. Ajoutez-en un ci-dessus.")
     else:
         for idx, advisor in enumerate(advisors):
+            advisor_id = getattr(advisor, '_row_id', idx)
             with st.expander(f"**{advisor.first_name} {advisor.last_name}**", expanded=False):
                 st.markdown(f"**Format compact:** {advisor.display_name_compact}")
 
@@ -162,6 +166,92 @@ def _render_advisors_list(advisors: list) -> None:
                         st.text(f"  • {var}")
                 else:
                     st.caption("Aucune variation définie")
+
+                st.divider()
+
+                # Edit/Delete buttons
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    if st.button("✏️ Modifier", key=f"edit_btn_{advisor_id}", use_container_width=True):
+                        st.session_state[f'editing_advisor_{advisor_id}'] = True
+
+                with col2:
+                    if st.button("🗑️ Supprimer", key=f"delete_btn_{advisor_id}", type="secondary", use_container_width=True):
+                        st.session_state[f'confirm_delete_{advisor_id}'] = True
+
+                # Delete confirmation
+                if st.session_state.get(f'confirm_delete_{advisor_id}', False):
+                    st.warning(f"⚠️ Êtes-vous sûr de vouloir supprimer **{advisor.first_name} {advisor.last_name}** ?")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Oui, supprimer", key=f"confirm_yes_{advisor_id}", type="primary"):
+                            try:
+                                matcher.delete_advisor(advisor)
+                                st.success(f"✅ Conseiller supprimé")
+                                # Reset singleton and session state
+                                from src.utils import advisor_matcher as am_module
+                                am_module._matcher_instance = None
+                                st.session_state.advisor_matcher = None
+                                del st.session_state[f'confirm_delete_{advisor_id}']
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Erreur: {e}")
+                    with col_no:
+                        if st.button("❌ Annuler", key=f"confirm_no_{advisor_id}"):
+                            del st.session_state[f'confirm_delete_{advisor_id}']
+                            st.rerun()
+
+                # Edit form
+                if st.session_state.get(f'editing_advisor_{advisor_id}', False):
+                    st.markdown("---")
+                    st.markdown("**Modifier le conseiller:**")
+
+                    with st.form(key=f"edit_form_{advisor_id}"):
+                        new_first = st.text_input(
+                            "Prénom",
+                            value=advisor.first_name,
+                            key=f"edit_first_{advisor_id}"
+                        )
+                        new_last = st.text_input(
+                            "Nom",
+                            value=advisor.last_name,
+                            key=f"edit_last_{advisor_id}"
+                        )
+                        new_vars = st.text_input(
+                            "Variations (séparées par des virgules)",
+                            value=', '.join(advisor.variations),
+                            key=f"edit_vars_{advisor_id}"
+                        )
+
+                        col_save, col_cancel = st.columns(2)
+                        with col_save:
+                            submitted = st.form_submit_button("💾 Enregistrer", type="primary")
+                        with col_cancel:
+                            cancelled = st.form_submit_button("❌ Annuler")
+
+                        if submitted:
+                            try:
+                                variations = [v.strip() for v in new_vars.split(',') if v.strip()] if new_vars else []
+                                matcher.update_advisor(
+                                    advisor,
+                                    first_name=new_first,
+                                    last_name=new_last,
+                                    variations=variations
+                                )
+                                st.success(f"✅ Conseiller mis à jour")
+                                # Reset singleton and session state
+                                from src.utils import advisor_matcher as am_module
+                                am_module._matcher_instance = None
+                                st.session_state.advisor_matcher = None
+                                del st.session_state[f'editing_advisor_{advisor_id}']
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Erreur: {e}")
+
+                        if cancelled:
+                            del st.session_state[f'editing_advisor_{advisor_id}']
+                            st.rerun()
 
 
 def _render_matching_test(matcher) -> None:

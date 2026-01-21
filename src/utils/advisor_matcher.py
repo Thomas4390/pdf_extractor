@@ -469,6 +469,107 @@ class AdvisorMatcher:
         self._save()
         return advisor
 
+    def update_advisor(self, advisor: Advisor, first_name: str = None,
+                       last_name: str = None, variations: List[str] = None) -> Advisor:
+        """
+        Update an existing advisor in Google Sheets.
+
+        Args:
+            advisor: The advisor to update (must have _row_id)
+            first_name: New first name (optional)
+            last_name: New last name (optional)
+            variations: New variations list (optional)
+
+        Returns:
+            The updated Advisor
+        """
+        if not self._use_gsheets:
+            raise RuntimeError(
+                "Cannot update advisor: Google Sheets is not configured."
+            )
+
+        if not hasattr(advisor, '_row_id') or advisor._row_id is None:
+            raise ValueError("Advisor does not have a valid row ID")
+
+        # Update the advisor object
+        if first_name is not None:
+            advisor.first_name = first_name.strip()
+        if last_name is not None:
+            advisor.last_name = last_name.strip()
+        if variations is not None:
+            advisor.variations = variations
+
+        try:
+            # Find the row with matching id
+            all_values = self._worksheet.get_all_values()
+            row_index = None
+            for idx, row in enumerate(all_values):
+                if idx == 0:  # Skip header
+                    continue
+                if row and str(row[0]) == str(advisor._row_id):
+                    row_index = idx + 1  # gspread uses 1-based indexing
+                    break
+
+            if row_index is None:
+                raise ValueError(f"Advisor with id {advisor._row_id} not found in sheet")
+
+            # Update the row
+            variations_str = ', '.join(advisor.variations)
+            self._worksheet.update(f'A{row_index}:D{row_index}', [[
+                advisor._row_id, advisor.first_name, advisor.last_name, variations_str
+            ]])
+
+        except Exception as e:
+            raise RuntimeError(f"Could not update advisor in Google Sheets: {e}")
+
+        self._save()
+        return advisor
+
+    def delete_advisor(self, advisor: Advisor) -> bool:
+        """
+        Delete an advisor from Google Sheets.
+
+        Args:
+            advisor: The advisor to delete (must have _row_id)
+
+        Returns:
+            True if deleted successfully
+        """
+        if not self._use_gsheets:
+            raise RuntimeError(
+                "Cannot delete advisor: Google Sheets is not configured."
+            )
+
+        if not hasattr(advisor, '_row_id') or advisor._row_id is None:
+            raise ValueError("Advisor does not have a valid row ID")
+
+        try:
+            # Find the row with matching id
+            all_values = self._worksheet.get_all_values()
+            row_index = None
+            for idx, row in enumerate(all_values):
+                if idx == 0:  # Skip header
+                    continue
+                if row and str(row[0]) == str(advisor._row_id):
+                    row_index = idx + 1  # gspread uses 1-based indexing
+                    break
+
+            if row_index is None:
+                raise ValueError(f"Advisor with id {advisor._row_id} not found in sheet")
+
+            # Delete the row
+            self._worksheet.delete_rows(row_index)
+
+            # Remove from local list
+            self.advisors = [a for a in self.advisors
+                           if not (hasattr(a, '_row_id') and a._row_id == advisor._row_id)]
+
+        except Exception as e:
+            raise RuntimeError(f"Could not delete advisor from Google Sheets: {e}")
+
+        self._save()
+        return True
+
     def match(self, name: str, use_fuzzy: bool = True) -> Optional[str]:
         """
         Match a name to an advisor and return the standardized display name.
