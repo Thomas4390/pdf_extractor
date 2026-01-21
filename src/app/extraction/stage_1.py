@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.pipeline import SourceType
 from src.utils.data_unifier import BoardType
+from src.utils.model_registry import get_available_models, get_default_vision_model
 
 from src.app.state import get_pipeline
 from src.app.utils.navigation import render_stepper, render_breadcrumb
@@ -167,6 +168,39 @@ def render_pdf_extraction_tab() -> None:
             "ℹ️ **Traitement des données:** Chaque ligne représente un paiement individuel. "
             "Colonnes: Police, Client, Compagnie, Statut, Conseiller, PA, Com, Boni, Sur-Com, Reçu, Date."
         )
+
+    # Model selection
+    st.markdown("#### 🤖 Modèle d'extraction")
+    available_models = get_available_models()
+    default_model = get_default_vision_model()
+
+    # Build options list with display names
+    model_options = list(available_models.keys())
+    model_labels = list(available_models.values())
+
+    # Find default model index
+    default_idx = model_options.index(default_model) if default_model in model_options else 0
+
+    # Get current selection or use default
+    current_model = st.session_state.get("selected_model", default_model)
+    current_idx = model_options.index(current_model) if current_model in model_options else default_idx
+
+    selected_model_idx = st.selectbox(
+        "Modèle VLM",
+        options=range(len(model_options)),
+        format_func=lambda i: model_labels[i],
+        index=current_idx,
+        help="Le modèle utilisé pour l'extraction des données. Gemini 3 Pro offre la meilleure précision.",
+        key="model_select"
+    )
+
+    st.session_state.selected_model = model_options[selected_model_idx]
+
+    # Show model info
+    if model_options[selected_model_idx] == default_model:
+        st.caption("✅ Modèle par défaut - Meilleur rapport qualité/fiabilité")
+    elif "flash" in model_options[selected_model_idx].lower():
+        st.caption("⚡ Modèle rapide - Idéal pour les gros volumes")
 
     force_refresh = st.checkbox(
         "Forcer la ré-extraction (ignorer le cache)",

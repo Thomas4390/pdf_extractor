@@ -192,6 +192,7 @@ def execute_aggregation_upsert() -> None:
             column_id_map = {}
             column_type_map = {}
             advisor_column_id = None
+            advisor_column_name_actual = None  # Store actual column name from Monday.com
 
             for col in columns:
                 col_title = col["title"]
@@ -203,6 +204,7 @@ def execute_aggregation_upsert() -> None:
 
                 if col_title.lower() == "conseiller":
                     advisor_column_id = col_id
+                    advisor_column_name_actual = col_title  # Keep actual case
 
             if not advisor_column_id:
                 st.error("Colonne 'Conseiller' introuvable dans le board cible.")
@@ -218,6 +220,11 @@ def execute_aggregation_upsert() -> None:
             progress_bar.progress(progress)
             status_text.text(f"Traitement: {current}/{total} conseillers...")
 
+        # Rename DataFrame column to match actual Monday.com column name if different
+        if advisor_column_name_actual and advisor_column_name_actual != "Conseiller":
+            if "Conseiller" in data_df.columns:
+                data_df = data_df.rename(columns={"Conseiller": advisor_column_name_actual})
+
         result = client.upsert_by_advisor_sync(
             board_id=target_board_id,
             group_id=group_id,
@@ -225,7 +232,7 @@ def execute_aggregation_upsert() -> None:
             data=data_df,
             column_id_map=column_id_map,
             column_type_map=column_type_map,
-            advisor_column_name="Conseiller",
+            advisor_column_name=advisor_column_name_actual or "Conseiller",
             progress_callback=progress_callback,
         )
 

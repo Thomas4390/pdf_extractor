@@ -30,7 +30,7 @@ API_URL = "https://api.monday.com/v2"
 # Rate limiting
 DEFAULT_BATCH_SIZE = 50
 DEFAULT_MAX_CONCURRENT = 5
-RATE_LIMIT_DELAY = 0.3  # seconds between requests
+RATE_LIMIT_DELAY = 0.5  # seconds between requests (increased for stability)
 
 
 # =============================================================================
