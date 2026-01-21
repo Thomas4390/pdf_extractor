@@ -78,6 +78,7 @@ class SourceBoardConfig:
     aggregate_column: str
     date_column: str
     output_column_name: str  # Name of column in final output
+    board_id: Optional[int] = None  # Default board ID for auto-loading
     advisor_column: str = "Conseiller"  # Column name for advisor
     use_group_as_advisor: bool = False  # If True, use group_title as advisor
 
@@ -88,18 +89,21 @@ SOURCE_BOARDS = {
         aggregate_column="Reçu",
         date_column="Date",
         output_column_name="Collected",
+        board_id=8553813876,  # Monday.com "Paiement Historique" board
     ),
     "vente_production": SourceBoardConfig(
         display_name="Vente et production",
         aggregate_column="PA",
         date_column="Date",
         output_column_name="PA Vendues",
+        board_id=9423464449,  # Monday.com "Ventes/Production" board
     ),
     "ae_tracker": SourceBoardConfig(
         display_name="AE Tracker",
         aggregate_column="$$$ Recues",
         date_column="Date",
         output_column_name="AE CA",
+        board_id=9142978904,  # Monday.com "AE Tracker" board
         advisor_column="group_title",  # Advisor name is in group title
         use_group_as_advisor=True,
     ),

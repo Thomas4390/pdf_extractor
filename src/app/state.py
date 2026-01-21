@@ -13,7 +13,21 @@ from typing import Optional
 import streamlit as st
 
 from src.pipeline import Pipeline
+from src.utils.aggregator import SOURCE_BOARDS
 from src.utils.data_unifier import BoardType
+
+
+def get_default_selected_sources() -> dict[str, int]:
+    """Get default source board selections from SOURCE_BOARDS config.
+
+    Returns:
+        Dict mapping source_key to board_id for sources that have a default board_id
+    """
+    return {
+        source_key: config.board_id
+        for source_key, config in SOURCE_BOARDS.items()
+        if config.board_id is not None
+    }
 
 
 def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -129,7 +143,7 @@ def init_session_state() -> None:
         # Aggregation mode (Phase 5)
         "app_mode": "extraction",  # "extraction" or "aggregation"
         "agg_step": 1,  # 1-4 for aggregation wizard
-        "agg_selected_sources": {},  # {source_key: board_id}
+        "agg_selected_sources": get_default_selected_sources(),  # {source_key: board_id}
         "agg_period": None,  # DatePeriod enum
         "agg_target_board_id": None,
         "agg_source_data": {},  # {source_key: DataFrame}
@@ -191,7 +205,7 @@ def reset_pipeline() -> None:
 def reset_aggregation_state() -> None:
     """Reset aggregation mode state."""
     st.session_state.agg_step = 1
-    st.session_state.agg_selected_sources = {}
+    st.session_state.agg_selected_sources = get_default_selected_sources()
     st.session_state.agg_period = None
     st.session_state.agg_target_board_id = None
     st.session_state.agg_source_data = {}
