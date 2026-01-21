@@ -153,9 +153,7 @@ def _render_advisors_list(advisors: list) -> None:
         st.info("Aucun conseiller enregistré. Ajoutez-en un ci-dessus.")
     else:
         for idx, advisor in enumerate(advisors):
-            with st.expander(f"**{advisor.display_name_compact}** ({advisor.full_name})", expanded=False):
-                st.markdown(f"**Prénom:** {advisor.first_name}")
-                st.markdown(f"**Nom:** {advisor.last_name}")
+            with st.expander(f"**{advisor.first_name} {advisor.last_name}**", expanded=False):
                 st.markdown(f"**Format compact:** {advisor.display_name_compact}")
 
                 st.markdown("**Variations:**")
