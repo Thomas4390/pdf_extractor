@@ -23,11 +23,13 @@ def get_default_selected_sources() -> dict[str, int]:
     Returns:
         Dict mapping source_key to board_id for sources that have a default board_id
     """
-    return {
-        source_key: config.board_id
-        for source_key, config in SOURCE_BOARDS.items()
-        if config.board_id is not None
-    }
+    result = {}
+    for source_key, config in SOURCE_BOARDS.items():
+        # Use getattr to handle cached versions without board_id attribute
+        board_id = getattr(config, 'board_id', None)
+        if board_id is not None:
+            result[source_key] = board_id
+    return result
 
 
 def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
