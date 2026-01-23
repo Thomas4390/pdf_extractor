@@ -102,7 +102,7 @@ class MondayClient:
         '# de Police': ColumnType.TEXT,
         'Nom Client': ColumnType.TEXT,
         'Compagnie': ColumnType.STATUS,
-        'Conseiller': ColumnType.TEXT,  # Must be TEXT for unique advisor names (not STATUS)
+        'Conseiller': ColumnType.DROPDOWN,  # Dropdown supports 1000+ options (vs 40 for STATUS)
         'Lead/MC': ColumnType.STATUS,
 
         # Numeric columns
@@ -576,9 +576,9 @@ class MondayClient:
     # Batch upload
     # -------------------------------------------------------------------------
 
-    # Columns that must ALWAYS be treated as TEXT, even if Monday.com says STATUS
-    # This is for columns with unique per-item values (like advisor names)
-    FORCE_TEXT_COLUMNS = {"Conseiller", "conseiller"}
+    # Columns that should use DROPDOWN format (labels array) instead of STATUS format
+    # Dropdown supports 1000+ options vs 40 for STATUS columns
+    DROPDOWN_COLUMNS = {"Conseiller", "conseiller"}
 
     def _format_column_value(
         self,
@@ -596,10 +596,9 @@ class MondayClient:
         if pd.isna(value) or value is None or value == "":
             return None
 
-        # Force TEXT format for columns that need unique per-item values
-        # STATUS columns don't work for unique values (all items share the same labels)
-        if column_name in self.FORCE_TEXT_COLUMNS:
-            return str(value) if value else None
+        # Check if this column should use DROPDOWN format
+        # Dropdown uses {"labels": ["value"]} (array) vs status {"label": "value"}
+        is_dropdown_column = column_name in self.DROPDOWN_COLUMNS
 
         # Use actual Monday.com type if provided, otherwise fall back to our mapping
         if actual_type:
@@ -618,7 +617,11 @@ class MondayClient:
                     return {"date": value[:10]}
                 return None
 
-            elif actual_type in ("status", "color", "dropdown"):
+            elif actual_type == "dropdown" or is_dropdown_column:
+                # Dropdown uses labels array format
+                return {"labels": [str(value)]}
+
+            elif actual_type in ("status", "color"):
                 # Monday.com returns "color" for status columns, not "status"
                 return {"label": str(value)}
 
@@ -653,7 +656,12 @@ class MondayClient:
                 return {"date": value[:10]}
             return None
 
-        elif col_type in (ColumnType.STATUS, ColumnType.DROPDOWN):
+        elif col_type == ColumnType.DROPDOWN or is_dropdown_column:
+            # Dropdown uses labels array format (supports 1000+ options)
+            return {"labels": [str(value)]}
+
+        elif col_type == ColumnType.STATUS:
+            # Status uses single label format (max 40 options)
             return {"label": str(value)}
 
         elif col_type == ColumnType.CHECKBOX:
