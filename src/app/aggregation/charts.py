@@ -11,18 +11,100 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 
-# Color palette for consistent styling
+# =============================================================================
+# COLOR PALETTE - Professional gradient palette
+# =============================================================================
+
 CHART_COLORS = {
-    "PA Vendues": "#1f77b4",      # Blue
-    "Collected": "#2ca02c",        # Green
-    "AE CA": "#ff7f0e",            # Orange
-    "primary": "#667eea",          # Purple gradient start
-    "secondary": "#764ba2",        # Purple gradient end
+    # Metric-specific colors
+    "PA Vendues": "#3B82F6",      # Blue
+    "Collected": "#10B981",        # Emerald green
+    "AE CA": "#F59E0B",            # Amber/Orange
+    # UI colors
+    "primary": "#6366F1",          # Indigo
+    "secondary": "#8B5CF6",        # Violet
+    "accent": "#EC4899",           # Pink
+    "success": "#10B981",          # Green
+    "warning": "#F59E0B",          # Amber
+    "danger": "#EF4444",           # Red
+}
+
+# Gradient color scales for heatmaps and continuous data
+COLOR_SCALES = {
+    "performance": [[0, "#FEE2E2"], [0.5, "#FEF3C7"], [1, "#D1FAE5"]],  # Red -> Yellow -> Green
+    "blue": [[0, "#EFF6FF"], [1, "#1D4ED8"]],
+    "green": [[0, "#ECFDF5"], [1, "#047857"]],
+    "purple": [[0, "#F5F3FF"], [1, "#6D28D9"]],
 }
 
 # Default chart height
 CHART_HEIGHT = 400
 
+
+# =============================================================================
+# KPI CARDS
+# =============================================================================
+
+def render_kpi_cards(
+    df: pd.DataFrame,
+    metric_columns: list[str],
+) -> None:
+    """
+    Render styled KPI cards showing totals and key statistics.
+
+    Args:
+        df: DataFrame with metric columns
+        metric_columns: List of metric column names
+    """
+    if df.empty or not metric_columns:
+        return
+
+    # Calculate stats for each metric
+    stats = []
+    for col in metric_columns:
+        if col in df.columns:
+            total = df[col].sum()
+            avg = df[col].mean()
+            top_advisor = df.loc[df[col].idxmax(), "Conseiller"] if not df[col].isna().all() else "N/A"
+            top_value = df[col].max()
+            stats.append({
+                "name": col,
+                "total": total,
+                "avg": avg,
+                "top_advisor": top_advisor,
+                "top_value": top_value,
+                "color": CHART_COLORS.get(col, CHART_COLORS["primary"]),
+            })
+
+    # Render cards
+    cols = st.columns(len(stats))
+    for idx, stat in enumerate(stats):
+        with cols[idx]:
+            # Card with colored border
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, {stat['color']}15, {stat['color']}05);
+                border-left: 4px solid {stat['color']};
+                border-radius: 8px;
+                padding: 16px;
+                margin-bottom: 8px;
+            ">
+                <div style="font-size: 12px; color: #6B7280; text-transform: uppercase; letter-spacing: 0.5px;">
+                    {stat['name']}
+                </div>
+                <div style="font-size: 28px; font-weight: 700; color: {stat['color']}; margin: 4px 0;">
+                    {stat['total']:,.0f}
+                </div>
+                <div style="font-size: 11px; color: #9CA3AF;">
+                    Moyenne: {stat['avg']:,.0f} | Top: {stat['top_advisor'][:15]}...
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# =============================================================================
+# BAR CHARTS
+# =============================================================================
 
 def render_advisor_bar_chart(
     df: pd.DataFrame,
@@ -59,7 +141,7 @@ def render_advisor_bar_chart(
             x=value_column,
             y="Conseiller",
             orientation="h",
-            title=title or f"📊 {value_column} par conseiller",
+            title=title or f"{value_column} par conseiller",
             color_discrete_sequence=[bar_color],
         )
     else:
@@ -67,7 +149,7 @@ def render_advisor_bar_chart(
             plot_df,
             x="Conseiller",
             y=value_column,
-            title=title or f"📊 {value_column} par conseiller",
+            title=title or f"{value_column} par conseiller",
             color_discrete_sequence=[bar_color],
         )
 
@@ -80,13 +162,16 @@ def render_advisor_bar_chart(
         showlegend=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
     )
 
-    # Add value labels
+    # Enhanced tooltips
     fig.update_traces(
         texttemplate="%{x:,.0f}" if horizontal else "%{y:,.0f}",
         textposition="outside",
         textfont_size=10,
+        hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>" if horizontal else
+                      "<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -95,10 +180,10 @@ def render_advisor_bar_chart(
 def render_stacked_comparison_chart(
     df: pd.DataFrame,
     value_columns: list[str],
-    title: str = "📊 Comparaison par conseiller",
+    title: str = "Comparaison par conseiller",
 ) -> None:
     """
-    Render a grouped/stacked bar chart comparing all metrics per advisor.
+    Render a grouped bar chart comparing all metrics per advisor.
 
     Args:
         df: DataFrame with 'Conseiller' and value columns
@@ -134,6 +219,7 @@ def render_stacked_comparison_chart(
             marker_color=color,
             text=plot_df[col].apply(lambda x: f"{x:,.0f}"),
             textposition="auto",
+            hovertemplate="<b>%{y}</b><br>" + f"{col}: " + "%{x:,.0f}<extra></extra>",
         ))
 
     fig.update_layout(
@@ -152,66 +238,7 @@ def render_stacked_comparison_chart(
         ),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_totals_pie_chart(
-    df: pd.DataFrame,
-    value_columns: list[str],
-    title: str = "📊 Répartition des totaux",
-) -> None:
-    """
-    Render a pie chart showing the distribution of totals across metrics.
-
-    Args:
-        df: DataFrame with value columns
-        value_columns: List of column names to include
-        title: Chart title
-    """
-    if df.empty:
-        st.warning("Aucune donnée à afficher")
-        return
-
-    # Filter to existing columns
-    existing_cols = [col for col in value_columns if col in df.columns]
-    if not existing_cols:
-        st.warning("Aucune colonne de valeur trouvée")
-        return
-
-    # Calculate totals
-    totals = {col: df[col].sum() for col in existing_cols}
-
-    # Create pie chart data
-    labels = list(totals.keys())
-    values = list(totals.values())
-    colors = [CHART_COLORS.get(col, CHART_COLORS["primary"]) for col in labels]
-
-    fig = go.Figure(data=[go.Pie(
-        labels=labels,
-        values=values,
-        marker_colors=colors,
-        hole=0.4,  # Donut chart
-        textinfo="label+percent",
-        textposition="outside",
-        hovertemplate="<b>%{label}</b><br>Montant: %{value:,.0f}<br>Part: %{percent}<extra></extra>",
-    )])
-
-    fig.update_layout(
-        title=title,
-        height=350,
-        margin=dict(l=20, r=20, t=50, b=20),
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.1,
-            xanchor="center",
-            x=0.5
-        ),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -247,20 +274,21 @@ def render_top_advisors_chart(
         x=value_column,
         y="Conseiller",
         orientation="h",
-        title=title or f"🏆 Top {top_n} - {value_column}",
+        title=title or f"Top {top_n} - {value_column}",
         color=value_column,
         color_continuous_scale=[[0, "#f0f0f0"], [1, color]],
     )
 
     fig.update_layout(
         height=280,
-        margin=dict(l=20, r=50, t=50, b=20),  # More right margin for labels
+        margin=dict(l=20, r=50, t=50, b=20),
         xaxis_title="",
         yaxis_title="",
         showlegend=False,
         coloraxis_showscale=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
     )
 
     # Add value labels with better formatting
@@ -268,11 +296,266 @@ def render_top_advisors_chart(
         texttemplate="%{x:,.0f}",
         textposition="outside",
         textfont_size=12,
-        cliponaxis=False,  # Allow labels to extend beyond axis
+        cliponaxis=False,
+        hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
+
+# =============================================================================
+# PARETO CHART (80/20 Analysis)
+# =============================================================================
+
+def render_pareto_chart(
+    df: pd.DataFrame,
+    value_column: str,
+    title: str | None = None,
+) -> None:
+    """
+    Render a Pareto chart (80/20 analysis) for a metric.
+
+    Shows bars for individual values and a cumulative line to identify
+    which advisors contribute to 80% of the total.
+
+    Args:
+        df: DataFrame with 'Conseiller' and value columns
+        value_column: Column to analyze
+        title: Chart title
+    """
+    if df.empty or value_column not in df.columns:
+        st.warning(f"Aucune donnée pour {value_column}")
+        return
+
+    # Sort by value descending
+    plot_df = df[["Conseiller", value_column]].copy()
+    plot_df = plot_df.sort_values(value_column, ascending=False).reset_index(drop=True)
+
+    # Calculate cumulative percentage
+    total = plot_df[value_column].sum()
+    plot_df["cumulative"] = plot_df[value_column].cumsum()
+    plot_df["cumulative_pct"] = (plot_df["cumulative"] / total * 100) if total > 0 else 0
+
+    # Find 80% threshold
+    threshold_idx = (plot_df["cumulative_pct"] >= 80).idxmax() if (plot_df["cumulative_pct"] >= 80).any() else len(plot_df) - 1
+
+    # Color bars: those contributing to 80% in primary color, others in gray
+    colors = [CHART_COLORS.get(value_column, CHART_COLORS["primary"]) if i <= threshold_idx else "#D1D5DB"
+              for i in range(len(plot_df))]
+
+    # Create figure with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Bar chart
+    fig.add_trace(
+        go.Bar(
+            x=plot_df["Conseiller"],
+            y=plot_df[value_column],
+            name=value_column,
+            marker_color=colors,
+            text=plot_df[value_column].apply(lambda x: f"{x:,.0f}"),
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    # Cumulative line
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df["Conseiller"],
+            y=plot_df["cumulative_pct"],
+            name="Cumul %",
+            mode="lines+markers",
+            line=dict(color=CHART_COLORS["accent"], width=2),
+            marker=dict(size=6),
+            hovertemplate="<b>%{x}</b><br>Cumul: %{y:.1f}%<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    # Add 80% threshold line
+    fig.add_hline(
+        y=80, line_dash="dash", line_color=CHART_COLORS["danger"],
+        annotation_text="80%", secondary_y=True,
+    )
+
+    fig.update_layout(
+        title=title or f"Analyse Pareto - {value_column}",
+        height=400,
+        margin=dict(l=20, r=20, t=60, b=100),
+        xaxis_tickangle=-45,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
+    )
+
+    fig.update_yaxes(title_text=value_column, secondary_y=False)
+    fig.update_yaxes(title_text="Cumul (%)", secondary_y=True, range=[0, 105])
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Show insight
+    advisors_for_80 = threshold_idx + 1
+    total_advisors = len(plot_df)
+    pct_advisors = (advisors_for_80 / total_advisors * 100) if total_advisors > 0 else 0
+    st.caption(f"**{advisors_for_80} conseiller(s)** ({pct_advisors:.0f}%) contribuent à 80% du total de {value_column}")
+
+
+# =============================================================================
+# HEATMAP
+# =============================================================================
+
+def render_performance_heatmap(
+    df: pd.DataFrame,
+    value_columns: list[str],
+    title: str = "Performance relative par métrique",
+) -> None:
+    """
+    Render a heatmap showing relative performance across metrics.
+
+    Each cell shows the advisor's percentile rank for that metric.
+
+    Args:
+        df: DataFrame with 'Conseiller' and value columns
+        value_columns: List of metric columns to include
+        title: Chart title
+    """
+    if df.empty:
+        st.warning("Aucune donnée à afficher")
+        return
+
+    # Filter to existing columns
+    existing_cols = [col for col in value_columns if col in df.columns]
+    if not existing_cols:
+        st.warning("Aucune colonne de valeur trouvée")
+        return
+
+    # Create normalized matrix (percentile ranks 0-100)
+    plot_df = df.copy()
+    normalized_data = []
+
+    for col in existing_cols:
+        # Calculate percentile rank (0-100)
+        plot_df[f"{col}_rank"] = plot_df[col].rank(pct=True) * 100
+
+    # Sort by average rank
+    rank_cols = [f"{col}_rank" for col in existing_cols]
+    plot_df["_avg_rank"] = plot_df[rank_cols].mean(axis=1)
+    plot_df = plot_df.sort_values("_avg_rank", ascending=False)
+
+    # Extract matrix for heatmap
+    z_data = plot_df[rank_cols].values
+    y_labels = plot_df["Conseiller"].tolist()
+    x_labels = existing_cols
+
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=x_labels,
+        y=y_labels,
+        colorscale=COLOR_SCALES["performance"],
+        showscale=True,
+        colorbar=dict(title="Rang<br>percentile", ticksuffix="%"),
+        hovertemplate="<b>%{y}</b><br>%{x}: %{z:.0f}e percentile<extra></extra>",
+    ))
+
+    # Add text annotations
+    annotations = []
+    for i, row in enumerate(z_data):
+        for j, val in enumerate(row):
+            annotations.append(dict(
+                x=x_labels[j],
+                y=y_labels[i],
+                text=f"{val:.0f}",
+                showarrow=False,
+                font=dict(
+                    color="white" if val < 30 or val > 70 else "black",
+                    size=10,
+                ),
+            ))
+
+    fig.update_layout(
+        title=title,
+        annotations=annotations,
+        height=max(400, len(y_labels) * 30),
+        margin=dict(l=150, r=20, t=50, b=50),
+        xaxis=dict(side="top"),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# =============================================================================
+# CONTRIBUTION CHART
+# =============================================================================
+
+def render_contribution_chart(
+    df: pd.DataFrame,
+    value_column: str,
+    title: str | None = None,
+) -> None:
+    """
+    Render a horizontal bar chart showing each advisor's contribution percentage.
+
+    Args:
+        df: DataFrame with 'Conseiller' and value columns
+        value_column: Column to analyze
+        title: Chart title
+    """
+    if df.empty or value_column not in df.columns:
+        st.warning(f"Aucune donnée pour {value_column}")
+        return
+
+    # Calculate contributions
+    plot_df = df[["Conseiller", value_column]].copy()
+    total = plot_df[value_column].sum()
+    plot_df["contribution_pct"] = (plot_df[value_column] / total * 100) if total > 0 else 0
+    plot_df = plot_df.sort_values("contribution_pct", ascending=True)
+
+    # Get color
+    bar_color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=plot_df["Conseiller"],
+        x=plot_df["contribution_pct"],
+        orientation="h",
+        marker=dict(
+            color=plot_df["contribution_pct"],
+            colorscale=[[0, "#E5E7EB"], [1, bar_color]],
+        ),
+        text=plot_df.apply(lambda r: f"{r['contribution_pct']:.1f}% ({r[value_column]:,.0f})", axis=1),
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Contribution: %{x:.1f}%<extra></extra>",
+    ))
+
+    fig.update_layout(
+        title=title or f"Contribution au {value_column}",
+        height=max(CHART_HEIGHT, len(plot_df) * 25),
+        margin=dict(l=20, r=100, t=50, b=20),
+        xaxis_title="Contribution (%)",
+        yaxis_title="",
+        showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif"),
+    )
+
+    fig.update_traces(cliponaxis=False)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# =============================================================================
+# RADAR CHART
+# =============================================================================
 
 def render_advisor_radar_chart(
     df: pd.DataFrame,
@@ -322,7 +605,7 @@ def render_advisor_radar_chart(
         fill="toself",
         name=advisor_name,
         line_color=CHART_COLORS["primary"],
-        fillcolor=f"rgba(102, 126, 234, 0.3)",
+        fillcolor=f"rgba(99, 102, 241, 0.3)",
         hovertemplate="<b>%{theta}</b><br>Valeur: %{text:,.0f}<br>Score: %{r:.0f}%<extra></extra>",
         text=actual_values + [actual_values[0]],
     ))
@@ -335,14 +618,19 @@ def render_advisor_radar_chart(
                 ticksuffix="%",
             ),
         ),
-        title=title or f"📊 Profil de {advisor_name}",
+        title=title or f"Profil de {advisor_name}",
         height=350,
         margin=dict(l=60, r=60, t=60, b=40),
         showlegend=False,
+        font=dict(family="Inter, sans-serif"),
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
+
+# =============================================================================
+# MAIN RENDER FUNCTION
+# =============================================================================
 
 def render_charts_tab(
     combined_df: pd.DataFrame,
@@ -366,12 +654,21 @@ def render_charts_tab(
         st.warning("Aucune métrique à visualiser.")
         return
 
-    st.markdown(f"### 📈 Visualisations pour **{period_name}**")
+    st.markdown(f"### Visualisations pour **{period_name}**")
 
-    # Summary section with top performers (full width for better readability)
-    st.markdown("#### 🏆 Top 3 par métrique")
+    # =========================================================================
+    # KPI Cards Section
+    # =========================================================================
+    st.markdown("#### Indicateurs clés")
+    render_kpi_cards(combined_df, metric_columns)
 
-    # Top performers for each metric in columns (full width)
+    st.markdown("---")
+
+    # =========================================================================
+    # Top Performers Section (full width for better readability)
+    # =========================================================================
+    st.markdown("#### Top 3 par métrique")
+
     if len(metric_columns) >= 1:
         top_cols = st.columns(min(len(metric_columns), 3))
         for idx, col in enumerate(metric_columns[:3]):
@@ -385,35 +682,62 @@ def render_charts_tab(
 
     st.markdown("---")
 
-    # Comparison chart
-    st.markdown("#### 📊 Comparaison globale")
-    render_stacked_comparison_chart(
-        combined_df,
-        metric_columns,
-        title="Performance par conseiller",
-    )
+    # =========================================================================
+    # Comparison & Heatmap Section
+    # =========================================================================
+    st.markdown("#### Analyse comparative")
+
+    col1, col2 = st.columns([1.2, 0.8])
+
+    with col1:
+        render_stacked_comparison_chart(
+            combined_df,
+            metric_columns,
+            title="Performance par conseiller",
+        )
+
+    with col2:
+        render_performance_heatmap(
+            combined_df,
+            metric_columns,
+            title="Classement par métrique",
+        )
 
     st.markdown("---")
 
-    # Individual metric charts
-    st.markdown("#### 📈 Détail par métrique")
+    # =========================================================================
+    # Pareto Analysis Section
+    # =========================================================================
+    st.markdown("#### Analyse Pareto (80/20)")
+    st.caption("Identifiez quels conseillers contribuent à 80% des résultats")
 
-    # Create tabs for each metric
-    metric_tabs = st.tabs([f"📊 {col}" for col in metric_columns])
-
+    pareto_tabs = st.tabs([f"{col}" for col in metric_columns])
     for idx, col in enumerate(metric_columns):
-        with metric_tabs[idx]:
-            render_advisor_bar_chart(
+        with pareto_tabs[idx]:
+            render_pareto_chart(combined_df, col)
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Contribution Analysis Section
+    # =========================================================================
+    st.markdown("#### Contribution individuelle")
+
+    contrib_tabs = st.tabs([f"{col}" for col in metric_columns])
+    for idx, col in enumerate(metric_columns):
+        with contrib_tabs[idx]:
+            render_contribution_chart(
                 combined_df,
                 col,
-                title=f"{col} par conseiller",
-                horizontal=True,
+                title=f"Part de chaque conseiller dans {col}",
             )
 
     st.markdown("---")
 
-    # Individual advisor analysis
-    st.markdown("#### 👤 Analyse individuelle")
+    # =========================================================================
+    # Individual Advisor Analysis
+    # =========================================================================
+    st.markdown("#### Analyse individuelle")
 
     advisors = sorted(combined_df["Conseiller"].unique().tolist())
 
@@ -438,17 +762,27 @@ def render_charts_tab(
             # Show advisor stats
             advisor_data = combined_df[combined_df["Conseiller"] == selected_advisor]
             if not advisor_data.empty:
-                st.markdown(f"**📋 Statistiques de {selected_advisor}**")
+                st.markdown(f"**Statistiques de {selected_advisor}**")
 
                 for col in metric_columns:
                     val = advisor_data[col].iloc[0]
                     total = combined_df[col].sum()
                     pct = (val / total * 100) if total > 0 else 0
                     rank = (combined_df[col] > val).sum() + 1
+                    color = CHART_COLORS.get(col, CHART_COLORS["primary"])
 
                     st.markdown(f"""
-                    **{col}**
-                    - Valeur: **{val:,.2f}**
-                    - Part du total: **{pct:.1f}%**
-                    - Rang: **#{rank}** sur {len(combined_df)}
-                    """)
+                    <div style="
+                        background: linear-gradient(135deg, {color}10, transparent);
+                        border-left: 3px solid {color};
+                        padding: 12px;
+                        margin: 8px 0;
+                        border-radius: 4px;
+                    ">
+                        <div style="font-weight: 600; color: {color};">{col}</div>
+                        <div style="font-size: 20px; font-weight: 700;">{val:,.2f}</div>
+                        <div style="font-size: 12px; color: #6B7280;">
+                            {pct:.1f}% du total | Rang #{rank} sur {len(combined_df)}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
