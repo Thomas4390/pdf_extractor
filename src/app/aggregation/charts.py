@@ -31,10 +31,11 @@ CHART_COLORS = {
 
 # Gradient color scales for heatmaps and continuous data
 COLOR_SCALES = {
-    "performance": [[0, "#FEE2E2"], [0.5, "#FEF3C7"], [1, "#D1FAE5"]],  # Red -> Yellow -> Green
-    "blue": [[0, "#EFF6FF"], [1, "#1D4ED8"]],
-    "green": [[0, "#ECFDF5"], [1, "#047857"]],
-    "purple": [[0, "#F5F3FF"], [1, "#6D28D9"]],
+    # Darker, more saturated colors for better visibility
+    "performance": [[0, "#DC2626"], [0.5, "#F59E0B"], [1, "#059669"]],  # Dark Red -> Amber -> Dark Green
+    "blue": [[0, "#DBEAFE"], [1, "#1E40AF"]],
+    "green": [[0, "#D1FAE5"], [1, "#047857"]],
+    "purple": [[0, "#EDE9FE"], [1, "#5B21B6"]],
 }
 
 # Default chart height
@@ -223,23 +224,29 @@ def render_stacked_comparison_chart(
         ))
 
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(size=18)),
         barmode="group",
-        height=max(CHART_HEIGHT, len(plot_df) * 40),
-        margin=dict(l=20, r=20, t=50, b=20),
+        height=max(500, len(plot_df) * 45),
+        margin=dict(l=20, r=40, t=60, b=20),
         xaxis_title="Montant",
         yaxis_title="",
+        xaxis=dict(tickfont=dict(size=12)),
+        yaxis=dict(tickfont=dict(size=13)),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
+            x=1,
+            font=dict(size=12),
         ),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter, sans-serif"),
+        font=dict(family="Inter, sans-serif", size=12),
     )
+
+    # Larger text on bars
+    fig.update_traces(textfont_size=12)
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -382,8 +389,8 @@ def render_pareto_chart(
 
     fig.update_layout(
         title=title or f"Analyse Pareto - {value_column}",
-        height=400,
-        margin=dict(l=20, r=20, t=60, b=100),
+        height=500,
+        margin=dict(l=20, r=20, t=60, b=120),
         xaxis_tickangle=-45,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -411,12 +418,12 @@ def render_pareto_chart(
 def render_performance_heatmap(
     df: pd.DataFrame,
     value_columns: list[str],
-    title: str = "Performance relative par métrique",
+    title: str = "Classement par métrique",
 ) -> None:
     """
-    Render a heatmap showing relative performance across metrics.
+    Render a heatmap showing absolute ranking across metrics.
 
-    Each cell shows the advisor's percentile rank for that metric.
+    Each cell shows the advisor's position (1 = best) for that metric.
 
     Args:
         df: DataFrame with 'Conseiller' and value columns
@@ -433,54 +440,64 @@ def render_performance_heatmap(
         st.warning("Aucune colonne de valeur trouvée")
         return
 
-    # Create normalized matrix (percentile ranks 0-100)
+    # Create ranking matrix (1 = best, N = worst)
     plot_df = df.copy()
-    normalized_data = []
+    total_advisors = len(plot_df)
 
     for col in existing_cols:
-        # Calculate percentile rank (0-100)
-        plot_df[f"{col}_rank"] = plot_df[col].rank(pct=True) * 100
+        # Calculate absolute rank (1 = highest value = best)
+        plot_df[f"{col}_rank"] = plot_df[col].rank(ascending=False, method="min").astype(int)
 
-    # Sort by average rank
+    # Sort by average rank (lower is better)
     rank_cols = [f"{col}_rank" for col in existing_cols]
     plot_df["_avg_rank"] = plot_df[rank_cols].mean(axis=1)
-    plot_df = plot_df.sort_values("_avg_rank", ascending=False)
+    plot_df = plot_df.sort_values("_avg_rank", ascending=True)
 
-    # Extract matrix for heatmap
+    # Extract matrix for heatmap (invert for color scale: low rank = high value = green)
     z_data = plot_df[rank_cols].values
+    # Normalize for color scale (1 -> 100, N -> 0) so best ranks get green
+    z_data_normalized = ((total_advisors - z_data + 1) / total_advisors) * 100
     y_labels = plot_df["Conseiller"].tolist()
     x_labels = existing_cols
 
-    # Create heatmap
+    # Create heatmap with normalized colors but display actual ranks
     fig = go.Figure(data=go.Heatmap(
-        z=z_data,
+        z=z_data_normalized,
         x=x_labels,
         y=y_labels,
         colorscale=COLOR_SCALES["performance"],
         showscale=True,
-        colorbar=dict(title="Rang<br>percentile", ticksuffix="%"),
-        hovertemplate="<b>%{y}</b><br>%{x}: %{z:.0f}e percentile<extra></extra>",
+        colorbar=dict(
+            title="Position",
+            tickvals=[10, 50, 90],
+            ticktext=[f"#{total_advisors}", f"#{total_advisors//2}", "#1"],
+        ),
+        hovertemplate="<b>%{y}</b><br>%{x}: Position %{customdata}<extra></extra>",
+        customdata=z_data,
     ))
 
-    # Add text annotations
+    # Add text annotations with actual rank positions
     annotations = []
     for i, row in enumerate(z_data):
         for j, val in enumerate(row):
+            # Determine text color based on normalized value
+            norm_val = z_data_normalized[i][j]
             annotations.append(dict(
                 x=x_labels[j],
                 y=y_labels[i],
-                text=f"{val:.0f}",
+                text=f"#{int(val)}",
                 showarrow=False,
                 font=dict(
-                    color="white" if val < 30 or val > 70 else "black",
-                    size=10,
+                    color="white",
+                    size=11,
+                    family="Inter, sans-serif",
                 ),
             ))
 
     fig.update_layout(
         title=title,
         annotations=annotations,
-        height=max(400, len(y_labels) * 30),
+        height=max(400, len(y_labels) * 35),
         margin=dict(l=150, r=20, t=50, b=50),
         xaxis=dict(side="top"),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -683,25 +700,29 @@ def render_charts_tab(
     st.markdown("---")
 
     # =========================================================================
-    # Comparison & Heatmap Section
+    # Performance Comparison Section (full width for better readability)
     # =========================================================================
-    st.markdown("#### Analyse comparative")
+    st.markdown("#### Performance par conseiller")
 
-    col1, col2 = st.columns([1.2, 0.8])
+    render_stacked_comparison_chart(
+        combined_df,
+        metric_columns,
+        title="Comparaison des métriques",
+    )
 
-    with col1:
-        render_stacked_comparison_chart(
-            combined_df,
-            metric_columns,
-            title="Performance par conseiller",
-        )
+    st.markdown("---")
 
-    with col2:
-        render_performance_heatmap(
-            combined_df,
-            metric_columns,
-            title="Classement par métrique",
-        )
+    # =========================================================================
+    # Heatmap Section
+    # =========================================================================
+    st.markdown("#### Classement par métrique")
+    st.caption("Position de chaque conseiller pour chaque métrique (vert = meilleur, rouge = moins bon)")
+
+    render_performance_heatmap(
+        combined_df,
+        metric_columns,
+        title="",
+    )
 
     st.markdown("---")
 
