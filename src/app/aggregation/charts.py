@@ -253,9 +253,9 @@ def render_top_advisors_chart(
     )
 
     fig.update_layout(
-        height=250,
-        margin=dict(l=20, r=20, t=50, b=20),
-        xaxis_title=value_column,
+        height=280,
+        margin=dict(l=20, r=50, t=50, b=20),  # More right margin for labels
+        xaxis_title="",
         yaxis_title="",
         showlegend=False,
         coloraxis_showscale=False,
@@ -263,11 +263,12 @@ def render_top_advisors_chart(
         paper_bgcolor="rgba(0,0,0,0)",
     )
 
-    # Add value labels
+    # Add value labels with better formatting
     fig.update_traces(
         texttemplate="%{x:,.0f}",
         textposition="outside",
-        textfont_size=11,
+        textfont_size=12,
+        cliponaxis=False,  # Allow labels to extend beyond axis
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -367,30 +368,20 @@ def render_charts_tab(
 
     st.markdown(f"### 📈 Visualisations pour **{period_name}**")
 
-    # Summary section with totals pie chart and top performers
-    st.markdown("#### 🎯 Vue d'ensemble")
+    # Summary section with top performers (full width for better readability)
+    st.markdown("#### 🏆 Top 3 par métrique")
 
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        render_totals_pie_chart(
-            combined_df,
-            metric_columns,
-            title="Répartition des totaux",
-        )
-
-    with col2:
-        # Top performers for each metric in columns
-        if len(metric_columns) >= 1:
-            sub_cols = st.columns(min(len(metric_columns), 3))
-            for idx, col in enumerate(metric_columns[:3]):
-                with sub_cols[idx]:
-                    render_top_advisors_chart(
-                        combined_df,
-                        col,
-                        top_n=3,
-                        title=f"🏆 Top 3 - {col}",
-                    )
+    # Top performers for each metric in columns (full width)
+    if len(metric_columns) >= 1:
+        top_cols = st.columns(min(len(metric_columns), 3))
+        for idx, col in enumerate(metric_columns[:3]):
+            with top_cols[idx]:
+                render_top_advisors_chart(
+                    combined_df,
+                    col,
+                    top_n=3,
+                    title=f"{col}",
+                )
 
     st.markdown("---")
 
