@@ -130,7 +130,7 @@ SOURCE_BOARDS = {
         display_name="Paiement historique",
         aggregate_column="Reçu",
         date_column="Date",
-        output_column_name="Collected",
+        output_column_name="AE CA",
         board_id=8553813876,  # Monday.com "Paiement Historique" board
     ),
     "vente_production": SourceBoardConfig(
@@ -144,7 +144,7 @@ SOURCE_BOARDS = {
         display_name="AE Tracker",
         aggregate_column="$$$ Recues",
         date_column="Date",
-        output_column_name="AE CA",
+        output_column_name="Collected",
         board_id=9142978904,  # Monday.com "AE Tracker" board
         advisor_column="group_title",  # Advisor name is in group title
         use_group_as_advisor=True,

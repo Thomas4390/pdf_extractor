@@ -30,6 +30,7 @@ from src.app.aggregation.execution import (
     filter_and_aggregate_data,
     execute_aggregation_upsert,
 )
+from src.app.aggregation.charts import render_charts_tab
 
 
 def render_aggregation_stepper(current_step: int) -> None:
@@ -284,8 +285,9 @@ def render_agg_step_2_period_preview() -> None:
     combined_df = st.session_state.agg_combined_data
 
     # Create tabs for different views
-    tab_combined, tab_advisors, tab_sources, tab_upload = st.tabs([
+    tab_combined, tab_charts, tab_advisors, tab_sources, tab_upload = st.tabs([
         "📋 Résumé",
+        "📈 Graphiques",
         "👤 Détail par conseiller",
         "📊 Détail par source",
         "📤 Aperçu upload"
@@ -321,7 +323,14 @@ def render_agg_step_2_period_preview() -> None:
         else:
             st.warning("Aucune donnée pour cette période.")
 
-    # Tab 2: Detail by advisor (shows all transactions per advisor)
+    # Tab 2: Charts
+    with tab_charts:
+        render_charts_tab(
+            combined_df=combined_df,
+            period_name=selected_period.display_name,
+        )
+
+    # Tab 3: Detail by advisor (shows all transactions per advisor)
     with tab_advisors:
         if combined_df is not None and not combined_df.empty:
             # Get list of advisors from combined data
@@ -462,7 +471,7 @@ def render_agg_step_2_period_preview() -> None:
         else:
             st.warning("Aucune donnée pour cette période.")
 
-    # Tab 3: Source-by-source detail
+    # Tab 4: Source-by-source detail
     with tab_sources:
         for source_key in st.session_state.agg_selected_sources.keys():
             config = SOURCE_BOARDS.get(source_key)
@@ -481,7 +490,7 @@ def render_agg_step_2_period_preview() -> None:
                 aggregated_df=aggregated_df,
             )
 
-    # Tab 3: Editable upload preview
+    # Tab 5: Editable upload preview
     with tab_upload:
         # Get target board name
         target_board_name = "Non sélectionné"

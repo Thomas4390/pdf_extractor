@@ -8,6 +8,9 @@ streamlit>=1.30.0
 pandas>=2.0.0
 openpyxl>=3.1.0  # Excel export support for pandas
 
+# Data visualization
+plotly>=5.18.0  # Interactive charts for Streamlit
+
 # PDF processing (PyMuPDF)
 PyMuPDF>=1.23.0
 
