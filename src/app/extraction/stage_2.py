@@ -703,7 +703,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                     if changes_made:
                         st.session_state.combined_data = df
                         st.session_state.file_group_overrides = {}  # Reset overrides
-                        st.success("✅ Groupes mis à jour! Les fichiers seront uploadés dans leurs groupes respectifs.")
+                        st.toast("✅ Groupes mis à jour!", icon="✅")
                         st.rerun()
                     else:
                         st.info("Aucune modification détectée.")
@@ -751,7 +751,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                         if st.button("Appliquer", width="stretch", type="primary", key="apply_single_group"):
                             df['_target_group'] = final_group
                             st.session_state.combined_data = df
-                            st.success(f"Groupe modifié: {final_group}")
+                            st.toast(f"✅ Groupe modifié: {final_group}", icon="✅")
                             st.rerun()
 
     elif '_target_group' in df.columns:
@@ -804,7 +804,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                 if st.button("Appliquer", width="stretch", type="primary"):
                     df['_target_group'] = final_group
                     st.session_state.combined_data = df
-                    st.success(f"Groupe modifié: {final_group}")
+                    st.toast(f"✅ Groupe modifié: {final_group}", icon="✅")
                     st.rerun()
 
     # Column info
