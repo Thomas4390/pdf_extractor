@@ -713,6 +713,47 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                     st.session_state.file_group_overrides = {}
                     st.rerun()
 
+        else:
+            # Single file mode within _source_file block
+            if '_target_group' in df.columns:
+                groups_info = analyze_groups_in_data(df)
+
+                st.markdown("### Groupes Détectés")
+                if groups_info['spans_multiple_months']:
+                    st.warning(f"Les données couvrent **{len(groups_info['unique_groups'])} mois différents**.")
+
+                for group, count in groups_info['group_counts'].items():
+                    st.markdown(f"- **{group}**: {count} lignes")
+
+                st.markdown("---")
+
+                # Manual override with text input option
+                st.markdown("### Modifier le groupe")
+                st.caption("Sélectionnez ou entrez manuellement un groupe.")
+
+                group_options = ["(Garder auto-détection)"] + group_options_list
+
+                col1, col2, col3 = st.columns([2, 2, 1])
+                with col1:
+                    manual_group = st.selectbox("Groupe prédéfini", group_options, key="manual_group_override_single")
+                with col2:
+                    custom_group = st.text_input(
+                        "Ou entrez un groupe personnalisé",
+                        placeholder="Ex: Janvier 2026",
+                        key="custom_group_input_single"
+                    )
+                with col3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    final_group = custom_group.strip() if custom_group and custom_group.strip() else (
+                        manual_group if manual_group != "(Garder auto-détection)" else None
+                    )
+                    if final_group:
+                        if st.button("Appliquer", width="stretch", type="primary", key="apply_single_group"):
+                            df['_target_group'] = final_group
+                            st.session_state.combined_data = df
+                            st.success(f"Groupe modifié: {final_group}")
+                            st.rerun()
+
     elif '_target_group' in df.columns:
         # Single file mode - show simple group override
         groups_info = analyze_groups_in_data(df)
