@@ -573,6 +573,11 @@ def _render_configuration_tab(df: pd.DataFrame, model_name: str, cost_display: s
 
 def _render_group_assignment(df: pd.DataFrame) -> None:
     """Render the per-file group assignment section."""
+    # Check for pending toast message (shown after rerun)
+    if st.session_state.get("_group_toast_message"):
+        st.toast(st.session_state._group_toast_message, icon="✅")
+        st.session_state._group_toast_message = None
+
     st.markdown("### 📁 Groupes de destination par fichier")
 
     if '_source_file' in df.columns:
@@ -703,7 +708,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                     if changes_made:
                         st.session_state.combined_data = df
                         st.session_state.file_group_overrides = {}  # Reset overrides
-                        st.toast("✅ Groupes mis à jour!", icon="✅")
+                        st.session_state._group_toast_message = "✅ Groupes mis à jour!"
                         st.rerun()
                     else:
                         st.info("Aucune modification détectée.")
@@ -751,7 +756,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                         if st.button("Appliquer", width="stretch", type="primary", key="apply_single_group"):
                             df['_target_group'] = final_group
                             st.session_state.combined_data = df
-                            st.toast(f"✅ Groupe modifié: {final_group}", icon="✅")
+                            st.session_state._group_toast_message = f"✅ Groupe modifié: {final_group}"
                             st.rerun()
 
     elif '_target_group' in df.columns:
@@ -804,7 +809,7 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
                 if st.button("Appliquer", width="stretch", type="primary"):
                     df['_target_group'] = final_group
                     st.session_state.combined_data = df
-                    st.toast(f"✅ Groupe modifié: {final_group}", icon="✅")
+                    st.session_state._group_toast_message = f"✅ Groupe modifié: {final_group}"
                     st.rerun()
 
     # Column info
