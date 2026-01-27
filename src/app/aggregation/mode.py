@@ -561,6 +561,14 @@ def render_agg_step_3_execute() -> None:
         sources_count=sources_count,
     )
 
+    # Data preview before upload
+    if combined_df is not None and not combined_df.empty:
+        with st.expander("📋 Aperçu des données à envoyer", expanded=True):
+            st.dataframe(combined_df, width="stretch", height=300)
+            st.caption(f"📊 {len(combined_df)} lignes × {len(combined_df.columns)} colonnes")
+
+    st.markdown("---")
+
     # Show previous result if exists
     if st.session_state.agg_upsert_result:
         render_execution_result(st.session_state.agg_upsert_result)

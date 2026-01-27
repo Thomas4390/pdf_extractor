@@ -56,6 +56,13 @@ def render_stage_3() -> None:
                 group_count = len(df[df['_target_group'] == group])
                 st.markdown(f"**{group}**: {group_count} items")
 
+    # Data preview before upload
+    with st.expander("📋 Aperçu des données à envoyer", expanded=True):
+        # Remove internal columns for display
+        display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
+        st.dataframe(display_df, width="stretch", height=300)
+        st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
+
     st.markdown("---")
 
     # Upload process
