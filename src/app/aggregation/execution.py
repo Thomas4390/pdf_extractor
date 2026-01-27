@@ -206,11 +206,6 @@ def execute_aggregation_upsert() -> None:
                     advisor_column_id = col_id
                     advisor_column_name_actual = col_title  # Keep actual case
 
-            if not advisor_column_id:
-                st.error("Colonne 'Conseiller' introuvable dans le board cible.")
-                st.session_state.agg_is_executing = False
-                return
-
         # Execute upsert
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -225,16 +220,30 @@ def execute_aggregation_upsert() -> None:
             if "Conseiller" in data_df.columns:
                 data_df = data_df.rename(columns={"Conseiller": advisor_column_name_actual})
 
-        result = client.upsert_by_advisor_sync(
-            board_id=target_board_id,
-            group_id=group_id,
-            advisor_column_id=advisor_column_id,
-            data=data_df,
-            column_id_map=column_id_map,
-            column_type_map=column_type_map,
-            advisor_column_name=advisor_column_name_actual or "Conseiller",
-            progress_callback=progress_callback,
-        )
+        # Choose upsert method based on whether a Conseiller column exists
+        if advisor_column_id:
+            # Use column-based upsert (Conseiller is a separate column)
+            result = client.upsert_by_advisor_sync(
+                board_id=target_board_id,
+                group_id=group_id,
+                advisor_column_id=advisor_column_id,
+                data=data_df,
+                column_id_map=column_id_map,
+                column_type_map=column_type_map,
+                advisor_column_name=advisor_column_name_actual or "Conseiller",
+                progress_callback=progress_callback,
+            )
+        else:
+            # Use item name-based upsert (advisor name = item name / "Élément")
+            result = client.upsert_by_item_name_sync(
+                board_id=target_board_id,
+                group_id=group_id,
+                data=data_df,
+                column_id_map=column_id_map,
+                column_type_map=column_type_map,
+                advisor_column_name="Conseiller",
+                progress_callback=progress_callback,
+            )
 
         progress_bar.empty()
         status_text.empty()

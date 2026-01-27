@@ -1241,6 +1241,107 @@ class MondayClient:
 
         return result
 
+    async def upsert_by_item_name(
+        self,
+        board_id: int,
+        group_id: str,
+        data: pd.DataFrame,
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None,
+        advisor_column_name: str = "Conseiller",
+        progress_callback: Optional[callable] = None,
+    ) -> dict:
+        """
+        Upsert data using item name as the identifier (for boards without a Conseiller column).
+
+        The advisor name from the DataFrame becomes the item name in Monday.com.
+        This is used when the target board uses "Élément" (item name) for advisors.
+
+        Args:
+            board_id: Target board ID
+            group_id: Target group ID
+            data: DataFrame with aggregated data (must have advisor_column_name)
+            column_id_map: column_name -> column_id mapping
+            column_type_map: column_name -> column_type mapping (optional)
+            advisor_column_name: Name of advisor column in DataFrame (used as item name)
+            progress_callback: Optional callback(current, total, action)
+
+        Returns:
+            Dict with {updated: int, created: int, errors: list}
+        """
+        result = {"updated": 0, "created": 0, "errors": []}
+        column_type_map = column_type_map or {}
+        total = len(data)
+
+        # Get all existing items in the target group
+        try:
+            existing_items = await self.extract_board_data(board_id, group_id)
+        except MondayError as e:
+            result["errors"].append(f"Failed to fetch existing items: {e}")
+            return result
+
+        # Build a map of item name -> item for quick lookup
+        items_by_name = {item["name"]: item for item in existing_items}
+
+        for idx, row in data.iterrows():
+            advisor_name = row.get(advisor_column_name)
+            if not advisor_name or pd.isna(advisor_name):
+                result["errors"].append(f"Row {idx}: missing advisor name")
+                continue
+
+            advisor_name_str = str(advisor_name)
+
+            # Build column values for update/create (exclude advisor column)
+            column_values = {}
+            for col_name, col_id in column_id_map.items():
+                if col_name == advisor_column_name:
+                    continue  # Advisor is the item name, not a column
+                if col_name in row.index:
+                    actual_type = column_type_map.get(col_name)
+                    formatted = self._format_column_value(row[col_name], col_name, actual_type)
+                    if formatted is not None:
+                        column_values[col_id] = formatted
+
+            if advisor_name_str in items_by_name:
+                # Update existing item
+                item = items_by_name[advisor_name_str]
+                item_id = item["id"]
+
+                try:
+                    if column_values:
+                        await self.update_item_column_values(
+                            item_id=item_id,
+                            board_id=board_id,
+                            column_values=column_values,
+                        )
+                    result["updated"] += 1
+                except MondayError as e:
+                    result["errors"].append(f"Update error for {advisor_name_str}: {e}")
+            else:
+                # Create new item with advisor name as item name
+                try:
+                    create_result = await self.create_item(
+                        board_id=board_id,
+                        item_name=advisor_name_str,
+                        group_id=group_id,
+                        column_values=column_values,
+                    )
+                    if create_result.success:
+                        result["created"] += 1
+                    else:
+                        result["errors"].append(f"Create error for {advisor_name_str}: {create_result.error}")
+                except MondayError as e:
+                    result["errors"].append(f"Create error for {advisor_name_str}: {e}")
+
+            # Rate limiting
+            await asyncio.sleep(RATE_LIMIT_DELAY)
+
+            if progress_callback:
+                current = idx + 1 if isinstance(idx, int) else data.index.get_loc(idx) + 1
+                progress_callback(current, total, "upsert")
+
+        return result
+
     # -------------------------------------------------------------------------
     # Synchronous wrappers
     # -------------------------------------------------------------------------
@@ -1270,6 +1371,29 @@ class MondayClient:
                 board_id=board_id,
                 group_id=group_id,
                 advisor_column_id=advisor_column_id,
+                data=data,
+                column_id_map=column_id_map,
+                column_type_map=column_type_map,
+                advisor_column_name=advisor_column_name,
+                progress_callback=progress_callback,
+            )
+        )
+
+    def upsert_by_item_name_sync(
+        self,
+        board_id: int,
+        group_id: str,
+        data: pd.DataFrame,
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None,
+        advisor_column_name: str = "Conseiller",
+        progress_callback: Optional[callable] = None,
+    ) -> dict:
+        """Synchronous wrapper for upsert_by_item_name."""
+        return asyncio.run(
+            self.upsert_by_item_name(
+                board_id=board_id,
+                group_id=group_id,
                 data=data,
                 column_id_map=column_id_map,
                 column_type_map=column_type_map,
