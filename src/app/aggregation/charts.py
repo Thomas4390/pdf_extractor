@@ -175,7 +175,7 @@ def render_advisor_bar_chart(
                       "<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_stacked_comparison_chart(
@@ -248,7 +248,7 @@ def render_stacked_comparison_chart(
     # Larger text on bars
     fig.update_traces(textfont_size=12)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_top_advisors_chart(
@@ -307,7 +307,7 @@ def render_top_advisors_chart(
         hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # =============================================================================
@@ -402,7 +402,7 @@ def render_pareto_chart(
     fig.update_yaxes(title_text=value_column, secondary_y=False)
     fig.update_yaxes(title_text="Cumul (%)", secondary_y=True, range=[0, 105])
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Show insight
     advisors_for_80 = threshold_idx + 1
@@ -505,7 +505,7 @@ def render_performance_heatmap(
         font=dict(family="Inter, sans-serif"),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # =============================================================================
@@ -567,7 +567,7 @@ def render_contribution_chart(
 
     fig.update_traces(cliponaxis=False)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # =============================================================================
@@ -642,7 +642,7 @@ def render_advisor_radar_chart(
         font=dict(family="Inter, sans-serif"),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # =============================================================================

@@ -461,7 +461,7 @@ def render_agg_step_2_period_preview() -> None:
                     st.dataframe(
                         detail_df[display_cols],
                         hide_index=True,
-                        use_container_width=True,
+                        width="stretch",
                         height=400,
                     )
                 else:
