@@ -157,7 +157,7 @@ class MondayClient:
         self.headers = {
             "Authorization": self.api_key,
             "Content-Type": "application/json",
-            "API-Version": "2024-01"
+            "API-Version": "2025-04"
         }
 
         # Cache for column mappings
@@ -330,7 +330,10 @@ class MondayClient:
         }}
         """
         result = await self._execute_query(query)
-        return result["data"]["boards"][0]["groups"]
+        boards = result["data"]["boards"]
+        if not boards:
+            raise MondayError(f"Board {board_id} not found or not accessible")
+        return boards[0]["groups"]
 
     async def get_or_create_group(
         self,
@@ -398,7 +401,10 @@ class MondayClient:
         }}
         """
         result = await self._execute_query(query)
-        return result["data"]["boards"][0]["columns"]
+        boards = result["data"]["boards"]
+        if not boards:
+            raise MondayError(f"Board {board_id} not found or not accessible")
+        return boards[0]["columns"]
 
     async def create_column(
         self,
@@ -913,13 +919,17 @@ class MondayClient:
             result = await self._execute_query(query)
 
             # Extract items based on query structure
+            boards = result["data"]["boards"]
+            if not boards:
+                raise MondayError(f"Board {board_id} not found or not accessible")
+
             if group_id:
-                groups = result["data"]["boards"][0]["groups"]
+                groups = boards[0]["groups"]
                 if not groups:
                     break
                 items_page = groups[0]["items_page"]
             else:
-                items_page = result["data"]["boards"][0]["items_page"]
+                items_page = boards[0]["items_page"]
 
             items = items_page["items"]
             cursor = items_page["cursor"]
