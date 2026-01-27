@@ -49,12 +49,16 @@ def render_stage_3() -> None:
         file_count=len(st.session_state.extraction_results)
     )
 
-    # Groups breakdown
-    if '_target_group' in df.columns and len(unique_groups) > 1:
-        with st.expander("Détail par groupe", expanded=False):
-            for group in unique_groups:
-                group_count = len(df[df['_target_group'] == group])
-                st.markdown(f"**{group}**: {group_count} items")
+    # Target group display
+    if '_target_group' in df.columns and len(unique_groups) > 0:
+        if len(unique_groups) == 1:
+            st.info(f"📁 **Groupe cible:** {unique_groups[0]}")
+        else:
+            st.info(f"📁 **Groupes cibles:** {', '.join(str(g) for g in unique_groups)}")
+            with st.expander("Détail par groupe", expanded=False):
+                for group in unique_groups:
+                    group_count = len(df[df['_target_group'] == group])
+                    st.markdown(f"**{group}**: {group_count} items")
 
     # Data preview before upload
     with st.expander("📋 Aperçu des données à envoyer", expanded=True):
