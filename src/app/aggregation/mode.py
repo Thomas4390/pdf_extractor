@@ -31,11 +31,6 @@ from src.app.aggregation.execution import (
     execute_aggregation_upsert,
 )
 from src.app.aggregation.charts import render_charts_tab
-from src.app.utils.board_utils import (
-    get_background_aggregation_status,
-    apply_background_aggregation_data,
-    start_background_aggregation_load,
-)
 
 
 def render_aggregation_stepper(current_step: int) -> None:
@@ -158,17 +153,8 @@ def render_agg_step_1_config() -> None:
     # Data loading status and controls
     st.subheader("📥 Chargement des données")
 
-    # Check background loading status
-    bg_status = get_background_aggregation_status()
     data_loaded = st.session_state.get("agg_data_loaded", False)
     source_data = st.session_state.get("agg_source_data", {})
-
-    # Try to apply background data if not already loaded
-    if not data_loaded and not bg_status["loading"] and bg_status["data"]:
-        if apply_background_aggregation_data():
-            data_loaded = True
-            source_data = st.session_state.agg_source_data
-            st.rerun()
 
     if data_loaded and source_data:
         # Show data summary
@@ -188,45 +174,12 @@ def render_agg_step_1_config() -> None:
             st.session_state.agg_data_loaded = False
             load_source_data()
             st.rerun()
-
-    elif bg_status["loading"]:
-        # Show background loading progress
-        progress = bg_status["progress"]
-        current = progress.get("current", 0)
-        total = progress.get("total", 1)
-        current_source = progress.get("current_source", "")
-
-        st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
-        if current_source:
-            st.caption(f"Source actuelle: {current_source}")
-
-        # Progress bar
-        if total > 0:
-            st.progress(current / total)
-
-        # Auto-refresh to check progress
-        import time
-        time.sleep(0.5)
-        st.rerun()
-
-    elif bg_status["error"]:
-        st.error(f"Erreur lors du chargement: {bg_status['error']}")
-        if st.button("🔄 Réessayer", type="primary"):
-            from src.app.utils.board_utils import reset_background_aggregation_data
-            reset_background_aggregation_data()
-            start_background_aggregation_load()
-            st.rerun()
-
     else:
         st.info("Les données seront chargées automatiquement.")
-        # Start background loading if not started yet
+        # Auto-load data
         if st.session_state.agg_selected_sources:
-            if start_background_aggregation_load():
-                st.rerun()
-            else:
-                # Fallback to synchronous load
-                load_source_data()
-                st.rerun()
+            load_source_data()
+            st.rerun()
 
     # Navigation
     can_proceed = (
