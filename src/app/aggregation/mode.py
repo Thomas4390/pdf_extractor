@@ -32,6 +32,7 @@ from src.app.aggregation.execution import (
     load_source_data,
     filter_and_aggregate_data,
     execute_aggregation_upsert,
+    apply_metrics_to_aggregation,
 )
 from src.app.aggregation.charts import render_charts_tab
 from src.app.utils.board_utils import (
@@ -441,6 +442,63 @@ def render_agg_step_2_period_preview() -> None:
             st.markdown(f"**Groupe:** {final_group_name}")
 
     st.markdown("---")
+
+    # Metrics import section (only for MONTH periods)
+    flexible_period = st.session_state.agg_flexible_period
+    if flexible_period.period_type == PeriodType.MONTH:
+        st.subheader("📊 Import des métriques additionnelles")
+        st.caption(
+            "Importez les colonnes Coût, Dépenses, Leads, Bonus et Récompenses "
+            "depuis le board de données, puis calculez automatiquement les métriques dérivées."
+        )
+
+        metrics_loaded = st.session_state.get("agg_metrics_loaded", False)
+        metrics_group = st.session_state.get("agg_metrics_group", "")
+
+        col_metrics1, col_metrics2 = st.columns([2, 1])
+
+        with col_metrics1:
+            # Board selection for metrics
+            boards = st.session_state.monday_boards
+            if boards:
+                board_options = {b['name']: int(b['id']) for b in boards}
+                # Default to current metrics board
+                from src.utils.aggregator import METRICS_BOARD_CONFIG
+                default_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)
+
+                # Find default board name
+                default_board_name = None
+                for name, bid in board_options.items():
+                    if bid == default_board_id:
+                        default_board_name = name
+                        break
+
+                selected_board_name = st.selectbox(
+                    "Board source des métriques",
+                    options=list(board_options.keys()),
+                    index=list(board_options.keys()).index(default_board_name) if default_board_name in board_options else 0,
+                    key="agg_metrics_board_selector",
+                )
+                st.session_state.agg_metrics_board_id = board_options[selected_board_name]
+
+        with col_metrics2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(
+                "📥 Importer les métriques" if not metrics_loaded else "🔄 Recharger les métriques",
+                type="primary" if not metrics_loaded else "secondary",
+                key="import_metrics_btn",
+            ):
+                apply_metrics_to_aggregation()
+                st.rerun()
+
+        if metrics_loaded:
+            st.success(f"✅ Métriques chargées depuis le groupe: **{metrics_group}**")
+            st.caption(
+                "Colonnes ajoutées: Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses, "
+                "Total Dépenses, Profit, CA/Lead, Profit/Lead, Ratio Brut, Ratio Net"
+            )
+
+        st.markdown("---")
 
     # Preview section
     combined_df = st.session_state.agg_combined_data

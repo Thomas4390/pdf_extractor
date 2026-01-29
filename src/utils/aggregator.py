@@ -352,6 +352,160 @@ SOURCE_BOARDS = {
 
 
 # =============================================================================
+# METRICS CONFIGURATION
+# =============================================================================
+
+@dataclass
+class MetricsConfig:
+    """Configuration for loading additional metrics from a board."""
+    board_id: int
+    advisor_column: str = "Conseiller"
+    # Column names in the source board
+    cost_column: str = "Coût"
+    expenses_column: str = "Dépenses par Conseiller"
+    leads_column: str = "Leads"
+    bonus_column: str = "Bonus"
+    rewards_column: str = "Récompenses"
+
+
+# Default metrics board configuration
+# The metrics board should have groups named by month (e.g., "Janvier 2026")
+METRICS_BOARD_CONFIG = MetricsConfig(
+    board_id=9142978904,  # Update this with the actual metrics board ID
+)
+
+
+# =============================================================================
+# METRICS CALCULATIONS
+# =============================================================================
+
+def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate derived metrics columns from base data.
+
+    Calculates:
+    - Total Dépenses = Coût + Dépenses par Conseiller + Bonus
+    - Profit = AE CA + Récompenses + (Bonus + Dépenses par Conseiller + Coût)
+    - CA/Lead = ROUND(AE CA / Leads, 2)
+    - Profit/Lead = ROUND(Profit / Leads, 2)
+    - Ratio Brut = ROUND((AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
+    - Ratio Net = ROUND((Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
+
+    Args:
+        df: DataFrame with columns: AE CA, Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses
+
+    Returns:
+        DataFrame with additional calculated columns
+    """
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    # Ensure numeric columns
+    numeric_cols = ["AE CA", "Coût", "Dépenses par Conseiller", "Leads", "Bonus", "Récompenses"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Calculate Total Dépenses
+    if all(col in df.columns for col in ["Coût", "Dépenses par Conseiller", "Bonus"]):
+        df["Total Dépenses"] = df["Coût"] + df["Dépenses par Conseiller"] + df["Bonus"]
+
+    # Calculate Profit
+    # Profit = AE CA + Récompenses + (Bonus + Dépenses par Conseiller + Coût)
+    # Note: Coût, Bonus, Dépenses are typically negative values (expenses)
+    if all(col in df.columns for col in ["AE CA", "Récompenses", "Bonus", "Dépenses par Conseiller", "Coût"]):
+        df["Profit"] = (
+            df["AE CA"] +
+            df["Récompenses"] +
+            df["Bonus"] +
+            df["Dépenses par Conseiller"] +
+            df["Coût"]
+        )
+
+    # Calculate CA/Lead
+    if "AE CA" in df.columns and "Leads" in df.columns:
+        df["CA/Lead"] = df.apply(
+            lambda row: round(row["AE CA"] / row["Leads"], 2) if row["Leads"] != 0 else 0,
+            axis=1
+        )
+
+    # Calculate Profit/Lead
+    if "Profit" in df.columns and "Leads" in df.columns:
+        df["Profit/Lead"] = df.apply(
+            lambda row: round(row["Profit"] / row["Leads"], 2) if row["Leads"] != 0 else 0,
+            axis=1
+        )
+
+    # Calculate Ratio Brut
+    # Ratio Brut = (AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100
+    if all(col in df.columns for col in ["AE CA", "Coût", "Bonus", "Dépenses par Conseiller"]):
+        df["Ratio Brut"] = df.apply(
+            lambda row: round(
+                (row["AE CA"] / -(row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"])) * 100, 2
+            ) if (row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"]) != 0 else 0,
+            axis=1
+        )
+
+    # Calculate Ratio Net
+    # Ratio Net = (Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100
+    if all(col in df.columns for col in ["Profit", "Coût", "Bonus", "Dépenses par Conseiller"]):
+        df["Ratio Net"] = df.apply(
+            lambda row: round(
+                (row["Profit"] / -(row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"])) * 100, 2
+            ) if (row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"]) != 0 else 0,
+            axis=1
+        )
+
+    return df
+
+
+def merge_metrics_with_aggregation(
+    aggregated_df: pd.DataFrame,
+    metrics_df: pd.DataFrame,
+    advisor_column: str = "Conseiller",
+) -> pd.DataFrame:
+    """
+    Merge metrics data with aggregated data by advisor.
+
+    Args:
+        aggregated_df: DataFrame with aggregated data (from combine_aggregations)
+        metrics_df: DataFrame with metrics columns (Coût, Dépenses par Conseiller, etc.)
+        advisor_column: Column name for advisor matching
+
+    Returns:
+        Merged DataFrame with all columns
+    """
+    if aggregated_df.empty:
+        return aggregated_df
+
+    if metrics_df.empty:
+        return aggregated_df
+
+    # Ensure advisor column exists in both
+    if advisor_column not in aggregated_df.columns:
+        return aggregated_df
+    if advisor_column not in metrics_df.columns:
+        return aggregated_df
+
+    # Merge on advisor column
+    result = aggregated_df.merge(
+        metrics_df,
+        on=advisor_column,
+        how="left",
+    )
+
+    # Fill NaN with 0 for numeric columns
+    numeric_cols = ["Coût", "Dépenses par Conseiller", "Leads", "Bonus", "Récompenses"]
+    for col in numeric_cols:
+        if col in result.columns:
+            result[col] = result[col].fillna(0)
+
+    return result
+
+
+# =============================================================================
 # DATE PERIOD FUNCTIONS
 # =============================================================================
 

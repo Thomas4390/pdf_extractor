@@ -11,11 +11,14 @@ import streamlit as st
 
 from src.utils.aggregator import (
     SOURCE_BOARDS,
+    METRICS_BOARD_CONFIG,
     get_group_name_for_period,
     filter_by_date,
     filter_by_flexible_period,
     aggregate_by_advisor,
     combine_aggregations,
+    merge_metrics_with_aggregation,
+    calculate_derived_metrics,
     FlexiblePeriod,
     PeriodType,
 )
@@ -150,6 +153,10 @@ def filter_and_aggregate_data() -> None:
     # Combine aggregations
     st.session_state.agg_combined_data = combine_aggregations(aggregated_data)
 
+    # Reset metrics loaded flag when period changes
+    st.session_state.agg_metrics_loaded = False
+    st.session_state.agg_metrics_group = ""
+
 
 def load_and_aggregate_data() -> None:
     """
@@ -158,6 +165,132 @@ def load_and_aggregate_data() -> None:
     """
     load_source_data()
     filter_and_aggregate_data()
+
+
+def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
+    """
+    Load metrics data from a specific group in a board.
+
+    The group should match the month name (e.g., "Janvier 2026").
+
+    Args:
+        board_id: Monday.com board ID containing metrics
+        group_name: Name of the group to load (e.g., "Janvier 2026")
+
+    Returns:
+        DataFrame with metrics columns (Conseiller, Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses)
+    """
+    from src.clients.monday import MondayClient
+
+    api_key = st.session_state.get("monday_api_key")
+    if not api_key:
+        return pd.DataFrame()
+
+    try:
+        client = MondayClient(api_key=api_key)
+
+        # Get groups from the board to find the matching group ID
+        groups = run_async(client.list_groups(board_id))
+
+        group_id = None
+        for group in groups:
+            if group["title"] == group_name:
+                group_id = group["id"]
+                break
+
+        if group_id is None:
+            st.warning(f"Groupe '{group_name}' non trouvé dans le board de métriques.")
+            return pd.DataFrame()
+
+        # Load items from the specific group
+        items = client.extract_board_data_sync(board_id, group_id=group_id)
+        df = client.board_items_to_dataframe(items)
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Keep only the relevant columns
+        config = METRICS_BOARD_CONFIG
+        columns_to_keep = [
+            config.advisor_column,
+            config.cost_column,
+            config.expenses_column,
+            config.leads_column,
+            config.bonus_column,
+            config.rewards_column,
+        ]
+
+        # Filter to existing columns
+        existing_cols = [col for col in columns_to_keep if col in df.columns]
+        if config.advisor_column not in existing_cols:
+            # Try to use item name as advisor
+            if "name" in df.columns:
+                df[config.advisor_column] = df["name"]
+                existing_cols = [config.advisor_column] + [c for c in existing_cols if c != config.advisor_column]
+
+        df = df[existing_cols]
+
+        # Convert numeric columns
+        numeric_cols = [config.cost_column, config.expenses_column, config.leads_column,
+                        config.bonus_column, config.rewards_column]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+        return df
+
+    except Exception as e:
+        st.error(f"Erreur lors du chargement des métriques: {e}")
+        return pd.DataFrame()
+
+
+def apply_metrics_to_aggregation() -> None:
+    """
+    Load metrics and merge with aggregated data, then calculate derived columns.
+
+    Only works for MONTH period type.
+    """
+    flexible_period = st.session_state.get("agg_flexible_period")
+
+    if flexible_period is None or flexible_period.period_type != PeriodType.MONTH:
+        st.warning("L'import des métriques n'est disponible que pour les périodes mensuelles.")
+        return
+
+    # Get the group name for the selected month
+    group_name = flexible_period.get_group_name()
+
+    # Load metrics from the configured board
+    metrics_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)
+
+    with st.spinner(f"Chargement des métriques pour {group_name}..."):
+        metrics_df = load_metrics_for_period(metrics_board_id, group_name)
+
+    if metrics_df.empty:
+        st.warning(f"Aucune métrique trouvée pour {group_name}.")
+        return
+
+    # Get current combined data
+    combined_df = st.session_state.get("agg_combined_data")
+    if combined_df is None or combined_df.empty:
+        st.warning("Pas de données agrégées disponibles.")
+        return
+
+    # Merge metrics with aggregated data
+    merged_df = merge_metrics_with_aggregation(
+        combined_df,
+        metrics_df,
+        advisor_column="Conseiller",
+    )
+
+    # Calculate derived metrics
+    final_df = calculate_derived_metrics(merged_df)
+
+    # Store the result
+    st.session_state.agg_combined_data = final_df
+    st.session_state.agg_metrics_loaded = True
+    st.session_state.agg_metrics_group = group_name
+
+    st.success(f"✅ Métriques importées et calculs effectués pour {group_name}!")
 
 
 def execute_aggregation_upsert() -> None:

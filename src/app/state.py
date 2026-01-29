@@ -162,6 +162,10 @@ def init_session_state() -> None:
         "agg_unknown_advisors": [],  # List of unknown advisor names filtered out
         "agg_detail_advisor": "Tous",  # Selected advisor in detail tab
         "agg_detail_source": "Toutes",  # Selected source in detail tab
+        "agg_flexible_period": None,  # FlexiblePeriod object for flexible date selection
+        "agg_metrics_loaded": False,  # True when metrics have been imported
+        "agg_metrics_group": "",  # Group name from which metrics were loaded
+        "agg_metrics_board_id": None,  # Board ID for metrics source
     }
 
     for key, default in defaults.items():
