@@ -268,8 +268,8 @@ def render_agg_step_2_period_preview() -> None:
     boards = st.session_state.monday_boards
     target_board_id = st.session_state.agg_target_board_id
 
-    # Initialize flexible period if not set
-    if "agg_flexible_period" not in st.session_state:
+    # Initialize flexible period if not set or None
+    if st.session_state.get("agg_flexible_period") is None:
         st.session_state.agg_flexible_period = FlexiblePeriod(
             period_type=PeriodType.MONTH, months_ago=1
         )
