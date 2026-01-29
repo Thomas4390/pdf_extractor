@@ -152,14 +152,24 @@ def start_background_aggregation_load() -> bool:
     Start loading aggregation data in the background.
 
     Returns:
-        True if loading was started, False if already loading or no API key
+        True if loading was started, False if already loading, data exists, or no API key
     """
     global _background_agg_loading, _background_agg_data
 
+    # Don't reload if already loading
     if _background_agg_loading:
         return False
 
+    # Don't reload if background data already exists
     if _background_agg_data and not _background_agg_error:
+        return False
+
+    # Don't reload if session state already has valid data (cache check)
+    existing_data = st.session_state.get("agg_source_data", {})
+    data_loaded = st.session_state.get("agg_data_loaded", False)
+    if data_loaded and existing_data and any(
+        not df.empty for df in existing_data.values() if hasattr(df, 'empty')
+    ):
         return False
 
     api_key = st.session_state.get("monday_api_key")

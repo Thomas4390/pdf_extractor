@@ -35,6 +35,8 @@ from src.app.aggregation.execution import (
     apply_metrics_to_aggregation,
 )
 from src.app.aggregation.charts import render_charts_tab
+from src.app.aggregation.exporters import render_export_buttons
+from src.app.aggregation.validators import validate_dataframe, render_validation_report
 from src.app.utils.board_utils import (
     get_background_aggregation_status,
     apply_background_aggregation_data,
@@ -163,22 +165,19 @@ def render_agg_step_1_config() -> None:
     # Data loading status and controls
     st.subheader("📥 Chargement des données")
 
-    # Check background loading status
-    bg_status = get_background_aggregation_status()
+    # Check session state first - data persistence takes priority
     data_loaded = st.session_state.get("agg_data_loaded", False)
     source_data = st.session_state.get("agg_source_data", {})
 
-    # Try to apply background data if not already loaded
-    if not data_loaded and not bg_status["loading"] and bg_status["data"]:
-        if apply_background_aggregation_data():
-            data_loaded = True
-            source_data = st.session_state.agg_source_data
-            st.rerun()
+    # Verify data is actually present (not just flag)
+    has_valid_data = data_loaded and source_data and any(
+        not df.empty for df in source_data.values() if isinstance(df, pd.DataFrame)
+    )
 
-    if data_loaded and source_data:
-        # Show data summary
+    if has_valid_data:
+        # Data already loaded - show summary and don't reload
         total_rows = sum(len(df) for df in source_data.values())
-        st.success(f"✅ Données chargées: {total_rows} lignes au total")
+        st.success(f"✅ Données chargées: {total_rows} lignes au total (en cache)")
 
         # Show per-source counts
         cols = st.columns(len(source_data))
@@ -188,49 +187,59 @@ def render_agg_step_1_config() -> None:
                 with cols[idx]:
                     st.metric(config.display_name, f"{len(df)} lignes")
 
-        # Button to reload
+        # Button to force reload (optional)
         if st.button("🔄 Recharger les données", type="secondary"):
             st.session_state.agg_data_loaded = False
+            st.session_state.agg_source_data = {}
             reset_background_aggregation_data()
             load_source_data()
             st.rerun()
 
-    elif bg_status["loading"]:
-        # Show background loading progress
-        progress = bg_status["progress"]
-        current = progress.get("current", 0)
-        total = progress.get("total", 1)
-        current_source = progress.get("current_source", "")
+    else:
+        # Data not loaded - check background loading status
+        bg_status = get_background_aggregation_status()
 
-        st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
-        if current_source:
-            st.caption(f"Source actuelle: {current_source}")
+        # Try to apply background data if available
+        if not bg_status["loading"] and bg_status["data"]:
+            if apply_background_aggregation_data():
+                st.rerun()
 
-        if total > 0:
-            st.progress(current / total)
+        if bg_status["loading"]:
+            # Show background loading progress
+            progress = bg_status["progress"]
+            current = progress.get("current", 0)
+            total = progress.get("total", 1)
+            current_source = progress.get("current_source", "")
 
-        # Auto-refresh to check progress
-        import time
-        time.sleep(0.5)
-        st.rerun()
+            st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
+            if current_source:
+                st.caption(f"Source actuelle: {current_source}")
 
-    elif bg_status["error"]:
-        st.error(f"Erreur lors du chargement: {bg_status['error']}")
-        if st.button("🔄 Réessayer", type="primary"):
-            reset_background_aggregation_data()
-            start_background_aggregation_load()
+            if total > 0:
+                st.progress(current / total)
+
+            # Auto-refresh to check progress
+            import time
+            time.sleep(0.5)
             st.rerun()
 
-    else:
-        st.info("Les données seront chargées automatiquement.")
-        # Start background loading if not started yet
-        if st.session_state.agg_selected_sources:
-            if start_background_aggregation_load():
+        elif bg_status["error"]:
+            st.error(f"Erreur lors du chargement: {bg_status['error']}")
+            if st.button("🔄 Réessayer", type="primary"):
+                reset_background_aggregation_data()
+                start_background_aggregation_load()
                 st.rerun()
-            else:
-                # Fallback to synchronous load
-                load_source_data()
-                st.rerun()
+
+        else:
+            st.info("Les données seront chargées automatiquement.")
+            # Start background loading if not started yet
+            if st.session_state.agg_selected_sources:
+                if start_background_aggregation_load():
+                    st.rerun()
+                else:
+                    # Fallback to synchronous load
+                    load_source_data()
+                    st.rerun()
 
     # Navigation
     can_proceed = (
@@ -400,9 +409,10 @@ def render_agg_step_2_period_preview() -> None:
             )
             period_changed = True
 
-    # If period changed, re-filter data
+    # If period changed, re-filter data with loading indicator
     if period_changed:
-        filter_and_aggregate_data()
+        with st.spinner("⏳ Filtrage et agrégation des données..."):
+            filter_and_aggregate_data()
         st.rerun()
 
     # Show current period info
@@ -413,7 +423,7 @@ def render_agg_step_2_period_preview() -> None:
     # Group name options
     use_custom_group = st.session_state.get("agg_use_custom_group", False)
     custom_group_name = st.session_state.get("agg_custom_group_name", "")
-    auto_group_name = get_group_name_for_period(selected_period)
+    auto_group_name = flexible_period.get_group_name()
 
     col_group1, col_group2 = st.columns([1, 2])
     with col_group1:
@@ -515,9 +525,23 @@ def render_agg_step_2_period_preview() -> None:
     # Tab 1: Combined summary (main view)
     with tab_combined:
         if combined_df is not None and not combined_df.empty:
+            # Show info about filtered unknown advisors FIRST (before stats)
+            # so users know some data is excluded from the totals
+            unknown_advisors = st.session_state.get("agg_unknown_advisors", [])
+            if unknown_advisors:
+                names_list = ", ".join(f"**{name}**" for name in unknown_advisors[:10])
+                if len(unknown_advisors) > 10:
+                    names_list += f", ... (+{len(unknown_advisors) - 10} autres)"
+                st.warning(
+                    f"⚠️ **{len(unknown_advisors)} conseiller(s) exclu(s) des totaux** "
+                    f"(non trouvés dans la base de données) : {names_list}"
+                )
+
             # Quick stats
             advisor_count = len(combined_df)
-            numeric_cols = [col for col in combined_df.columns if col != "Conseiller"]
+            # Exclude categorical columns from numeric calculations
+            exclude_cols = ["Conseiller", "Profitable"]
+            numeric_cols = [col for col in combined_df.columns if col not in exclude_cols]
 
             stat_cols = st.columns(len(numeric_cols) + 1)
             with stat_cols[0]:
@@ -527,18 +551,13 @@ def render_agg_step_2_period_preview() -> None:
                     total = combined_df[col].sum()
                     st.metric(f"Total {col}", f"{total:,.2f}")
 
-            # Show info about filtered unknown advisors
-            unknown_advisors = st.session_state.get("agg_unknown_advisors", [])
-            if unknown_advisors:
-                names_list = ", ".join(f"**{name}**" for name in unknown_advisors[:10])
-                if len(unknown_advisors) > 10:
-                    names_list += f", ... (+{len(unknown_advisors) - 10} autres)"
-                st.info(
-                    f"ℹ️ **{len(unknown_advisors)} conseiller(s) ignoré(s)** (non trouvés dans la base de données) : {names_list}"
-                )
-
             st.markdown("---")
             render_combined_preview(combined_df)
+
+            # Export section
+            st.markdown("---")
+            st.markdown("#### 📥 Exporter les données")
+            render_export_buttons(combined_df, flexible_period.display_name, key_suffix="combined")
         else:
             st.warning("Aucune donnée pour cette période.")
 
@@ -546,7 +565,7 @@ def render_agg_step_2_period_preview() -> None:
     with tab_charts:
         render_charts_tab(
             combined_df=combined_df,
-            period_name=selected_period.display_name,
+            period_name=flexible_period.display_name,
         )
 
     # Tab 3: Detail by advisor (shows all transactions per advisor)
@@ -789,23 +808,68 @@ def render_agg_step_3_execute() -> None:
             st.dataframe(combined_df, width="stretch", height=300)
             st.caption(f"📊 {len(combined_df)} lignes × {len(combined_df.columns)} colonnes")
 
+        # Data validation section
+        with st.expander("🔍 Validation des données", expanded=False):
+            validation_report = validate_dataframe(
+                combined_df,
+                required_columns=["Conseiller"],
+            )
+            render_validation_report(validation_report)
+
+            # Store validation status for confirmation
+            st.session_state.agg_validation_passed = validation_report.is_valid
+
     st.markdown("---")
 
     # Show previous result if exists
     if st.session_state.agg_upsert_result:
         render_execution_result(st.session_state.agg_upsert_result)
 
-    # Navigation
-    go_back, go_next = render_navigation_buttons(
-        current_step=3,
-        max_step=3,
-        can_proceed=not st.session_state.agg_is_executing,
-    )
+    # Confirmation dialog
+    if st.session_state.get("agg_confirm_upsert", False):
+        validation_passed = st.session_state.get("agg_validation_passed", True)
 
-    if go_back:
-        st.session_state.agg_step = 2
-        st.session_state.agg_upsert_result = None
-        st.rerun()
+        if not validation_passed:
+            st.error("⚠️ **Attention: La validation a détecté des problèmes**")
+            st.markdown("Des erreurs ont été détectées dans les données. "
+                       "Vérifiez la section 'Validation des données' ci-dessus avant de continuer.")
+        else:
+            st.warning("⚠️ **Confirmation requise**")
 
-    if go_next and not st.session_state.agg_is_executing:
-        execute_aggregation_upsert()
+        st.markdown(f"""
+        Vous êtes sur le point d'envoyer les données suivantes:
+        - **Board cible:** {target_board_name}
+        - **Groupe:** {group_name}
+        - **Conseillers:** {advisor_count}
+        - **Sources:** {sources_count}
+
+        Cette action va créer ou mettre à jour les éléments dans Monday.com.
+        """)
+
+        col_confirm, col_cancel = st.columns(2)
+        with col_confirm:
+            btn_label = "✅ Confirmer l'envoi" if validation_passed else "⚠️ Envoyer malgré les erreurs"
+            btn_type = "primary" if validation_passed else "secondary"
+            if st.button(btn_label, type=btn_type, key="confirm_upsert_btn"):
+                st.session_state.agg_confirm_upsert = False
+                execute_aggregation_upsert()
+        with col_cancel:
+            if st.button("❌ Annuler", type="secondary", key="cancel_upsert_btn"):
+                st.session_state.agg_confirm_upsert = False
+                st.rerun()
+    else:
+        # Navigation
+        go_back, go_next = render_navigation_buttons(
+            current_step=3,
+            max_step=3,
+            can_proceed=not st.session_state.agg_is_executing,
+        )
+
+        if go_back:
+            st.session_state.agg_step = 2
+            st.session_state.agg_upsert_result = None
+            st.rerun()
+
+        if go_next and not st.session_state.agg_is_executing:
+            st.session_state.agg_confirm_upsert = True
+            st.rerun()

@@ -112,6 +112,34 @@ class FlexiblePeriod:
     custom_start: Optional[date] = None
     custom_end: Optional[date] = None
 
+    def __post_init__(self):
+        """Validate period inputs."""
+        # Validate non-negative offsets
+        if self.months_ago < 0:
+            raise ValueError(f"months_ago must be >= 0, got {self.months_ago}")
+        if self.weeks_ago < 0:
+            raise ValueError(f"weeks_ago must be >= 0, got {self.weeks_ago}")
+        if self.quarters_ago < 0:
+            raise ValueError(f"quarters_ago must be >= 0, got {self.quarters_ago}")
+        if self.years_ago < 0:
+            raise ValueError(f"years_ago must be >= 0, got {self.years_ago}")
+
+        # Validate reasonable upper bounds (100 years)
+        if self.months_ago > 1200:
+            raise ValueError(f"months_ago must be <= 1200, got {self.months_ago}")
+        if self.weeks_ago > 5200:
+            raise ValueError(f"weeks_ago must be <= 5200, got {self.weeks_ago}")
+        if self.quarters_ago > 400:
+            raise ValueError(f"quarters_ago must be <= 400, got {self.quarters_ago}")
+        if self.years_ago > 100:
+            raise ValueError(f"years_ago must be <= 100, got {self.years_ago}")
+
+        # Validate custom date range
+        if self.period_type == PeriodType.CUSTOM:
+            if self.custom_start and self.custom_end:
+                if self.custom_start > self.custom_end:
+                    raise ValueError("custom_start must be <= custom_end")
+
     @property
     def display_name(self) -> str:
         """Human-readable name for the period."""
@@ -292,7 +320,16 @@ def get_month_from_offset(months_ago: int, reference_date: Optional[date] = None
 
     Returns:
         First day of the target month
+
+    Raises:
+        ValueError: If months_ago is negative or exceeds 1200 (100 years)
     """
+    # Validate input
+    if months_ago < 0:
+        raise ValueError(f"months_ago must be >= 0, got {months_ago}")
+    if months_ago > 1200:
+        raise ValueError(f"months_ago must be <= 1200 (100 years), got {months_ago}")
+
     if reference_date is None:
         reference_date = date.today()
 
@@ -391,12 +428,16 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     - Ratio Brut = ROUND((AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
     - Ratio Net = ROUND((Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
 
+    Uses vectorized NumPy operations for performance.
+
     Args:
         df: DataFrame with columns: AE CA, Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses
 
     Returns:
         DataFrame with additional calculated columns
     """
+    import numpy as np
+
     if df.empty:
         return df
 
@@ -408,11 +449,11 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Calculate Total Dépenses
+    # Calculate Total Dépenses (vectorized)
     if all(col in df.columns for col in ["Coût", "Dépenses par Conseiller", "Bonus"]):
         df["Total Dépenses"] = df["Coût"] + df["Dépenses par Conseiller"] + df["Bonus"]
 
-    # Calculate Profit
+    # Calculate Profit (vectorized)
     # Profit = AE CA + Récompenses + (Bonus + Dépenses par Conseiller + Coût)
     # Note: Coût, Bonus, Dépenses are typically negative values (expenses)
     if all(col in df.columns for col in ["AE CA", "Récompenses", "Bonus", "Dépenses par Conseiller", "Coût"]):
@@ -424,48 +465,55 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
             df["Coût"]
         )
 
-    # Calculate CA/Lead
+    # Calculate CA/Lead (vectorized with np.where for division by zero)
     if "AE CA" in df.columns and "Leads" in df.columns:
-        df["CA/Lead"] = df.apply(
-            lambda row: round(row["AE CA"] / row["Leads"], 2) if row["Leads"] != 0 else 0,
-            axis=1
+        df["CA/Lead"] = np.where(
+            df["Leads"] != 0,
+            np.round(df["AE CA"] / df["Leads"], 2),
+            0.0
         )
 
-    # Calculate Profit/Lead
+    # Calculate Profit/Lead (vectorized)
     if "Profit" in df.columns and "Leads" in df.columns:
-        df["Profit/Lead"] = df.apply(
-            lambda row: round(row["Profit"] / row["Leads"], 2) if row["Leads"] != 0 else 0,
-            axis=1
+        df["Profit/Lead"] = np.where(
+            df["Leads"] != 0,
+            np.round(df["Profit"] / df["Leads"], 2),
+            0.0
         )
 
-    # Calculate Ratio Brut
-    # Ratio Brut = (AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100
-    if all(col in df.columns for col in ["AE CA", "Coût", "Bonus", "Dépenses par Conseiller"]):
-        df["Ratio Brut"] = df.apply(
-            lambda row: round(
-                (row["AE CA"] / -(row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"])) * 100, 2
-            ) if (row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"]) != 0 else 0,
-            axis=1
-        )
+    # Calculate denominator for ratio calculations (expenses sum)
+    if all(col in df.columns for col in ["Coût", "Bonus", "Dépenses par Conseiller"]):
+        expenses_sum = df["Coût"] + df["Bonus"] + df["Dépenses par Conseiller"]
 
-    # Calculate Ratio Net
-    # Ratio Net = (Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100
-    if all(col in df.columns for col in ["Profit", "Coût", "Bonus", "Dépenses par Conseiller"]):
-        df["Ratio Net"] = df.apply(
-            lambda row: round(
-                (row["Profit"] / -(row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"])) * 100, 2
-            ) if (row["Coût"] + row["Bonus"] + row["Dépenses par Conseiller"]) != 0 else 0,
-            axis=1
-        )
+        # Calculate Ratio Brut (vectorized)
+        # Ratio Brut = (AE CA / -expenses_sum) * 100
+        if "AE CA" in df.columns:
+            df["Ratio Brut"] = np.where(
+                expenses_sum != 0,
+                np.round((df["AE CA"] / -expenses_sum) * 100, 2),
+                0.0
+            )
 
-    # Calculate Profitable status based on Ratio Net
+        # Calculate Ratio Net (vectorized)
+        # Ratio Net = (Profit / -expenses_sum) * 100
+        if "Profit" in df.columns:
+            df["Ratio Net"] = np.where(
+                expenses_sum != 0,
+                np.round((df["Profit"] / -expenses_sum) * 100, 2),
+                0.0
+            )
+
+    # Calculate Profitable status based on Ratio Net (vectorized with np.select)
     # Loss: Ratio Net < 20
     # Middle: 20 <= Ratio Net <= 99
     # Win: Ratio Net > 99
     if "Ratio Net" in df.columns:
-        df["Profitable"] = df["Ratio Net"].apply(
-            lambda x: "Win" if x > 99 else ("Middle" if x >= 20 else "Loss")
-        )
+        conditions = [
+            df["Ratio Net"] > 99,
+            df["Ratio Net"] >= 20,
+        ]
+        choices = ["Win", "Middle"]
+        df["Profitable"] = np.select(conditions, choices, default="Loss")
 
     return df
 

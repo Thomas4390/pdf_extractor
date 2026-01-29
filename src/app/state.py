@@ -166,6 +166,8 @@ def init_session_state() -> None:
         "agg_metrics_loaded": False,  # True when metrics have been imported
         "agg_metrics_group": "",  # Group name from which metrics were loaded
         "agg_metrics_board_id": None,  # Board ID for metrics source
+        "agg_confirm_upsert": False,  # Confirmation flag before upsert
+        "agg_validation_passed": True,  # Validation status for pre-upload check
     }
 
     for key, default in defaults.items():
@@ -232,3 +234,10 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_unknown_advisors = []
     st.session_state.agg_detail_advisor = "Tous"
     st.session_state.agg_detail_source = "Toutes"
+    # FlexiblePeriod and metrics state
+    st.session_state.agg_flexible_period = None
+    st.session_state.agg_metrics_loaded = False
+    st.session_state.agg_metrics_group = ""
+    st.session_state.agg_metrics_board_id = None
+    st.session_state.agg_confirm_upsert = False
+    st.session_state.agg_validation_passed = True
