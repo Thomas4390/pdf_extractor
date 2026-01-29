@@ -686,6 +686,8 @@ def render_profitability_distribution_chart(
     """
     Render a pie/donut chart showing the distribution of Profitable statuses.
 
+    Only includes advisors with valid expense data.
+
     Args:
         df: DataFrame with 'Profitable' column
         title: Chart title
@@ -694,8 +696,22 @@ def render_profitability_distribution_chart(
         st.info("Colonne 'Profitable' non disponible. Importez d'abord les métriques.")
         return
 
+    # Filter out advisors without expense data
+    df_filtered = df.copy()
+    if "Dépenses par Conseiller" in df_filtered.columns:
+        df_filtered = df_filtered[
+            (df_filtered["Dépenses par Conseiller"].notna()) &
+            (df_filtered["Dépenses par Conseiller"] != 0)
+        ]
+    # Also filter out N/A status
+    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+
+    if df_filtered.empty:
+        st.info("Aucun conseiller avec des données de dépenses valides.")
+        return
+
     # Count by status
-    status_counts = df["Profitable"].value_counts().reset_index()
+    status_counts = df_filtered["Profitable"].value_counts().reset_index()
     status_counts.columns = ["Statut", "Nombre"]
 
     # Define colors for each status
@@ -730,7 +746,7 @@ def render_profitability_distribution_chart(
             bgcolor="rgba(255,255,255,0.8)",
         ),
         annotations=[dict(
-            text=f"{len(df)}<br>Total",
+            text=f"{len(df_filtered)}<br>Total",
             x=0.5, y=0.5,
             font_size=16,
             showarrow=False,
@@ -747,6 +763,8 @@ def render_profitability_by_advisor_chart(
     """
     Render a horizontal bar chart showing Ratio Net with color-coded Profitable status.
 
+    Only includes advisors with valid expense data (Dépenses par Conseiller != 0).
+
     Args:
         df: DataFrame with 'Conseiller', 'Ratio Net', and 'Profitable' columns
         title: Chart title
@@ -755,8 +773,22 @@ def render_profitability_by_advisor_chart(
         st.info("Colonnes 'Profitable' et 'Ratio Net' non disponibles. Importez d'abord les métriques.")
         return
 
+    # Filter out advisors without expense data (N/A status or null Dépenses par Conseiller)
+    df_filtered = df.copy()
+    if "Dépenses par Conseiller" in df_filtered.columns:
+        df_filtered = df_filtered[
+            (df_filtered["Dépenses par Conseiller"].notna()) &
+            (df_filtered["Dépenses par Conseiller"] != 0)
+        ]
+    # Also filter out N/A status
+    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+
+    if df_filtered.empty:
+        st.info("Aucun conseiller avec des données de dépenses valides.")
+        return
+
     # Sort by Ratio Net
-    df_sorted = df.sort_values("Ratio Net", ascending=True)
+    df_sorted = df_filtered.sort_values("Ratio Net", ascending=True)
 
     # Define colors for each status
     color_map = {
@@ -780,15 +812,10 @@ def render_profitability_by_advisor_chart(
         customdata=df_sorted["Profitable"],
     ))
 
-    # Add vertical lines for thresholds with better spacing
-    fig.add_vline(x=0, line_dash="dash", line_color="gray")
-    fig.add_vline(x=20, line_dash="dash", line_color=CHART_COLORS["Middle"])
-    fig.add_vline(x=100, line_dash="dash", line_color=CHART_COLORS["Win"])
-
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=max(450, len(df) * 38),  # Increased spacing per row
-        margin=dict(l=40, r=120, t=80, b=60),  # Increased margins
+        height=max(450, len(df_sorted) * 38),
+        margin=dict(l=40, r=120, t=80, b=60),
         font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             title="Ratio Net (%)",
@@ -800,12 +827,6 @@ def render_profitability_by_advisor_chart(
         showlegend=False,
     )
 
-    # Add threshold annotations at the top
-    fig.add_annotation(x=20, y=1.02, yref="paper", text="Middle (20%)",
-                      showarrow=False, font=dict(size=10, color=CHART_COLORS["Middle"]))
-    fig.add_annotation(x=100, y=1.02, yref="paper", text="Win (100%)",
-                      showarrow=False, font=dict(size=10, color=CHART_COLORS["Win"]))
-
     st.plotly_chart(fig, width="stretch")
 
 
@@ -816,6 +837,8 @@ def render_profitability_metrics_chart(
     """
     Render a grouped bar chart comparing key metrics across Profitable statuses.
 
+    Only includes advisors with valid expense data.
+
     Args:
         df: DataFrame with 'Profitable' and financial metrics
         title: Chart title
@@ -824,19 +847,33 @@ def render_profitability_metrics_chart(
         st.info("Colonne 'Profitable' non disponible. Importez d'abord les métriques.")
         return
 
+    # Filter out advisors without expense data
+    df_filtered = df.copy()
+    if "Dépenses par Conseiller" in df_filtered.columns:
+        df_filtered = df_filtered[
+            (df_filtered["Dépenses par Conseiller"].notna()) &
+            (df_filtered["Dépenses par Conseiller"] != 0)
+        ]
+    # Also filter out N/A status
+    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+
+    if df_filtered.empty:
+        st.info("Aucun conseiller avec des données de dépenses valides.")
+        return
+
     # Metrics to compare
-    metrics_to_show = ["AE CA", "Profit", "Total Dépenses"]
-    available_metrics = [m for m in metrics_to_show if m in df.columns]
+    metrics_to_show = ["AE CA", "Profit"]
+    available_metrics = [m for m in metrics_to_show if m in df_filtered.columns]
 
     if not available_metrics:
         st.info("Métriques financières non disponibles.")
         return
 
     # Aggregate by status
-    agg_data = df.groupby("Profitable")[available_metrics].sum().reset_index()
+    agg_data = df_filtered.groupby("Profitable")[available_metrics].sum().reset_index()
 
-    # Ensure order: Loss, Middle, Win, N/A
-    status_order = ["Loss", "Middle", "Win", "N/A"]
+    # Ensure order: Loss, Middle, Win
+    status_order = ["Loss", "Middle", "Win"]
     # Only include statuses that exist in the data
     existing_statuses = [s for s in status_order if s in agg_data["Profitable"].values]
     agg_data["Profitable"] = pd.Categorical(agg_data["Profitable"], categories=existing_statuses, ordered=True)
@@ -847,7 +884,6 @@ def render_profitability_metrics_chart(
     color_map = {
         "AE CA": CHART_COLORS["AE CA"],
         "Profit": CHART_COLORS["success"],
-        "Total Dépenses": CHART_COLORS["danger"],
     }
 
     for metric in available_metrics:
@@ -906,9 +942,16 @@ def render_profitability_scatter_chart(
         st.info("Colonnes requises non disponibles (Total Dépenses, Profit, Profitable).")
         return
 
-    # Prepare data - filter out rows with zero expenses (no data for profitability)
+    # Prepare data - filter out rows with zero/null expenses (no data for profitability)
     plot_df = df.copy()
+    if "Dépenses par Conseiller" in plot_df.columns:
+        plot_df = plot_df[
+            (plot_df["Dépenses par Conseiller"].notna()) &
+            (plot_df["Dépenses par Conseiller"] != 0)
+        ]
     plot_df = plot_df[plot_df["Total Dépenses"] != 0]
+    # Filter out N/A status
+    plot_df = plot_df[plot_df["Profitable"] != "N/A"]
 
     if plot_df.empty:
         st.info("Aucune donnée avec des dépenses non nulles.")
@@ -1080,36 +1123,49 @@ def render_charts_tab(
                 title="AE CA vs Profit",
             )
 
-        # Summary stats
+        # Summary stats - only for advisors with valid expense data
         st.markdown("##### Résumé par statut")
-        status_summary = combined_df.groupby("Profitable").agg({
-            "Conseiller": "count",
-            "Ratio Net": "mean",
-        }).rename(columns={"Conseiller": "Nombre", "Ratio Net": "Ratio Net moyen"})
 
-        # Reorder
-        status_order = ["Win", "Middle", "Loss"]
-        status_summary = status_summary.reindex([s for s in status_order if s in status_summary.index])
+        # Filter for summary
+        summary_df = combined_df.copy()
+        if "Dépenses par Conseiller" in summary_df.columns:
+            summary_df = summary_df[
+                (summary_df["Dépenses par Conseiller"].notna()) &
+                (summary_df["Dépenses par Conseiller"] != 0)
+            ]
+        summary_df = summary_df[summary_df["Profitable"] != "N/A"]
 
-        # Add additional metrics if available
-        if "Profit" in combined_df.columns:
-            profit_by_status = combined_df.groupby("Profitable")["Profit"].sum()
-            status_summary["Profit total"] = profit_by_status
+        if not summary_df.empty:
+            status_summary = summary_df.groupby("Profitable").agg({
+                "Conseiller": "count",
+                "Ratio Net": "mean",
+            }).rename(columns={"Conseiller": "Nombre", "Ratio Net": "Ratio Net moyen"})
 
-        if "AE CA" in combined_df.columns:
-            ca_by_status = combined_df.groupby("Profitable")["AE CA"].sum()
-            status_summary["AE CA total"] = ca_by_status
+            # Reorder
+            status_order = ["Win", "Middle", "Loss"]
+            status_summary = status_summary.reindex([s for s in status_order if s in status_summary.index])
 
-        # Format and display
-        st.dataframe(
-            status_summary.style.format({
-                "Nombre": "{:.0f}",
-                "Ratio Net moyen": "{:.2f}%",
-                "Profit total": "${:,.2f}",
-                "AE CA total": "${:,.2f}",
-            }),
-            width="stretch",
-        )
+            # Add additional metrics if available
+            if "Profit" in summary_df.columns:
+                profit_by_status = summary_df.groupby("Profitable")["Profit"].sum()
+                status_summary["Profit total"] = profit_by_status
+
+            if "AE CA" in summary_df.columns:
+                ca_by_status = summary_df.groupby("Profitable")["AE CA"].sum()
+                status_summary["AE CA total"] = ca_by_status
+
+            # Format and display
+            st.dataframe(
+                status_summary.style.format({
+                    "Nombre": "{:.0f}",
+                    "Ratio Net moyen": "{:.2f}%",
+                    "Profit total": "${:,.2f}",
+                    "AE CA total": "${:,.2f}",
+                }),
+                width="stretch",
+            )
+        else:
+            st.info("Aucun conseiller avec des données de profitabilité valides.")
 
         st.markdown("---")
 
@@ -1128,19 +1184,6 @@ def render_charts_tab(
                     top_n=3,
                     title=f"{col}",
                 )
-
-    st.markdown("---")
-
-    # =========================================================================
-    # Performance Comparison Section (full width for better readability)
-    # =========================================================================
-    st.markdown("#### Performance par conseiller")
-
-    render_stacked_comparison_chart(
-        combined_df,
-        metric_columns,
-        title="Comparaison des métriques",
-    )
 
     st.markdown("---")
 
@@ -1201,13 +1244,17 @@ def render_charts_tab(
     )
 
     if selected_advisor:
+        # Exclude expense-related columns from individual analysis
+        excluded_individual_cols = ["Dépenses par Conseiller", "Coût", "Bonus", "Total Dépenses"]
+        individual_metric_cols = [col for col in metric_columns if col not in excluded_individual_cols]
+
         col1, col2 = st.columns([1, 1])
 
         with col1:
             render_advisor_radar_chart(
                 combined_df,
                 selected_advisor,
-                metric_columns,
+                individual_metric_cols,
                 title=f"Profil de {selected_advisor}",
             )
 
@@ -1217,7 +1264,7 @@ def render_charts_tab(
             if not advisor_data.empty:
                 st.markdown(f"**Statistiques de {selected_advisor}**")
 
-                for col in metric_columns:
+                for col in individual_metric_cols:
                     val = advisor_data[col].iloc[0]
                     total = combined_df[col].sum()
                     pct = (val / total * 100) if total > 0 else 0
