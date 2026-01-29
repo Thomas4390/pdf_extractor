@@ -20,6 +20,8 @@ CHART_COLORS = {
     "PA Vendues": "#3B82F6",      # Blue
     "Collected": "#10B981",        # Emerald green
     "AE CA": "#F59E0B",            # Amber/Orange
+    "Profit": "#10B981",           # Green for profit
+    "Leads": "#8B5CF6",            # Purple for leads
     # UI colors
     "primary": "#6366F1",          # Indigo
     "secondary": "#8B5CF6",        # Violet
@@ -31,6 +33,7 @@ CHART_COLORS = {
     "Win": "#059669",              # Dark Green
     "Middle": "#F59E0B",           # Amber
     "Loss": "#DC2626",             # Dark Red
+    "N/A": "#9CA3AF",              # Gray for no data
 }
 
 # Gradient color scales for heatmaps and continuous data
@@ -53,6 +56,7 @@ CHART_HEIGHT = 400
 def render_kpi_cards(
     df: pd.DataFrame,
     metric_columns: list[str],
+    max_cards: int = 3,
 ) -> None:
     """
     Render styled KPI cards showing totals and key statistics.
@@ -60,13 +64,30 @@ def render_kpi_cards(
     Args:
         df: DataFrame with metric columns
         metric_columns: List of metric column names
+        max_cards: Maximum number of KPI cards to display (default: 3)
     """
     if df.empty or not metric_columns:
         return
 
+    # Priority order for metrics (most important first)
+    priority_metrics = ["AE CA", "Collected", "PA Vendues", "Profit", "Leads"]
+
+    # Sort metrics by priority
+    sorted_metrics = []
+    for m in priority_metrics:
+        if m in metric_columns:
+            sorted_metrics.append(m)
+    # Add remaining metrics not in priority list
+    for m in metric_columns:
+        if m not in sorted_metrics:
+            sorted_metrics.append(m)
+
+    # Limit to max_cards
+    display_metrics = sorted_metrics[:max_cards]
+
     # Calculate stats for each metric
     stats = []
-    for col in metric_columns:
+    for col in display_metrics:
         if col in df.columns:
             total = df[col].sum()
             avg = df[col].mean()
@@ -85,6 +106,11 @@ def render_kpi_cards(
     cols = st.columns(len(stats))
     for idx, stat in enumerate(stats):
         with cols[idx]:
+            # Truncate top_advisor name if too long
+            top_name = stat['top_advisor']
+            if len(top_name) > 12:
+                top_name = top_name[:12] + "..."
+
             # Card with colored border
             st.markdown(f"""
             <div style="
@@ -101,7 +127,7 @@ def render_kpi_cards(
                     {stat['total']:,.0f}
                 </div>
                 <div style="font-size: 11px; color: #9CA3AF;">
-                    Moyenne: {stat['avg']:,.0f} | Top: {stat['top_advisor'][:15]}...
+                    Moy: {stat['avg']:,.0f} | Top: {top_name}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -691,11 +717,18 @@ def render_profitability_distribution_chart(
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=350,
-        margin=dict(l=20, r=20, t=60, b=20),
+        height=400,  # Increased height for spacing
+        margin=dict(l=40, r=40, t=80, b=60),  # Increased margins
         font=dict(family="Inter, sans-serif"),
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.15,  # More space below
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(255,255,255,0.8)",
+        ),
         annotations=[dict(
             text=f"{len(df)}<br>Total",
             x=0.5, y=0.5,
@@ -709,7 +742,7 @@ def render_profitability_distribution_chart(
 
 def render_profitability_by_advisor_chart(
     df: pd.DataFrame,
-    title: str = "Statut de profitabilité par conseiller",
+    title: str = "Ratio Net par conseiller",
 ) -> None:
     """
     Render a horizontal bar chart showing Ratio Net with color-coded Profitable status.
@@ -741,27 +774,37 @@ def render_profitability_by_advisor_chart(
         x=df_sorted["Ratio Net"],
         orientation="h",
         marker=dict(color=colors),
-        text=df_sorted.apply(lambda row: f"{row['Ratio Net']:.1f}% ({row['Profitable']})", axis=1),
+        text=df_sorted.apply(lambda row: f"{row['Ratio Net']:.1f}%", axis=1),
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Ratio Net: %{x:.2f}%<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>Ratio Net: %{x:.2f}%<br>Statut: %{customdata}<extra></extra>",
+        customdata=df_sorted["Profitable"],
     ))
 
-    # Add vertical lines for thresholds
-    fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="0%")
-    fig.add_vline(x=20, line_dash="dash", line_color=CHART_COLORS["Middle"],
-                  annotation_text="20% (Middle)", annotation_position="top")
-    fig.add_vline(x=100, line_dash="dash", line_color=CHART_COLORS["Win"],
-                  annotation_text="100% (Win)", annotation_position="top")
+    # Add vertical lines for thresholds with better spacing
+    fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    fig.add_vline(x=20, line_dash="dash", line_color=CHART_COLORS["Middle"])
+    fig.add_vline(x=100, line_dash="dash", line_color=CHART_COLORS["Win"])
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=max(400, len(df) * 35),
-        margin=dict(l=20, r=100, t=60, b=40),
+        height=max(450, len(df) * 38),  # Increased spacing per row
+        margin=dict(l=40, r=120, t=80, b=60),  # Increased margins
         font=dict(family="Inter, sans-serif"),
-        xaxis=dict(title="Ratio Net (%)", zeroline=True, zerolinecolor="gray"),
-        yaxis=dict(title=""),
+        xaxis=dict(
+            title="Ratio Net (%)",
+            zeroline=True,
+            zerolinecolor="gray",
+            ticksuffix="%",
+        ),
+        yaxis=dict(title="", tickfont=dict(size=11)),
         showlegend=False,
     )
+
+    # Add threshold annotations at the top
+    fig.add_annotation(x=20, y=1.02, yref="paper", text="Middle (20%)",
+                      showarrow=False, font=dict(size=10, color=CHART_COLORS["Middle"]))
+    fig.add_annotation(x=100, y=1.02, yref="paper", text="Win (100%)",
+                      showarrow=False, font=dict(size=10, color=CHART_COLORS["Win"]))
 
     st.plotly_chart(fig, width="stretch")
 
@@ -792,9 +835,11 @@ def render_profitability_metrics_chart(
     # Aggregate by status
     agg_data = df.groupby("Profitable")[available_metrics].sum().reset_index()
 
-    # Ensure order: Loss, Middle, Win
-    status_order = ["Loss", "Middle", "Win"]
-    agg_data["Profitable"] = pd.Categorical(agg_data["Profitable"], categories=status_order, ordered=True)
+    # Ensure order: Loss, Middle, Win, N/A
+    status_order = ["Loss", "Middle", "Win", "N/A"]
+    # Only include statuses that exist in the data
+    existing_statuses = [s for s in status_order if s in agg_data["Profitable"].values]
+    agg_data["Profitable"] = pd.Categorical(agg_data["Profitable"], categories=existing_statuses, ordered=True)
     agg_data = agg_data.sort_values("Profitable")
 
     fig = go.Figure()
@@ -811,19 +856,26 @@ def render_profitability_metrics_chart(
             x=agg_data["Profitable"],
             y=agg_data[metric],
             marker_color=color_map.get(metric, CHART_COLORS["primary"]),
-            text=[f"{v:,.0f}" for v in agg_data[metric]],
+            text=[f"${v:,.0f}" for v in agg_data[metric]],
             textposition="auto",
         ))
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=400,
-        margin=dict(l=20, r=20, t=60, b=40),
+        height=450,  # Increased height
+        margin=dict(l=60, r=40, t=80, b=60),  # Increased margins
         font=dict(family="Inter, sans-serif"),
         barmode="group",
         xaxis=dict(title="Statut de profitabilité"),
-        yaxis=dict(title="Montant ($)"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        yaxis=dict(title="Montant ($)", tickformat="$,.0f"),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.05,  # More space above chart
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(255,255,255,0.8)",
+        ),
     )
 
     st.plotly_chart(fig, width="stretch")
@@ -831,28 +883,47 @@ def render_profitability_metrics_chart(
 
 def render_profitability_scatter_chart(
     df: pd.DataFrame,
-    title: str = "AE CA vs Profit par conseiller",
+    title: str = "Efficacité par conseiller (Dépenses vs Profit)",
 ) -> None:
     """
-    Render a scatter plot with AE CA vs Profit, sized by Leads and colored by Profitable status.
+    Render a scatter plot showing Total Dépenses vs Profit.
+
+    This chart helps visualize which advisors are most efficient:
+    - X-axis: Total Dépenses (costs invested)
+    - Y-axis: Profit generated
+    - Color: Profitability status
+    - Size: AE CA (revenue)
+
+    Advisors in the upper-left are most efficient (high profit, low costs).
 
     Args:
         df: DataFrame with financial metrics
         title: Chart title
     """
-    required_cols = ["AE CA", "Profit", "Profitable", "Conseiller"]
+    # Check required columns - use Total Dépenses instead of AE CA
+    required_cols = ["Total Dépenses", "Profit", "Profitable", "Conseiller"]
     if not all(col in df.columns for col in required_cols):
-        st.info("Colonnes requises non disponibles.")
+        st.info("Colonnes requises non disponibles (Total Dépenses, Profit, Profitable).")
         return
 
-    # Prepare data
+    # Prepare data - filter out rows with zero expenses (no data for profitability)
     plot_df = df.copy()
+    plot_df = plot_df[plot_df["Total Dépenses"] != 0]
 
-    # Size by Leads if available, otherwise use fixed size
-    if "Leads" in plot_df.columns:
-        plot_df["Size"] = plot_df["Leads"].clip(lower=1) * 3
+    if plot_df.empty:
+        st.info("Aucune donnée avec des dépenses non nulles.")
+        return
+
+    # Size by AE CA if available, otherwise use fixed size
+    if "AE CA" in plot_df.columns:
+        # Normalize size for better visualization
+        max_ca = plot_df["AE CA"].max()
+        if max_ca > 0:
+            plot_df["Size"] = (plot_df["AE CA"] / max_ca * 30).clip(lower=8, upper=40)
+        else:
+            plot_df["Size"] = 15
     else:
-        plot_df["Size"] = 20
+        plot_df["Size"] = 15
 
     color_map = {
         "Win": CHART_COLORS["Win"],
@@ -862,41 +933,59 @@ def render_profitability_scatter_chart(
 
     fig = go.Figure()
 
-    for status in ["Loss", "Middle", "Win"]:
+    # Include N/A status
+    for status in ["Loss", "Middle", "Win", "N/A"]:
         status_df = plot_df[plot_df["Profitable"] == status]
         if not status_df.empty:
+            # Build hover text with more info
+            hover_text = []
+            for _, row in status_df.iterrows():
+                text = (
+                    f"<b>{row['Conseiller']}</b><br>"
+                    f"Profit: ${row['Profit']:,.0f}<br>"
+                    f"Dépenses: ${abs(row['Total Dépenses']):,.0f}<br>"
+                )
+                if "AE CA" in row:
+                    text += f"AE CA: ${row['AE CA']:,.0f}<br>"
+                if "Ratio Net" in row:
+                    text += f"Ratio Net: {row['Ratio Net']:.1f}%"
+                hover_text.append(text)
+
             fig.add_trace(go.Scatter(
-                x=status_df["AE CA"],
+                x=status_df["Total Dépenses"].abs(),  # Show as positive for readability
                 y=status_df["Profit"],
-                mode="markers+text",
-                name=status,
+                mode="markers",
+                name=status if status != "N/A" else "Sans données",
                 marker=dict(
                     size=status_df["Size"],
                     color=color_map.get(status, "#888"),
-                    opacity=0.7,
+                    opacity=0.8 if status != "N/A" else 0.5,
                     line=dict(width=1, color="white"),
                 ),
                 text=status_df["Conseiller"],
-                textposition="top center",
-                textfont=dict(size=9),
-                hovertemplate=(
-                    "<b>%{text}</b><br>"
-                    "AE CA: %{x:,.2f}<br>"
-                    "Profit: %{y:,.2f}<br>"
-                    "<extra></extra>"
-                ),
+                hovertemplate="%{customdata}<extra></extra>",
+                customdata=hover_text,
             ))
 
-    # Add reference line (break-even)
+    # Add break-even line (profit = 0)
     fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Seuil de rentabilité")
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=450,
-        margin=dict(l=20, r=20, t=60, b=40),
+        height=500,
+        margin=dict(l=60, r=100, t=80, b=60),  # Increased margins for spacing
         font=dict(family="Inter, sans-serif"),
-        xaxis=dict(title="AE CA ($)", zeroline=True),
-        yaxis=dict(title="Profit ($)", zeroline=True),
+        xaxis=dict(
+            title="Dépenses totales ($)",
+            zeroline=True,
+            tickformat="$,.0f",
+        ),
+        yaxis=dict(
+            title="Profit ($)",
+            zeroline=True,
+            zerolinecolor="gray",
+            tickformat="$,.0f",
+        ),
         legend=dict(
             title="Statut",
             orientation="v",
@@ -904,10 +993,17 @@ def render_profitability_scatter_chart(
             y=0.99,
             xanchor="left",
             x=1.02,
+            bgcolor="rgba(255,255,255,0.8)",
         ),
     )
 
     st.plotly_chart(fig, width="stretch")
+
+    # Add explanation
+    st.caption(
+        "💡 **Lecture:** Conseillers en haut à gauche = plus efficaces "
+        "(profit élevé avec peu de dépenses). Taille des points = AE CA."
+    )
 
 
 # =============================================================================
@@ -940,10 +1036,10 @@ def render_charts_tab(
     st.markdown(f"### Visualisations pour **{period_name}**")
 
     # =========================================================================
-    # KPI Cards Section
+    # KPI Cards Section (limited to 3 most important metrics)
     # =========================================================================
     st.markdown("#### Indicateurs clés")
-    render_kpi_cards(combined_df, metric_columns)
+    render_kpi_cards(combined_df, metric_columns, max_cards=3)
 
     st.markdown("---")
 

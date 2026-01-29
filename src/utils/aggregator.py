@@ -427,6 +427,12 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     - Profit/Lead = ROUND(Profit / Leads, 2)
     - Ratio Brut = ROUND((AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
     - Ratio Net = ROUND((Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
+    - Profitable = Win/Middle/Loss based on Ratio Net
+
+    IMPORTANT: When "Dépenses par Conseiller" is null/zero, the advisor has no expense
+    data and profitability cannot be accurately calculated. In this case:
+    - Ratio Brut and Ratio Net will be 0
+    - Profitable status will be "N/A" (no data)
 
     Uses vectorized NumPy operations for performance.
 
@@ -481,24 +487,32 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
             0.0
         )
 
+    # Check if we have expense data for profitability calculations
+    # If "Dépenses par Conseiller" is 0, the advisor has no expense data
+    has_expense_data = pd.Series(True, index=df.index)
+    if "Dépenses par Conseiller" in df.columns:
+        has_expense_data = df["Dépenses par Conseiller"] != 0
+
     # Calculate denominator for ratio calculations (expenses sum)
     if all(col in df.columns for col in ["Coût", "Bonus", "Dépenses par Conseiller"]):
         expenses_sum = df["Coût"] + df["Bonus"] + df["Dépenses par Conseiller"]
 
         # Calculate Ratio Brut (vectorized)
         # Ratio Brut = (AE CA / -expenses_sum) * 100
+        # Only calculate if there's expense data
         if "AE CA" in df.columns:
             df["Ratio Brut"] = np.where(
-                expenses_sum != 0,
+                (expenses_sum != 0) & has_expense_data,
                 np.round((df["AE CA"] / -expenses_sum) * 100, 2),
                 0.0
             )
 
         # Calculate Ratio Net (vectorized)
         # Ratio Net = (Profit / -expenses_sum) * 100
+        # Only calculate if there's expense data
         if "Profit" in df.columns:
             df["Ratio Net"] = np.where(
-                expenses_sum != 0,
+                (expenses_sum != 0) & has_expense_data,
                 np.round((df["Profit"] / -expenses_sum) * 100, 2),
                 0.0
             )
@@ -507,12 +521,14 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # Loss: Ratio Net < 20
     # Middle: 20 <= Ratio Net <= 99
     # Win: Ratio Net > 99
+    # N/A: No expense data (Dépenses par Conseiller = 0)
     if "Ratio Net" in df.columns:
         conditions = [
+            ~has_expense_data,  # No expense data
             df["Ratio Net"] > 99,
             df["Ratio Net"] >= 20,
         ]
-        choices = ["Win", "Middle"]
+        choices = ["N/A", "Win", "Middle"]
         df["Profitable"] = np.select(conditions, choices, default="Loss")
 
     return df
@@ -522,14 +538,18 @@ def merge_metrics_with_aggregation(
     aggregated_df: pd.DataFrame,
     metrics_df: pd.DataFrame,
     advisor_column: str = "Conseiller",
+    use_fuzzy_matching: bool = True,
 ) -> pd.DataFrame:
     """
-    Merge metrics data with aggregated data by advisor.
+    Merge metrics data with aggregated data by advisor using fuzzy name matching.
+
+    Uses AdvisorMatcher to handle name variations (e.g., "Brandeen" vs "Brandeen G.").
 
     Args:
         aggregated_df: DataFrame with aggregated data (from combine_aggregations)
         metrics_df: DataFrame with metrics columns (Coût, Dépenses par Conseiller, etc.)
         advisor_column: Column name for advisor matching
+        use_fuzzy_matching: If True, use AdvisorMatcher for fuzzy name matching
 
     Returns:
         Merged DataFrame with all columns
@@ -546,12 +566,50 @@ def merge_metrics_with_aggregation(
     if advisor_column not in metrics_df.columns:
         return aggregated_df
 
-    # Merge on advisor column
-    result = aggregated_df.merge(
-        metrics_df,
-        on=advisor_column,
-        how="left",
-    )
+    result = aggregated_df.copy()
+    metrics_df = metrics_df.copy()
+
+    if use_fuzzy_matching:
+        # Normalize advisor names in both DataFrames for better matching
+        # First, normalize aggregated_df names (should already be normalized)
+        result["_normalized_advisor"] = result[advisor_column].apply(
+            lambda x: normalize_advisor_name_full(str(x)) if pd.notna(x) else x
+        )
+        # Replace None with original for fallback
+        result["_normalized_advisor"] = result.apply(
+            lambda row: row["_normalized_advisor"] if row["_normalized_advisor"] else row[advisor_column],
+            axis=1
+        )
+
+        # Normalize metrics_df names
+        metrics_df["_normalized_advisor"] = metrics_df[advisor_column].apply(
+            lambda x: normalize_advisor_name_full(str(x)) if pd.notna(x) else x
+        )
+        # Replace None with original for fallback
+        metrics_df["_normalized_advisor"] = metrics_df.apply(
+            lambda row: row["_normalized_advisor"] if row["_normalized_advisor"] else row[advisor_column],
+            axis=1
+        )
+
+        # Merge on normalized names
+        metrics_cols_to_merge = [c for c in metrics_df.columns if c not in [advisor_column, "_normalized_advisor"]]
+        metrics_subset = metrics_df[["_normalized_advisor"] + metrics_cols_to_merge]
+
+        result = result.merge(
+            metrics_subset,
+            on="_normalized_advisor",
+            how="left",
+        )
+
+        # Clean up temporary column
+        result = result.drop(columns=["_normalized_advisor"], errors="ignore")
+    else:
+        # Standard exact merge
+        result = result.merge(
+            metrics_df,
+            on=advisor_column,
+            how="left",
+        )
 
     # Fill NaN with 0 for numeric columns
     numeric_cols = ["Coût", "Dépenses par Conseiller", "Leads", "Bonus", "Récompenses"]

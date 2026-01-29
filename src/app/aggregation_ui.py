@@ -447,6 +447,11 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
     """
     Render preview of combined aggregated data (non-editable) with summary stats.
 
+    Shows:
+    - Key metrics cards (AE CA, Collected, PA Vendues)
+    - Profitability summary (if available)
+    - Data table
+
     Args:
         combined_df: DataFrame with all sources combined by advisor
     """
@@ -459,20 +464,62 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
     categorical_cols = ["Conseiller", "Profitable"]
     numeric_cols = [col for col in combined_df.columns if col not in categorical_cols]
 
-    # Display stats in columns
-    stat_cols = st.columns(min(len(numeric_cols) + 1, 6))  # Max 6 columns for layout
-    with stat_cols[0]:
-        st.metric("Conseillers", advisor_count)
+    # Priority metrics to show first
+    priority_metrics = ["AE CA", "Collected", "PA Vendues"]
+    display_metrics = [m for m in priority_metrics if m in numeric_cols]
+    # Add remaining up to 4 total
+    for m in numeric_cols:
+        if m not in display_metrics and len(display_metrics) < 4:
+            display_metrics.append(m)
 
-    for idx, col in enumerate(numeric_cols[:5]):  # Show up to 5 metrics
-        with stat_cols[idx + 1]:
+    # Display main KPI cards
+    st.markdown("##### 📊 Indicateurs clés")
+    kpi_cols = st.columns(min(len(display_metrics) + 1, 5))
+
+    with kpi_cols[0]:
+        st.metric("👥 Conseillers", advisor_count)
+
+    for idx, col in enumerate(display_metrics):
+        with kpi_cols[idx + 1]:
             total = combined_df[col].sum()
             if isinstance(total, (int, float)):
-                st.metric(f"Total {col}", f"{total:,.2f}")
+                # Format with $ for monetary values
+                if col in ["AE CA", "Collected", "Profit", "Total Dépenses"]:
+                    st.metric(col, f"${total:,.0f}")
+                else:
+                    st.metric(col, f"{total:,.0f}")
+
+    # Profitability summary (if available)
+    if "Profitable" in combined_df.columns:
+        st.markdown("##### 💰 Répartition par profitabilité")
+        status_counts = combined_df["Profitable"].value_counts()
+
+        # Define colors and labels
+        status_info = {
+            "Win": ("🟢", "Win (>100%)"),
+            "Middle": ("🟡", "Middle (20-100%)"),
+            "Loss": ("🔴", "Loss (<20%)"),
+            "N/A": ("⚪", "Sans données"),
+        }
+
+        prof_cols = st.columns(4)
+        for idx, (status, (emoji, label)) in enumerate(status_info.items()):
+            count = status_counts.get(status, 0)
+            pct = (count / advisor_count * 100) if advisor_count > 0 else 0
+            with prof_cols[idx]:
+                st.markdown(f"""
+                <div style="text-align: center; padding: 8px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-size: 24px;">{emoji}</div>
+                    <div style="font-size: 18px; font-weight: 600;">{count}</div>
+                    <div style="font-size: 12px; color: #6B7280;">{label}</div>
+                    <div style="font-size: 11px; color: #9CA3AF;">{pct:.0f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
 
     st.markdown("---")
 
     # Display data table
+    st.markdown("##### 📋 Données détaillées")
     display_df = combined_df.copy()
 
     # Format numeric columns for display, skip categorical columns
@@ -482,7 +529,7 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
                 lambda x: f"{x:,.2f}" if pd.notna(x) and isinstance(x, (int, float)) else x
             )
 
-    st.dataframe(display_df, width="stretch", hide_index=True)
+    st.dataframe(display_df, width="stretch", hide_index=True, height=400)
 
 
 def render_editable_preview(
