@@ -13,8 +13,11 @@ from src.utils.aggregator import (
     SOURCE_BOARDS,
     get_group_name_for_period,
     filter_by_date,
+    filter_by_flexible_period,
     aggregate_by_advisor,
     combine_aggregations,
+    FlexiblePeriod,
+    PeriodType,
 )
 from src.app.utils.async_helpers import run_async
 
@@ -88,8 +91,11 @@ def filter_and_aggregate_data() -> None:
 
     This function uses the raw data already loaded in session state and applies
     filtering/aggregation. It's designed to be fast for real-time period changes.
+    Supports both legacy DatePeriod and new FlexiblePeriod.
     """
-    period = st.session_state.agg_period
+    # Check for flexible period first (new approach)
+    flexible_period = st.session_state.get("agg_flexible_period")
+    legacy_period = st.session_state.agg_period
     source_data = st.session_state.get("agg_source_data", {})
 
     if not source_data:
@@ -106,12 +112,19 @@ def filter_and_aggregate_data() -> None:
             aggregated_data[source_key] = pd.DataFrame()
             continue
 
-        # Filter by date
-        filtered_df = filter_by_date(
-            df=df,
-            period=period,
-            date_column=config.date_column,
-        )
+        # Filter by date using flexible period if available, otherwise legacy
+        if flexible_period is not None:
+            filtered_df = filter_by_flexible_period(
+                df=df,
+                period=flexible_period,
+                date_column=config.date_column,
+            )
+        else:
+            filtered_df = filter_by_date(
+                df=df,
+                period=legacy_period,
+                date_column=config.date_column,
+            )
         filtered_data[source_key] = filtered_df
 
         # Aggregate by advisor (using config's advisor_column)

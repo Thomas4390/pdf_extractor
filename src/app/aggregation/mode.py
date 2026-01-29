@@ -10,8 +10,11 @@ Provides the 3-step wizard interface for data aggregation:
 import pandas as pd
 import streamlit as st
 
+from datetime import date
 from src.utils.aggregator import (
     DatePeriod,
+    PeriodType,
+    FlexiblePeriod,
     SOURCE_BOARDS,
     get_group_name_for_period,
     get_period_date_range,
@@ -31,6 +34,12 @@ from src.app.aggregation.execution import (
     execute_aggregation_upsert,
 )
 from src.app.aggregation.charts import render_charts_tab
+from src.app.utils.board_utils import (
+    get_background_aggregation_status,
+    apply_background_aggregation_data,
+    start_background_aggregation_load,
+    reset_background_aggregation_data,
+)
 
 
 def render_aggregation_stepper(current_step: int) -> None:
@@ -153,8 +162,17 @@ def render_agg_step_1_config() -> None:
     # Data loading status and controls
     st.subheader("📥 Chargement des données")
 
+    # Check background loading status
+    bg_status = get_background_aggregation_status()
     data_loaded = st.session_state.get("agg_data_loaded", False)
     source_data = st.session_state.get("agg_source_data", {})
+
+    # Try to apply background data if not already loaded
+    if not data_loaded and not bg_status["loading"] and bg_status["data"]:
+        if apply_background_aggregation_data():
+            data_loaded = True
+            source_data = st.session_state.agg_source_data
+            st.rerun()
 
     if data_loaded and source_data:
         # Show data summary
@@ -172,14 +190,46 @@ def render_agg_step_1_config() -> None:
         # Button to reload
         if st.button("🔄 Recharger les données", type="secondary"):
             st.session_state.agg_data_loaded = False
+            reset_background_aggregation_data()
             load_source_data()
             st.rerun()
+
+    elif bg_status["loading"]:
+        # Show background loading progress
+        progress = bg_status["progress"]
+        current = progress.get("current", 0)
+        total = progress.get("total", 1)
+        current_source = progress.get("current_source", "")
+
+        st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
+        if current_source:
+            st.caption(f"Source actuelle: {current_source}")
+
+        if total > 0:
+            st.progress(current / total)
+
+        # Auto-refresh to check progress
+        import time
+        time.sleep(0.5)
+        st.rerun()
+
+    elif bg_status["error"]:
+        st.error(f"Erreur lors du chargement: {bg_status['error']}")
+        if st.button("🔄 Réessayer", type="primary"):
+            reset_background_aggregation_data()
+            start_background_aggregation_load()
+            st.rerun()
+
     else:
         st.info("Les données seront chargées automatiquement.")
-        # Auto-load data
+        # Start background loading if not started yet
         if st.session_state.agg_selected_sources:
-            load_source_data()
-            st.rerun()
+            if start_background_aggregation_load():
+                st.rerun()
+            else:
+                # Fallback to synchronous load
+                load_source_data()
+                st.rerun()
 
     # Navigation
     can_proceed = (
@@ -208,45 +258,156 @@ def render_agg_step_2_period_preview() -> None:
     boards = st.session_state.monday_boards
     target_board_id = st.session_state.agg_target_board_id
 
-    # Get current period (default to MONTH_1 = last month)
+    # Initialize flexible period if not set
+    if "agg_flexible_period" not in st.session_state:
+        st.session_state.agg_flexible_period = FlexiblePeriod(
+            period_type=PeriodType.MONTH, months_ago=1
+        )
+
+    # Also keep legacy period for backwards compatibility
     current_period = st.session_state.agg_period
     if current_period is None:
         current_period = DatePeriod.MONTH_1
         st.session_state.agg_period = current_period
 
+    flexible_period = st.session_state.agg_flexible_period
+
     # Period selection header
-    st.subheader("📅 Sélection du mois")
+    st.subheader("📅 Sélection de la période")
 
-    # Create month options for selectbox
-    month_options = list(DatePeriod)
-    month_labels = {period: period.display_name for period in month_options}
+    # Period type tabs
+    period_tabs = st.tabs(["📅 Mois", "📆 Semaine", "📊 Trimestre", "📈 Année", "🎯 Personnalisé"])
 
-    # Find current index
-    current_index = month_options.index(current_period) if current_period in month_options else 1
+    period_changed = False
 
-    # Month selector as selectbox
-    col_select, col_info = st.columns([2, 3])
+    # Tab 1: Monthly
+    with period_tabs[0]:
+        month_options = list(DatePeriod)
+        current_index = 1  # Default to last month
+        if flexible_period.period_type == PeriodType.MONTH:
+            try:
+                current_index = flexible_period.months_ago
+            except:
+                current_index = 1
 
-    with col_select:
-        selected_period = st.selectbox(
+        selected_month = st.selectbox(
             "Mois à agréger",
-            options=month_options,
-            index=current_index,
-            format_func=lambda p: f"{p.display_name} ({p.short_label})",
+            options=range(12),
+            index=min(current_index, 11),
+            format_func=lambda i: f"{DatePeriod(i).display_name} ({DatePeriod(i).short_label})",
             key="agg_month_selector",
-            label_visibility="collapsed",
         )
 
-        if selected_period != current_period:
-            st.session_state.agg_period = selected_period
-            # Re-filter and aggregate with new period (instant, no API call)
-            filter_and_aggregate_data()
-            st.rerun()
+        if st.button("Appliquer", key="apply_month", type="primary"):
+            st.session_state.agg_flexible_period = FlexiblePeriod(
+                period_type=PeriodType.MONTH, months_ago=selected_month
+            )
+            st.session_state.agg_period = DatePeriod(selected_month)
+            period_changed = True
 
-    with col_info:
-        # Show date range info
-        start_date, end_date = get_period_date_range(selected_period)
-        st.info(f"📆 **Du** {start_date.strftime('%d/%m/%Y')} **au** {end_date.strftime('%d/%m/%Y')}")
+    # Tab 2: Weekly
+    with period_tabs[1]:
+        week_options = list(range(8))  # Last 8 weeks
+        week_labels = {
+            0: "Cette semaine",
+            1: "Semaine dernière",
+        }
+        for i in range(2, 8):
+            week_labels[i] = f"Il y a {i} semaines"
+
+        selected_week = st.selectbox(
+            "Semaine à agréger",
+            options=week_options,
+            format_func=lambda i: week_labels.get(i, f"-{i} sem."),
+            key="agg_week_selector",
+        )
+
+        if st.button("Appliquer", key="apply_week", type="primary"):
+            st.session_state.agg_flexible_period = FlexiblePeriod(
+                period_type=PeriodType.WEEK, weeks_ago=selected_week
+            )
+            period_changed = True
+
+    # Tab 3: Quarterly
+    with period_tabs[2]:
+        quarter_options = list(range(8))  # Last 8 quarters
+        quarter_labels = {
+            0: "Ce trimestre",
+            1: "Trimestre dernier",
+        }
+        for i in range(2, 8):
+            quarter_labels[i] = f"Il y a {i} trimestres"
+
+        selected_quarter = st.selectbox(
+            "Trimestre à agréger",
+            options=quarter_options,
+            format_func=lambda i: quarter_labels.get(i, f"-{i} trim."),
+            key="agg_quarter_selector",
+        )
+
+        if st.button("Appliquer", key="apply_quarter", type="primary"):
+            st.session_state.agg_flexible_period = FlexiblePeriod(
+                period_type=PeriodType.QUARTER, quarters_ago=selected_quarter
+            )
+            period_changed = True
+
+    # Tab 4: Yearly
+    with period_tabs[3]:
+        year_options = list(range(5))  # Last 5 years
+        current_year = date.today().year
+
+        selected_year = st.selectbox(
+            "Année à agréger",
+            options=year_options,
+            format_func=lambda i: f"{current_year - i}" if i > 0 else f"{current_year} (en cours)",
+            key="agg_year_selector",
+        )
+
+        if st.button("Appliquer", key="apply_year", type="primary"):
+            st.session_state.agg_flexible_period = FlexiblePeriod(
+                period_type=PeriodType.YEAR, years_ago=selected_year
+            )
+            period_changed = True
+
+    # Tab 5: Custom
+    with period_tabs[4]:
+        col_start, col_end = st.columns(2)
+
+        # Default dates
+        default_end = date.today()
+        default_start = date(default_end.year, default_end.month, 1)
+
+        with col_start:
+            custom_start = st.date_input(
+                "Date de début",
+                value=flexible_period.custom_start or default_start,
+                key="agg_custom_start",
+            )
+
+        with col_end:
+            custom_end = st.date_input(
+                "Date de fin",
+                value=flexible_period.custom_end or default_end,
+                key="agg_custom_end",
+            )
+
+        if st.button("Appliquer la période personnalisée", key="apply_custom", type="primary"):
+            st.session_state.agg_flexible_period = FlexiblePeriod(
+                period_type=PeriodType.CUSTOM,
+                custom_start=custom_start,
+                custom_end=custom_end,
+            )
+            period_changed = True
+
+    # If period changed, re-filter data
+    if period_changed:
+        filter_and_aggregate_data()
+        st.rerun()
+
+    # Show current period info
+    flexible_period = st.session_state.agg_flexible_period
+    start_date, end_date = flexible_period.get_date_range()
+    st.info(f"📆 **Période sélectionnée:** {flexible_period.display_name}\n\n**Du** {start_date.strftime('%d/%m/%Y')} **au** {end_date.strftime('%d/%m/%Y')}")
 
     # Group name options
     use_custom_group = st.session_state.get("agg_use_custom_group", False)
@@ -536,6 +697,7 @@ def render_agg_step_3_execute() -> None:
     boards = st.session_state.monday_boards
     target_board_id = st.session_state.agg_target_board_id
     period = st.session_state.agg_period
+    flexible_period = st.session_state.get("agg_flexible_period")
     combined_df = st.session_state.agg_combined_data
 
     # Get target board name
@@ -545,9 +707,11 @@ def render_agg_step_3_execute() -> None:
             target_board_name = board["name"]
             break
 
-    # Get group name - use custom if specified
+    # Get group name - use custom if specified, otherwise flexible period, otherwise legacy
     if st.session_state.get("agg_use_custom_group") and st.session_state.get("agg_custom_group_name"):
         group_name = st.session_state.agg_custom_group_name
+    elif flexible_period is not None:
+        group_name = flexible_period.get_group_name()
     else:
         group_name = get_group_name_for_period(period)
 

@@ -46,6 +46,15 @@ QUARTERS_FR = {
 # ENUMS
 # =============================================================================
 
+class PeriodType(Enum):
+    """Types of date periods available."""
+    MONTH = "month"
+    WEEK = "week"
+    QUARTER = "quarter"
+    YEAR = "year"
+    CUSTOM = "custom"
+
+
 class DatePeriod(Enum):
     """Available date filtering periods - month-based selection."""
     MONTH_0 = 0   # Current month
@@ -81,6 +90,196 @@ class DatePeriod(Enum):
             return "Mois dernier"
         else:
             return f"-{self.value} mois"
+
+
+@dataclass
+class FlexiblePeriod:
+    """
+    Flexible date period supporting various period types.
+
+    Can represent monthly, weekly, quarterly, annual, or custom date ranges.
+    """
+    period_type: PeriodType
+    # For MONTH type - uses months_ago offset
+    months_ago: int = 0
+    # For WEEK type - uses weeks_ago offset
+    weeks_ago: int = 0
+    # For QUARTER type - uses quarters_ago offset
+    quarters_ago: int = 0
+    # For YEAR type - uses years_ago offset
+    years_ago: int = 0
+    # For CUSTOM type - explicit date range
+    custom_start: Optional[date] = None
+    custom_end: Optional[date] = None
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for the period."""
+        today = date.today()
+
+        if self.period_type == PeriodType.MONTH:
+            target_date = get_month_from_offset(self.months_ago)
+            return f"{MONTHS_FR[target_date.month]} {target_date.year}"
+
+        elif self.period_type == PeriodType.WEEK:
+            start, end = self.get_date_range()
+            return f"Semaine du {start.strftime('%d/%m')} au {end.strftime('%d/%m/%Y')}"
+
+        elif self.period_type == PeriodType.QUARTER:
+            start, _ = self.get_date_range()
+            quarter = (start.month - 1) // 3 + 1
+            return f"{QUARTERS_FR[quarter]} {start.year}"
+
+        elif self.period_type == PeriodType.YEAR:
+            target_year = today.year - self.years_ago
+            return f"Année {target_year}"
+
+        elif self.period_type == PeriodType.CUSTOM:
+            if self.custom_start and self.custom_end:
+                return f"{self.custom_start.strftime('%d/%m/%Y')} - {self.custom_end.strftime('%d/%m/%Y')}"
+            return "Période personnalisée"
+
+        return "Période inconnue"
+
+    @property
+    def short_label(self) -> str:
+        """Short label for UI."""
+        if self.period_type == PeriodType.MONTH:
+            if self.months_ago == 0:
+                return "Ce mois"
+            elif self.months_ago == 1:
+                return "Mois dernier"
+            else:
+                return f"-{self.months_ago} mois"
+        elif self.period_type == PeriodType.WEEK:
+            if self.weeks_ago == 0:
+                return "Cette semaine"
+            elif self.weeks_ago == 1:
+                return "Semaine dernière"
+            else:
+                return f"-{self.weeks_ago} sem."
+        elif self.period_type == PeriodType.QUARTER:
+            if self.quarters_ago == 0:
+                return "Ce trimestre"
+            elif self.quarters_ago == 1:
+                return "Trim. dernier"
+            else:
+                return f"-{self.quarters_ago} trim."
+        elif self.period_type == PeriodType.YEAR:
+            if self.years_ago == 0:
+                return "Cette année"
+            elif self.years_ago == 1:
+                return "Année dernière"
+            else:
+                return f"-{self.years_ago} ans"
+        elif self.period_type == PeriodType.CUSTOM:
+            return "Personnalisé"
+        return ""
+
+    def get_date_range(self, reference_date: Optional[date] = None) -> tuple[date, date]:
+        """Get start and end dates for this period."""
+        if reference_date is None:
+            reference_date = date.today()
+
+        if self.period_type == PeriodType.MONTH:
+            start = get_month_from_offset(self.months_ago, reference_date)
+            if start.month == 12:
+                end = date(start.year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end = date(start.year, start.month + 1, 1) - timedelta(days=1)
+            return start, end
+
+        elif self.period_type == PeriodType.WEEK:
+            # Get the Monday of the target week
+            days_since_monday = reference_date.weekday()
+            current_monday = reference_date - timedelta(days=days_since_monday)
+            target_monday = current_monday - timedelta(weeks=self.weeks_ago)
+            target_sunday = target_monday + timedelta(days=6)
+            return target_monday, target_sunday
+
+        elif self.period_type == PeriodType.QUARTER:
+            # Calculate target quarter
+            current_quarter = (reference_date.month - 1) // 3 + 1
+            current_year = reference_date.year
+
+            target_quarter = current_quarter - self.quarters_ago
+            target_year = current_year
+
+            while target_quarter <= 0:
+                target_quarter += 4
+                target_year -= 1
+            while target_quarter > 4:
+                target_quarter -= 4
+                target_year += 1
+
+            # Quarter start month: Q1=1, Q2=4, Q3=7, Q4=10
+            start_month = (target_quarter - 1) * 3 + 1
+            start = date(target_year, start_month, 1)
+
+            # End of quarter
+            end_month = start_month + 2
+            if end_month == 12:
+                end = date(target_year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end = date(target_year, end_month + 1, 1) - timedelta(days=1)
+
+            return start, end
+
+        elif self.period_type == PeriodType.YEAR:
+            target_year = reference_date.year - self.years_ago
+            start = date(target_year, 1, 1)
+            end = date(target_year, 12, 31)
+            return start, end
+
+        elif self.period_type == PeriodType.CUSTOM:
+            if self.custom_start and self.custom_end:
+                return self.custom_start, self.custom_end
+            # Fallback to current month if no custom dates
+            return get_month_from_offset(0, reference_date), reference_date
+
+        # Default fallback
+        return get_month_from_offset(0, reference_date), reference_date
+
+    def get_group_name(self, reference_date: Optional[date] = None) -> str:
+        """Get the target group name for this period."""
+        start, end = self.get_date_range(reference_date)
+
+        if self.period_type == PeriodType.MONTH:
+            return f"{MONTHS_FR[start.month]} {start.year}"
+        elif self.period_type == PeriodType.WEEK:
+            return f"Semaine {start.isocalendar()[1]} - {start.year}"
+        elif self.period_type == PeriodType.QUARTER:
+            quarter = (start.month - 1) // 3 + 1
+            return f"{QUARTERS_FR[quarter]} {start.year}"
+        elif self.period_type == PeriodType.YEAR:
+            return f"Année {start.year}"
+        elif self.period_type == PeriodType.CUSTOM:
+            return f"{start.strftime('%d/%m/%Y')} - {end.strftime('%d/%m/%Y')}"
+
+        return f"{MONTHS_FR[start.month]} {start.year}"
+
+
+def get_flexible_period_options() -> list[FlexiblePeriod]:
+    """Get a list of predefined flexible period options for UI."""
+    options = []
+
+    # Monthly options (last 12 months)
+    for i in range(12):
+        options.append(FlexiblePeriod(period_type=PeriodType.MONTH, months_ago=i))
+
+    # Weekly options (last 4 weeks)
+    for i in range(4):
+        options.append(FlexiblePeriod(period_type=PeriodType.WEEK, weeks_ago=i))
+
+    # Quarterly options (last 4 quarters)
+    for i in range(4):
+        options.append(FlexiblePeriod(period_type=PeriodType.QUARTER, quarters_ago=i))
+
+    # Yearly options (last 3 years)
+    for i in range(3):
+        options.append(FlexiblePeriod(period_type=PeriodType.YEAR, years_ago=i))
+
+    return options
 
 
 def get_month_from_offset(months_ago: int, reference_date: Optional[date] = None) -> date:
@@ -308,6 +507,42 @@ def filter_by_date(
     end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
 
     # Filter
+    mask = (df[date_column] >= start_dt) & (df[date_column] <= end_dt)
+    return df[mask]
+
+
+def filter_by_flexible_period(
+    df: pd.DataFrame,
+    period: FlexiblePeriod,
+    date_column: str,
+    reference_date: Optional[date] = None,
+) -> pd.DataFrame:
+    """
+    Filter DataFrame by flexible period (supports all period types).
+
+    Args:
+        df: Input DataFrame
+        period: FlexiblePeriod object defining the date range
+        date_column: Name of the date column
+        reference_date: Reference date (defaults to today)
+
+    Returns:
+        Filtered DataFrame
+    """
+    if df.empty:
+        return df
+
+    if date_column not in df.columns:
+        return df
+
+    df = df.copy()
+    df[date_column] = pd.to_datetime(df[date_column], errors="coerce")
+
+    start_date, end_date = period.get_date_range(reference_date)
+
+    start_dt = pd.Timestamp(start_date)
+    end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
     mask = (df[date_column] >= start_dt) & (df[date_column] <= end_dt)
     return df[mask]
 
