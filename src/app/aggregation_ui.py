@@ -445,7 +445,7 @@ def render_source_data_preview(
 
 def render_combined_preview(combined_df: pd.DataFrame) -> None:
     """
-    Render preview of combined aggregated data (non-editable).
+    Render preview of combined aggregated data (non-editable) with summary stats.
 
     Args:
         combined_df: DataFrame with all sources combined by advisor
@@ -454,11 +454,28 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
         st.warning("Aucune donnée à afficher.")
         return
 
-    # Display data table directly (stats are shown above in mode.py)
+    # Summary stats
+    advisor_count = len(combined_df)
+    categorical_cols = ["Conseiller", "Profitable"]
+    numeric_cols = [col for col in combined_df.columns if col not in categorical_cols]
+
+    # Display stats in columns
+    stat_cols = st.columns(min(len(numeric_cols) + 1, 6))  # Max 6 columns for layout
+    with stat_cols[0]:
+        st.metric("Conseillers", advisor_count)
+
+    for idx, col in enumerate(numeric_cols[:5]):  # Show up to 5 metrics
+        with stat_cols[idx + 1]:
+            total = combined_df[col].sum()
+            if isinstance(total, (int, float)):
+                st.metric(f"Total {col}", f"{total:,.2f}")
+
+    st.markdown("---")
+
+    # Display data table
     display_df = combined_df.copy()
 
     # Format numeric columns for display, skip categorical columns
-    categorical_cols = ["Conseiller", "Profitable"]
     for col in display_df.columns:
         if col not in categorical_cols:
             display_df[col] = display_df[col].apply(
@@ -527,7 +544,9 @@ def render_editable_preview(
     st.markdown("**✏️ Éditez les valeurs si nécessaire :**")
 
     # Configure column display
-    numeric_cols = [col for col in combined_df.columns if col != "Conseiller"]
+    # Exclude categorical columns from numeric treatment
+    categorical_cols = ["Conseiller", "Profitable"]
+    numeric_cols = [col for col in combined_df.columns if col not in categorical_cols]
 
     column_config = {
         "Conseiller": st.column_config.TextColumn(
@@ -536,6 +555,14 @@ def render_editable_preview(
             disabled=True,  # Don't allow editing advisor names
         ),
     }
+
+    # Add Profitable as a text column if present
+    if "Profitable" in combined_df.columns:
+        column_config["Profitable"] = st.column_config.TextColumn(
+            "Profitable",
+            help="Statut de profitabilité",
+            disabled=True,
+        )
 
     for col in numeric_cols:
         column_config[col] = st.column_config.NumberColumn(

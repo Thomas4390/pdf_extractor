@@ -490,8 +490,7 @@ def render_agg_step_2_period_preview() -> None:
     # Tab 1: Combined summary (main view)
     with tab_combined:
         if combined_df is not None and not combined_df.empty:
-            # Show info about filtered unknown advisors FIRST (before stats)
-            # so users know some data is excluded from the totals
+            # Show info about filtered unknown advisors
             unknown_advisors = st.session_state.get("agg_unknown_advisors", [])
             if unknown_advisors:
                 names_list = ", ".join(f"**{name}**" for name in unknown_advisors[:10])
@@ -502,21 +501,7 @@ def render_agg_step_2_period_preview() -> None:
                     f"(non trouvés dans la base de données) : {names_list}"
                 )
 
-            # Quick stats
-            advisor_count = len(combined_df)
-            # Exclude categorical columns from numeric calculations
-            exclude_cols = ["Conseiller", "Profitable"]
-            numeric_cols = [col for col in combined_df.columns if col not in exclude_cols]
-
-            stat_cols = st.columns(len(numeric_cols) + 1)
-            with stat_cols[0]:
-                st.metric("Conseillers", advisor_count)
-            for idx, col in enumerate(numeric_cols):
-                with stat_cols[idx + 1]:
-                    total = combined_df[col].sum()
-                    st.metric(f"Total {col}", f"{total:,.2f}")
-
-            st.markdown("---")
+            # Render data table with stats (handled by render_combined_preview)
             render_combined_preview(combined_df)
 
             # Export section
