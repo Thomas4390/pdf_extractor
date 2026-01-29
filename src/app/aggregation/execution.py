@@ -167,7 +167,7 @@ def load_and_aggregate_data() -> None:
     filter_and_aggregate_data()
 
 
-def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
+def load_metrics_for_period(board_id: int, group_name: str, silent: bool = False) -> pd.DataFrame:
     """
     Load metrics data from a specific group in a board.
 
@@ -176,6 +176,7 @@ def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
     Args:
         board_id: Monday.com board ID containing metrics
         group_name: Name of the group to load (e.g., "Janvier 2026")
+        silent: If True, don't show warnings
 
     Returns:
         DataFrame with metrics columns (Conseiller, Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses)
@@ -199,7 +200,8 @@ def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
                 break
 
         if group_id is None:
-            st.warning(f"Groupe '{group_name}' non trouvé dans le board de métriques.")
+            if not silent:
+                st.warning(f"Groupe '{group_name}' non trouvé dans le board de métriques.")
             return pd.DataFrame()
 
         # Load items from the specific group
@@ -223,8 +225,11 @@ def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
         # Filter to existing columns
         existing_cols = [col for col in columns_to_keep if col in df.columns]
         if config.advisor_column not in existing_cols:
-            # Try to use item name as advisor
-            if "name" in df.columns:
+            # Try to use item name as advisor (board_items_to_dataframe uses "item_name")
+            if "item_name" in df.columns:
+                df[config.advisor_column] = df["item_name"]
+                existing_cols = [config.advisor_column] + [c for c in existing_cols if c != config.advisor_column]
+            elif "name" in df.columns:
                 df[config.advisor_column] = df["name"]
                 existing_cols = [config.advisor_column] + [c for c in existing_cols if c != config.advisor_column]
 
@@ -240,7 +245,8 @@ def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
         return df
 
     except Exception as e:
-        st.error(f"Erreur lors du chargement des métriques: {e}")
+        if not silent:
+            st.error(f"Erreur lors du chargement des métriques: {e}")
         return pd.DataFrame()
 
 
@@ -282,7 +288,7 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
     metrics_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)
 
     try:
-        metrics_df = load_metrics_for_period(metrics_board_id, group_name)
+        metrics_df = load_metrics_for_period(metrics_board_id, group_name, silent=silent)
     except Exception:
         metrics_df = pd.DataFrame()
 
