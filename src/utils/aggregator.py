@@ -458,6 +458,15 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
             axis=1
         )
 
+    # Calculate Profitable status based on Ratio Net
+    # Loss: Ratio Net < 20
+    # Middle: 20 <= Ratio Net <= 99
+    # Win: Ratio Net > 99
+    if "Ratio Net" in df.columns:
+        df["Profitable"] = df["Ratio Net"].apply(
+            lambda x: "Win" if x > 99 else ("Middle" if x >= 20 else "Loss")
+        )
+
     return df
 
 

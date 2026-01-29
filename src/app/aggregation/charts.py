@@ -27,6 +27,10 @@ CHART_COLORS = {
     "success": "#10B981",          # Green
     "warning": "#F59E0B",          # Amber
     "danger": "#EF4444",           # Red
+    # Profitability colors
+    "Win": "#059669",              # Dark Green
+    "Middle": "#F59E0B",           # Amber
+    "Loss": "#DC2626",             # Dark Red
 }
 
 # Gradient color scales for heatmaps and continuous data
@@ -646,6 +650,267 @@ def render_advisor_radar_chart(
 
 
 # =============================================================================
+# PROFITABILITY CHARTS
+# =============================================================================
+
+def render_profitability_distribution_chart(
+    df: pd.DataFrame,
+    title: str = "Répartition des statuts de profitabilité",
+) -> None:
+    """
+    Render a pie/donut chart showing the distribution of Profitable statuses.
+
+    Args:
+        df: DataFrame with 'Profitable' column
+        title: Chart title
+    """
+    if "Profitable" not in df.columns:
+        st.info("Colonne 'Profitable' non disponible. Importez d'abord les métriques.")
+        return
+
+    # Count by status
+    status_counts = df["Profitable"].value_counts().reset_index()
+    status_counts.columns = ["Statut", "Nombre"]
+
+    # Define colors for each status
+    color_map = {
+        "Win": CHART_COLORS["Win"],
+        "Middle": CHART_COLORS["Middle"],
+        "Loss": CHART_COLORS["Loss"],
+    }
+
+    fig = go.Figure(data=[go.Pie(
+        labels=status_counts["Statut"],
+        values=status_counts["Nombre"],
+        hole=0.5,
+        marker=dict(colors=[color_map.get(s, "#888") for s in status_counts["Statut"]]),
+        textinfo="label+percent+value",
+        textposition="outside",
+        hovertemplate="<b>%{label}</b><br>Conseillers: %{value}<br>Pourcentage: %{percent}<extra></extra>",
+    )])
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        height=350,
+        margin=dict(l=20, r=20, t=60, b=20),
+        font=dict(family="Inter, sans-serif"),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
+        annotations=[dict(
+            text=f"{len(df)}<br>Total",
+            x=0.5, y=0.5,
+            font_size=16,
+            showarrow=False,
+        )],
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+
+def render_profitability_by_advisor_chart(
+    df: pd.DataFrame,
+    title: str = "Statut de profitabilité par conseiller",
+) -> None:
+    """
+    Render a horizontal bar chart showing Ratio Net with color-coded Profitable status.
+
+    Args:
+        df: DataFrame with 'Conseiller', 'Ratio Net', and 'Profitable' columns
+        title: Chart title
+    """
+    if "Profitable" not in df.columns or "Ratio Net" not in df.columns:
+        st.info("Colonnes 'Profitable' et 'Ratio Net' non disponibles. Importez d'abord les métriques.")
+        return
+
+    # Sort by Ratio Net
+    df_sorted = df.sort_values("Ratio Net", ascending=True)
+
+    # Define colors for each status
+    color_map = {
+        "Win": CHART_COLORS["Win"],
+        "Middle": CHART_COLORS["Middle"],
+        "Loss": CHART_COLORS["Loss"],
+    }
+
+    colors = [color_map.get(status, "#888") for status in df_sorted["Profitable"]]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=df_sorted["Conseiller"],
+        x=df_sorted["Ratio Net"],
+        orientation="h",
+        marker=dict(color=colors),
+        text=df_sorted.apply(lambda row: f"{row['Ratio Net']:.1f}% ({row['Profitable']})", axis=1),
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Ratio Net: %{x:.2f}%<extra></extra>",
+    ))
+
+    # Add vertical lines for thresholds
+    fig.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="0%")
+    fig.add_vline(x=20, line_dash="dash", line_color=CHART_COLORS["Middle"],
+                  annotation_text="20% (Middle)", annotation_position="top")
+    fig.add_vline(x=100, line_dash="dash", line_color=CHART_COLORS["Win"],
+                  annotation_text="100% (Win)", annotation_position="top")
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        height=max(400, len(df) * 35),
+        margin=dict(l=20, r=100, t=60, b=40),
+        font=dict(family="Inter, sans-serif"),
+        xaxis=dict(title="Ratio Net (%)", zeroline=True, zerolinecolor="gray"),
+        yaxis=dict(title=""),
+        showlegend=False,
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+
+def render_profitability_metrics_chart(
+    df: pd.DataFrame,
+    title: str = "Métriques financières par statut",
+) -> None:
+    """
+    Render a grouped bar chart comparing key metrics across Profitable statuses.
+
+    Args:
+        df: DataFrame with 'Profitable' and financial metrics
+        title: Chart title
+    """
+    if "Profitable" not in df.columns:
+        st.info("Colonne 'Profitable' non disponible. Importez d'abord les métriques.")
+        return
+
+    # Metrics to compare
+    metrics_to_show = ["AE CA", "Profit", "Total Dépenses"]
+    available_metrics = [m for m in metrics_to_show if m in df.columns]
+
+    if not available_metrics:
+        st.info("Métriques financières non disponibles.")
+        return
+
+    # Aggregate by status
+    agg_data = df.groupby("Profitable")[available_metrics].sum().reset_index()
+
+    # Ensure order: Loss, Middle, Win
+    status_order = ["Loss", "Middle", "Win"]
+    agg_data["Profitable"] = pd.Categorical(agg_data["Profitable"], categories=status_order, ordered=True)
+    agg_data = agg_data.sort_values("Profitable")
+
+    fig = go.Figure()
+
+    color_map = {
+        "AE CA": CHART_COLORS["AE CA"],
+        "Profit": CHART_COLORS["success"],
+        "Total Dépenses": CHART_COLORS["danger"],
+    }
+
+    for metric in available_metrics:
+        fig.add_trace(go.Bar(
+            name=metric,
+            x=agg_data["Profitable"],
+            y=agg_data[metric],
+            marker_color=color_map.get(metric, CHART_COLORS["primary"]),
+            text=[f"{v:,.0f}" for v in agg_data[metric]],
+            textposition="auto",
+        ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        height=400,
+        margin=dict(l=20, r=20, t=60, b=40),
+        font=dict(family="Inter, sans-serif"),
+        barmode="group",
+        xaxis=dict(title="Statut de profitabilité"),
+        yaxis=dict(title="Montant ($)"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+
+def render_profitability_scatter_chart(
+    df: pd.DataFrame,
+    title: str = "AE CA vs Profit par conseiller",
+) -> None:
+    """
+    Render a scatter plot with AE CA vs Profit, sized by Leads and colored by Profitable status.
+
+    Args:
+        df: DataFrame with financial metrics
+        title: Chart title
+    """
+    required_cols = ["AE CA", "Profit", "Profitable", "Conseiller"]
+    if not all(col in df.columns for col in required_cols):
+        st.info("Colonnes requises non disponibles.")
+        return
+
+    # Prepare data
+    plot_df = df.copy()
+
+    # Size by Leads if available, otherwise use fixed size
+    if "Leads" in plot_df.columns:
+        plot_df["Size"] = plot_df["Leads"].clip(lower=1) * 3
+    else:
+        plot_df["Size"] = 20
+
+    color_map = {
+        "Win": CHART_COLORS["Win"],
+        "Middle": CHART_COLORS["Middle"],
+        "Loss": CHART_COLORS["Loss"],
+    }
+
+    fig = go.Figure()
+
+    for status in ["Loss", "Middle", "Win"]:
+        status_df = plot_df[plot_df["Profitable"] == status]
+        if not status_df.empty:
+            fig.add_trace(go.Scatter(
+                x=status_df["AE CA"],
+                y=status_df["Profit"],
+                mode="markers+text",
+                name=status,
+                marker=dict(
+                    size=status_df["Size"],
+                    color=color_map.get(status, "#888"),
+                    opacity=0.7,
+                    line=dict(width=1, color="white"),
+                ),
+                text=status_df["Conseiller"],
+                textposition="top center",
+                textfont=dict(size=9),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "AE CA: %{x:,.2f}<br>"
+                    "Profit: %{y:,.2f}<br>"
+                    "<extra></extra>"
+                ),
+            ))
+
+    # Add reference line (break-even)
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Seuil de rentabilité")
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        height=450,
+        margin=dict(l=20, r=20, t=60, b=40),
+        font=dict(family="Inter, sans-serif"),
+        xaxis=dict(title="AE CA ($)", zeroline=True),
+        yaxis=dict(title="Profit ($)", zeroline=True),
+        legend=dict(
+            title="Statut",
+            orientation="v",
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.02,
+        ),
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+
+# =============================================================================
 # MAIN RENDER FUNCTION
 # =============================================================================
 
@@ -664,8 +929,9 @@ def render_charts_tab(
         st.warning("Aucune donnée à visualiser pour cette période.")
         return
 
-    # Get numeric columns (metrics)
-    metric_columns = [col for col in combined_df.columns if col != "Conseiller"]
+    # Get numeric columns (metrics) - exclude categorical columns
+    exclude_cols = ["Conseiller", "Profitable"]
+    metric_columns = [col for col in combined_df.columns if col not in exclude_cols]
 
     if not metric_columns:
         st.warning("Aucune métrique à visualiser.")
@@ -680,6 +946,76 @@ def render_charts_tab(
     render_kpi_cards(combined_df, metric_columns)
 
     st.markdown("---")
+
+    # =========================================================================
+    # Profitability Section (only if Profitable column exists)
+    # =========================================================================
+    if "Profitable" in combined_df.columns:
+        st.markdown("#### 💰 Analyse de profitabilité")
+        st.caption("Répartition des conseillers selon leur statut de profitabilité (basé sur le Ratio Net)")
+
+        # Row 1: Distribution pie + Status by advisor
+        prof_col1, prof_col2 = st.columns([1, 2])
+
+        with prof_col1:
+            render_profitability_distribution_chart(
+                combined_df,
+                title="Distribution des statuts",
+            )
+
+        with prof_col2:
+            render_profitability_by_advisor_chart(
+                combined_df,
+                title="Ratio Net par conseiller",
+            )
+
+        # Row 2: Metrics by status + Scatter plot
+        prof_col3, prof_col4 = st.columns(2)
+
+        with prof_col3:
+            render_profitability_metrics_chart(
+                combined_df,
+                title="Métriques par statut",
+            )
+
+        with prof_col4:
+            render_profitability_scatter_chart(
+                combined_df,
+                title="AE CA vs Profit",
+            )
+
+        # Summary stats
+        st.markdown("##### Résumé par statut")
+        status_summary = combined_df.groupby("Profitable").agg({
+            "Conseiller": "count",
+            "Ratio Net": "mean",
+        }).rename(columns={"Conseiller": "Nombre", "Ratio Net": "Ratio Net moyen"})
+
+        # Reorder
+        status_order = ["Win", "Middle", "Loss"]
+        status_summary = status_summary.reindex([s for s in status_order if s in status_summary.index])
+
+        # Add additional metrics if available
+        if "Profit" in combined_df.columns:
+            profit_by_status = combined_df.groupby("Profitable")["Profit"].sum()
+            status_summary["Profit total"] = profit_by_status
+
+        if "AE CA" in combined_df.columns:
+            ca_by_status = combined_df.groupby("Profitable")["AE CA"].sum()
+            status_summary["AE CA total"] = ca_by_status
+
+        # Format and display
+        st.dataframe(
+            status_summary.style.format({
+                "Nombre": "{:.0f}",
+                "Ratio Net moyen": "{:.2f}%",
+                "Profit total": "${:,.2f}",
+                "AE CA total": "${:,.2f}",
+            }),
+            width="stretch",
+        )
+
+        st.markdown("---")
 
     # =========================================================================
     # Top Performers Section (full width for better readability)
