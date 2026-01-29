@@ -409,10 +409,12 @@ def render_agg_step_2_period_preview() -> None:
             )
             period_changed = True
 
-    # If period changed, re-filter data with loading indicator
+    # If period changed, re-filter data and auto-import metrics
     if period_changed:
         with st.spinner("⏳ Filtrage et agrégation des données..."):
             filter_and_aggregate_data()
+        with st.spinner("📊 Import des métriques..."):
+            apply_metrics_to_aggregation(silent=True)
         st.rerun()
 
     # Show current period info
@@ -453,33 +455,25 @@ def render_agg_step_2_period_preview() -> None:
 
     st.markdown("---")
 
-    # Metrics import section (only for MONTH periods)
-    flexible_period = st.session_state.agg_flexible_period
-    if flexible_period.period_type == PeriodType.MONTH:
-        st.subheader("📊 Import des métriques additionnelles")
+    # Metrics status section
+    metrics_loaded = st.session_state.get("agg_metrics_loaded", False)
+    metrics_group = st.session_state.get("agg_metrics_group", "")
 
+    # Auto-import metrics if not already loaded
+    if not metrics_loaded:
+        with st.spinner("📊 Import des métriques depuis Data..."):
+            apply_metrics_to_aggregation(silent=True)
         metrics_loaded = st.session_state.get("agg_metrics_loaded", False)
         metrics_group = st.session_state.get("agg_metrics_group", "")
 
-        # Show fixed source board info
-        st.caption("📋 **Source:** Board *Data* → Colonnes: Coût, Dépenses, Leads, Bonus, Récompenses")
+    # Show metrics status
+    if metrics_loaded and metrics_group:
+        if "non disponibles" in metrics_group or "N/A" in metrics_group:
+            st.info(f"📊 Métriques: **{metrics_group}** (valeurs par défaut utilisées)")
+        else:
+            st.success(f"📊 Métriques importées depuis: **{metrics_group}**")
 
-        if st.button(
-            "📥 Importer les métriques" if not metrics_loaded else "🔄 Recharger les métriques",
-            type="primary" if not metrics_loaded else "secondary",
-            key="import_metrics_btn",
-        ):
-            apply_metrics_to_aggregation()
-            st.rerun()
-
-        if metrics_loaded:
-            st.success(f"✅ Métriques chargées depuis le groupe: **{metrics_group}**")
-            st.caption(
-                "Colonnes ajoutées: Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses, "
-                "Total Dépenses, Profit, CA/Lead, Profit/Lead, Ratio Brut, Ratio Net"
-            )
-
-        st.markdown("---")
+    st.markdown("---")
 
     # Preview section
     combined_df = st.session_state.agg_combined_data

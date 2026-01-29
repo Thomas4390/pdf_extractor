@@ -244,17 +244,36 @@ def load_metrics_for_period(board_id: int, group_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def apply_metrics_to_aggregation() -> None:
+def apply_metrics_to_aggregation(silent: bool = False) -> bool:
     """
     Load metrics and merge with aggregated data, then calculate derived columns.
 
-    Only works for MONTH period type.
+    Only works for MONTH period type. If metrics are not available,
+    adds columns with default values (0) and still calculates derived metrics.
+
+    Args:
+        silent: If True, don't show success/info messages
+
+    Returns:
+        True if metrics were loaded, False if using default values
     """
     flexible_period = st.session_state.get("agg_flexible_period")
 
-    if flexible_period is None or flexible_period.period_type != PeriodType.MONTH:
-        st.warning("L'import des métriques n'est disponible que pour les périodes mensuelles.")
-        return
+    if flexible_period is None:
+        return False
+
+    # Get current combined data
+    combined_df = st.session_state.get("agg_combined_data")
+    if combined_df is None or combined_df.empty:
+        return False
+
+    # For non-MONTH periods, just add empty metric columns with defaults
+    if flexible_period.period_type != PeriodType.MONTH:
+        final_df = _add_default_metric_columns(combined_df)
+        st.session_state.agg_combined_data = final_df
+        st.session_state.agg_metrics_loaded = True
+        st.session_state.agg_metrics_group = "N/A (période non mensuelle)"
+        return False
 
     # Get the group name for the selected month
     group_name = flexible_period.get_group_name()
@@ -262,18 +281,20 @@ def apply_metrics_to_aggregation() -> None:
     # Load metrics from the configured board
     metrics_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)
 
-    with st.spinner(f"Chargement des métriques pour {group_name}..."):
+    try:
         metrics_df = load_metrics_for_period(metrics_board_id, group_name)
+    except Exception:
+        metrics_df = pd.DataFrame()
 
     if metrics_df.empty:
-        st.warning(f"Aucune métrique trouvée pour {group_name}.")
-        return
-
-    # Get current combined data
-    combined_df = st.session_state.get("agg_combined_data")
-    if combined_df is None or combined_df.empty:
-        st.warning("Pas de données agrégées disponibles.")
-        return
+        # No metrics available - add default columns with 0 values
+        final_df = _add_default_metric_columns(combined_df)
+        st.session_state.agg_combined_data = final_df
+        st.session_state.agg_metrics_loaded = True
+        st.session_state.agg_metrics_group = f"{group_name} (données non disponibles)"
+        if not silent:
+            st.info(f"ℹ️ Aucune métrique disponible pour {group_name}. Colonnes ajoutées avec valeurs par défaut.")
+        return False
 
     # Merge metrics with aggregated data
     merged_df = merge_metrics_with_aggregation(
@@ -290,7 +311,41 @@ def apply_metrics_to_aggregation() -> None:
     st.session_state.agg_metrics_loaded = True
     st.session_state.agg_metrics_group = group_name
 
-    st.success(f"✅ Métriques importées et calculs effectués pour {group_name}!")
+    if not silent:
+        st.success(f"✅ Métriques importées depuis {group_name}")
+
+    return True
+
+
+def _add_default_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add default metric columns with 0 values when no metrics data is available.
+
+    Args:
+        df: DataFrame to add columns to
+
+    Returns:
+        DataFrame with added metric columns
+    """
+    df = df.copy()
+
+    # Add base metric columns with 0 values
+    default_columns = {
+        "Coût": 0.0,
+        "Dépenses par Conseiller": 0.0,
+        "Leads": 0,
+        "Bonus": 0.0,
+        "Récompenses": 0.0,
+    }
+
+    for col, default_val in default_columns.items():
+        if col not in df.columns:
+            df[col] = default_val
+
+    # Calculate derived metrics (will produce 0s due to 0 inputs)
+    df = calculate_derived_metrics(df)
+
+    return df
 
 
 def execute_aggregation_upsert() -> None:
