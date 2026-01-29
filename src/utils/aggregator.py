@@ -406,9 +406,9 @@ class MetricsConfig:
 
 
 # Default metrics board configuration
-# The metrics board should have groups named by month (e.g., "Janvier 2026")
+# The metrics board "Data" has groups named by month (e.g., "Janvier 2026")
 METRICS_BOARD_CONFIG = MetricsConfig(
-    board_id=9142978904,  # Update this with the actual metrics board ID
+    board_id=9142121714,  # Monday.com "Data" board
 )
 
 
