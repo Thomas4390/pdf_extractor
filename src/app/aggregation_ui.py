@@ -454,38 +454,13 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
         st.warning("Aucune donnée à afficher.")
         return
 
-    # Summary stats row
-    advisor_count = len(combined_df)
-    numeric_cols = [col for col in combined_df.columns if col != "Conseiller"]
-
-    # Build totals
-    totals = {}
-    for col in numeric_cols:
-        totals[col] = combined_df[col].sum()
-
-    # Display summary cards
-    st.markdown(f"""
-    <div class="summary-stats">
-        <div class="summary-stat">
-            <div class="stat-value">{advisor_count}</div>
-            <div class="stat-label">Conseillers</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    for col, total in totals.items():
-        st.markdown(f"""
-        <div class="summary-stat">
-            <div class="stat-value">{total:,.2f}</div>
-            <div class="stat-label">Total {col}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Format for display
+    # Display data table directly (stats are shown above in mode.py)
     display_df = combined_df.copy()
+
+    # Format numeric columns for display, skip categorical columns
+    categorical_cols = ["Conseiller", "Profitable"]
     for col in display_df.columns:
-        if col != "Conseiller":
+        if col not in categorical_cols:
             display_df[col] = display_df[col].apply(
                 lambda x: f"{x:,.2f}" if pd.notna(x) and isinstance(x, (int, float)) else x
             )
