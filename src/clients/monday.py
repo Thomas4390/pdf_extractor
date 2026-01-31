@@ -436,6 +436,203 @@ class MondayClient:
         result = await self._execute_query(mutation)
         return result["data"]["create_column"]
 
+    async def rename_column(
+        self,
+        board_id: int,
+        column_id: str,
+        new_title: str
+    ) -> dict:
+        """Rename an existing column on a board.
+
+        Args:
+            board_id: Board ID containing the column
+            column_id: Column ID to rename
+            new_title: New title for the column
+
+        Returns:
+            Dict with column info {'id': str, 'title': str}
+        """
+        mutation = f"""
+        mutation {{
+            change_column_metadata(
+                board_id: {board_id},
+                column_id: "{column_id}",
+                column_property: title,
+                value: "{new_title}"
+            ) {{
+                id
+                title
+            }}
+        }}
+        """
+
+        result = await self._execute_query(mutation)
+        return result["data"]["change_column_metadata"]
+
+    def rename_column_sync(
+        self,
+        board_id: int,
+        column_id: str,
+        new_title: str
+    ) -> dict:
+        """Synchronous wrapper for rename_column."""
+        return asyncio.run(self.rename_column(board_id, column_id, new_title))
+
+    async def get_column_values_for_all_items(
+        self,
+        board_id: int,
+        column_id: str
+    ) -> list[dict]:
+        """Get all unique values from a column across all items.
+
+        Args:
+            board_id: Board ID
+            column_id: Column ID to get values from
+
+        Returns:
+            List of dicts with {item_id: str, value: str}
+        """
+        items = await self.extract_board_data(board_id)
+        result = []
+
+        for item in items:
+            item_id = item["id"]
+            for col_val in item.get("column_values", []):
+                if col_val["id"] == column_id:
+                    text_value = col_val.get("text")
+                    if text_value:
+                        result.append({
+                            "item_id": item_id,
+                            "value": text_value
+                        })
+                    break
+
+        return result
+
+    async def migrate_column_to_dropdown(
+        self,
+        board_id: int,
+        source_column_id: str,
+        source_column_title: str,
+        progress_callback: Optional[callable] = None
+    ) -> dict:
+        """Migrate a column (status/text) to a new dropdown column.
+
+        This process:
+        1. Renames the source column to "{title} old"
+        2. Creates a new dropdown column with the original title
+        3. Copies all values from the old column to the new dropdown
+
+        Args:
+            board_id: Board ID
+            source_column_id: Column ID to migrate
+            source_column_title: Original column title
+            progress_callback: Optional callback(current, total, message)
+
+        Returns:
+            Dict with migration results
+        """
+        result = {
+            "success": False,
+            "old_column_id": source_column_id,
+            "new_column_id": None,
+            "items_migrated": 0,
+            "errors": []
+        }
+
+        try:
+            # Step 1: Get all values from the source column
+            if progress_callback:
+                progress_callback(0, 100, "Lecture des valeurs existantes...")
+
+            item_values = await self.get_column_values_for_all_items(
+                board_id, source_column_id
+            )
+
+            if progress_callback:
+                progress_callback(20, 100, f"Trouvé {len(item_values)} éléments avec des valeurs")
+
+            # Step 2: Rename the source column to "{title} old"
+            old_title = f"{source_column_title} old"
+            if progress_callback:
+                progress_callback(25, 100, f"Renommage de la colonne en '{old_title}'...")
+
+            await self.rename_column(board_id, source_column_id, old_title)
+
+            # Step 3: Create new dropdown column with original title
+            if progress_callback:
+                progress_callback(35, 100, f"Création de la colonne dropdown '{source_column_title}'...")
+
+            # Get unique labels for dropdown defaults
+            unique_labels = list(set(iv["value"] for iv in item_values if iv["value"]))
+
+            # Create dropdown with labels as defaults if we have values
+            defaults = None
+            if unique_labels:
+                defaults = {"labels": [{"name": label} for label in unique_labels[:200]]}  # Max 200 labels
+
+            new_column = await self.create_column(
+                board_id=board_id,
+                title=source_column_title,
+                column_type=ColumnType.DROPDOWN,
+                defaults=defaults
+            )
+            result["new_column_id"] = new_column["id"]
+
+            if progress_callback:
+                progress_callback(45, 100, "Copie des valeurs vers la nouvelle colonne...")
+
+            # Step 4: Copy values to new dropdown column
+            total_items = len(item_values)
+            for idx, item_data in enumerate(item_values):
+                item_id = item_data["item_id"]
+                value = item_data["value"]
+
+                try:
+                    column_values = {
+                        new_column["id"]: {"labels": [value]}
+                    }
+                    await self.update_item_column_values(
+                        item_id=item_id,
+                        board_id=board_id,
+                        column_values=column_values,
+                        create_labels_if_missing=True
+                    )
+                    result["items_migrated"] += 1
+
+                    # Rate limiting
+                    await asyncio.sleep(RATE_LIMIT_DELAY)
+
+                except MondayError as e:
+                    result["errors"].append(f"Item {item_id}: {e}")
+
+                if progress_callback and total_items > 0:
+                    progress = 45 + int((idx + 1) / total_items * 50)
+                    progress_callback(progress, 100, f"Migration {idx + 1}/{total_items}")
+
+            result["success"] = True
+            if progress_callback:
+                progress_callback(100, 100, "Migration terminée!")
+
+        except MondayError as e:
+            result["errors"].append(str(e))
+
+        return result
+
+    def migrate_column_to_dropdown_sync(
+        self,
+        board_id: int,
+        source_column_id: str,
+        source_column_title: str,
+        progress_callback: Optional[callable] = None
+    ) -> dict:
+        """Synchronous wrapper for migrate_column_to_dropdown."""
+        return asyncio.run(
+            self.migrate_column_to_dropdown(
+                board_id, source_column_id, source_column_title, progress_callback
+            )
+        )
+
     # Column types that are read-only (computed by Monday.com)
     READ_ONLY_COLUMN_TYPES = {
         "formula",

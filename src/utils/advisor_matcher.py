@@ -103,12 +103,17 @@ def get_gcp_credentials():
     return None
 
 
+# Valid advisor status values
+ADVISOR_STATUSES = ["Active", "New", "Inactive"]
+
+
 @dataclass
 class Advisor:
     """Represents an advisor with their name variations."""
     first_name: str  # Prénom principal
     last_name: str   # Nom de famille
     variations: List[str] = field(default_factory=list)  # Variations connues
+    status: str = "Active"  # Statut: Active, New, Inactive
 
     @property
     def display_name(self) -> str:
@@ -151,7 +156,8 @@ class Advisor:
         return {
             'first_name': self.first_name,
             'last_name': self.last_name,
-            'variations': self.variations
+            'variations': self.variations,
+            'status': self.status
         }
 
     @classmethod
@@ -160,7 +166,8 @@ class Advisor:
         return cls(
             first_name=data['first_name'],
             last_name=data['last_name'],
-            variations=data.get('variations', [])
+            variations=data.get('variations', []),
+            status=data.get('status', 'Active')
         )
 
 
@@ -257,14 +264,20 @@ class AdvisorMatcher:
             # Get or create the Advisors worksheet
             try:
                 self._worksheet = spreadsheet.worksheet(self.GSHEETS_WORKSHEET_NAME)
+                # Check if status column exists, add it if not
+                headers = self._worksheet.row_values(1)
+                if 'status' not in headers:
+                    # Add status column header
+                    self._worksheet.update_cell(1, 5, 'status')
+                    self._worksheet.format('E1', {'textFormat': {'bold': True}})
             except gspread.WorksheetNotFound:
-                # Create the worksheet with headers
+                # Create the worksheet with headers (including status)
                 self._worksheet = spreadsheet.add_worksheet(
                     title=self.GSHEETS_WORKSHEET_NAME,
-                    rows=100, cols=4
+                    rows=100, cols=5
                 )
-                self._worksheet.update('A1:D1', [['id', 'first_name', 'last_name', 'variations']])
-                self._worksheet.format('A1:D1', {'textFormat': {'bold': True}})
+                self._worksheet.update('A1:E1', [['id', 'first_name', 'last_name', 'variations', 'status']])
+                self._worksheet.format('A1:E1', {'textFormat': {'bold': True}})
 
             self._use_gsheets = True
         except Exception as e:
@@ -423,10 +436,16 @@ class AdvisorMatcher:
                 else:
                     variations = []
 
+                # Get status with default "Active"
+                status = str(row.get('status', 'Active')).strip()
+                if status not in ADVISOR_STATUSES:
+                    status = 'Active'
+
                 advisor = Advisor(
                     first_name=str(row.get('first_name', '')),
                     last_name=str(row.get('last_name', '')),
-                    variations=variations
+                    variations=variations,
+                    status=status
                 )
                 advisor._row_id = row.get('id')
                 self.advisors.append(advisor)
@@ -439,7 +458,8 @@ class AdvisorMatcher:
         self._build_patterns()
 
     def add_advisor(self, first_name: str, last_name: str,
-                    variations: Optional[List[str]] = None) -> Advisor:
+                    variations: Optional[List[str]] = None,
+                    status: str = "Active") -> Advisor:
         """Add a new advisor to Google Sheets."""
         if not self._use_gsheets:
             raise RuntimeError(
@@ -447,10 +467,15 @@ class AdvisorMatcher:
                 "Please configure GOOGLE_SHEETS_SPREADSHEET_ID and GCP credentials."
             )
 
+        # Validate status
+        if status not in ADVISOR_STATUSES:
+            status = "Active"
+
         advisor = Advisor(
             first_name=first_name.strip(),
             last_name=last_name.strip(),
-            variations=variations or []
+            variations=variations or [],
+            status=status
         )
 
         try:
@@ -459,7 +484,7 @@ class AdvisorMatcher:
             new_id = max(ids) + 1 if ids else 1
             variations_str = ', '.join(advisor.variations)
             self._worksheet.append_row([
-                new_id, advisor.first_name, advisor.last_name, variations_str
+                new_id, advisor.first_name, advisor.last_name, variations_str, advisor.status
             ])
             advisor._row_id = new_id
         except Exception as e:
@@ -470,7 +495,8 @@ class AdvisorMatcher:
         return advisor
 
     def update_advisor(self, advisor: Advisor, first_name: str = None,
-                       last_name: str = None, variations: List[str] = None) -> Advisor:
+                       last_name: str = None, variations: List[str] = None,
+                       status: str = None) -> Advisor:
         """
         Update an existing advisor in Google Sheets.
 
@@ -479,6 +505,7 @@ class AdvisorMatcher:
             first_name: New first name (optional)
             last_name: New last name (optional)
             variations: New variations list (optional)
+            status: New status (optional) - must be Active, New, or Inactive
 
         Returns:
             The updated Advisor
@@ -498,6 +525,8 @@ class AdvisorMatcher:
             advisor.last_name = last_name.strip()
         if variations is not None:
             advisor.variations = variations
+        if status is not None and status in ADVISOR_STATUSES:
+            advisor.status = status
 
         try:
             # Find the row with matching id
@@ -513,10 +542,10 @@ class AdvisorMatcher:
             if row_index is None:
                 raise ValueError(f"Advisor with id {advisor._row_id} not found in sheet")
 
-            # Update the row
+            # Update the row (now includes status column E)
             variations_str = ', '.join(advisor.variations)
-            self._worksheet.update(f'A{row_index}:D{row_index}', [[
-                advisor._row_id, advisor.first_name, advisor.last_name, variations_str
+            self._worksheet.update(f'A{row_index}:E{row_index}', [[
+                advisor._row_id, advisor.first_name, advisor.last_name, variations_str, advisor.status
             ]])
 
         except Exception as e:

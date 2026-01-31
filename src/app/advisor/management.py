@@ -78,10 +78,16 @@ def render_advisor_management_tab() -> None:
     advisors = matcher.get_all_advisors()
     total_variations = sum(len(a.variations) for a in advisors)
 
-    cols = st.columns(3)
-    cols[0].metric("Conseillers", len(advisors))
-    cols[1].metric("Variations totales", total_variations)
-    cols[2].metric("Stockage", f"{'☁️ Cloud' if matcher.storage_backend == 'google_sheets' else '💾 Local'}")
+    # Count by status
+    active_count = sum(1 for a in advisors if a.status == "Active")
+    new_count = sum(1 for a in advisors if a.status == "New")
+    inactive_count = sum(1 for a in advisors if a.status == "Inactive")
+
+    cols = st.columns(4)
+    cols[0].metric("Total Conseillers", len(advisors))
+    cols[1].metric("Actifs", active_count, help="Statut: Active")
+    cols[2].metric("Nouveaux", new_count, help="Statut: New")
+    cols[3].metric("Inactifs", inactive_count, help="Statut: Inactive")
 
     st.divider()
 
@@ -101,12 +107,12 @@ def render_advisor_management_tab() -> None:
 
 def _render_add_advisor_form(matcher) -> None:
     """Render the add advisor form."""
-    from src.utils.advisor_matcher import get_advisor_matcher
+    from src.utils.advisor_matcher import get_advisor_matcher, ADVISOR_STATUSES
 
     st.markdown("#### ➕ Ajouter un conseiller")
 
     with st.form("add_advisor_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([2, 2, 1])
 
         with col1:
             new_first_name = st.text_input(
@@ -120,6 +126,14 @@ def _render_add_advisor_form(matcher) -> None:
                 "Nom de famille",
                 placeholder="Ex: Lussier",
                 key="new_advisor_last_name"
+            )
+
+        with col3:
+            new_status = st.selectbox(
+                "Statut",
+                options=ADVISOR_STATUSES,
+                index=0,  # Default to "Active"
+                key="new_advisor_status"
             )
 
         new_variations = st.text_input(
@@ -143,7 +157,7 @@ def _render_add_advisor_form(matcher) -> None:
                     st.error(f"❌ Ce conseiller existe déjà")
                 else:
                     try:
-                        advisor = matcher.add_advisor(new_first_name, new_last_name, variations)
+                        advisor = matcher.add_advisor(new_first_name, new_last_name, variations, new_status)
                         # Reset matcher to get fresh data
                         from src.utils import advisor_matcher as am_module
                         am_module._matcher_instance = None
@@ -156,9 +170,20 @@ def _render_add_advisor_form(matcher) -> None:
                 st.error("❌ Veuillez entrer le prénom et le nom de famille")
 
 
+def _get_status_badge(status: str) -> str:
+    """Return HTML badge for advisor status."""
+    colors = {
+        "Active": ("#10B981", "#D1FAE5"),   # Green
+        "New": ("#3B82F6", "#DBEAFE"),       # Blue
+        "Inactive": ("#9CA3AF", "#F3F4F6"),  # Gray
+    }
+    fg, bg = colors.get(status, ("#6B7280", "#F3F4F6"))
+    return f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;">{status}</span>'
+
+
 def _render_advisors_list(advisors: list, matcher) -> None:
     """Render the list of existing advisors with edit/delete options."""
-    from src.utils.advisor_matcher import get_advisor_matcher
+    from src.utils.advisor_matcher import get_advisor_matcher, ADVISOR_STATUSES
 
     st.markdown("#### 📋 Conseillers existants")
 
@@ -167,8 +192,10 @@ def _render_advisors_list(advisors: list, matcher) -> None:
     else:
         for idx, advisor in enumerate(advisors):
             advisor_id = getattr(advisor, '_row_id', idx)
+            status_badge = _get_status_badge(advisor.status)
             with st.expander(f"**{advisor.first_name} {advisor.last_name}**", expanded=False):
-                st.markdown(f"**Format compact:** {advisor.display_name_compact}")
+                # Show status and compact format
+                st.markdown(f"**Format compact:** {advisor.display_name_compact} &nbsp; {status_badge}", unsafe_allow_html=True)
 
                 st.markdown("**Variations:**")
                 if advisor.variations:
@@ -206,21 +233,35 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                     st.markdown("**Modifier le conseiller:**")
 
                     with st.form(key=f"edit_form_{advisor_id}"):
-                        new_first = st.text_input(
-                            "Prénom",
-                            value=advisor.first_name,
-                            key=f"edit_first_{advisor_id}"
-                        )
-                        new_last = st.text_input(
-                            "Nom",
-                            value=advisor.last_name,
-                            key=f"edit_last_{advisor_id}"
-                        )
-                        new_vars = st.text_input(
-                            "Variations (séparées par des virgules)",
-                            value=', '.join(advisor.variations),
-                            key=f"edit_vars_{advisor_id}"
-                        )
+                        edit_col1, edit_col2 = st.columns(2)
+                        with edit_col1:
+                            new_first = st.text_input(
+                                "Prénom",
+                                value=advisor.first_name,
+                                key=f"edit_first_{advisor_id}"
+                            )
+                        with edit_col2:
+                            new_last = st.text_input(
+                                "Nom",
+                                value=advisor.last_name,
+                                key=f"edit_last_{advisor_id}"
+                            )
+
+                        edit_col3, edit_col4 = st.columns([3, 1])
+                        with edit_col3:
+                            new_vars = st.text_input(
+                                "Variations (séparées par des virgules)",
+                                value=', '.join(advisor.variations),
+                                key=f"edit_vars_{advisor_id}"
+                            )
+                        with edit_col4:
+                            current_status_idx = ADVISOR_STATUSES.index(advisor.status) if advisor.status in ADVISOR_STATUSES else 0
+                            new_status = st.selectbox(
+                                "Statut",
+                                options=ADVISOR_STATUSES,
+                                index=current_status_idx,
+                                key=f"edit_status_{advisor_id}"
+                            )
 
                         col_save, col_cancel = st.columns(2)
                         with col_save:
@@ -235,7 +276,8 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                                     advisor,
                                     first_name=new_first,
                                     last_name=new_last,
-                                    variations=variations
+                                    variations=variations,
+                                    status=new_status
                                 )
                                 # Reset singleton and session state
                                 from src.utils import advisor_matcher as am_module

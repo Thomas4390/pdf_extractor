@@ -143,7 +143,14 @@ def init_session_state() -> None:
         "show_columns": False,
 
         # Aggregation mode (Phase 5)
-        "app_mode": "extraction",  # "extraction" or "aggregation"
+        "app_mode": "extraction",  # "extraction", "aggregation", or "column_conversion"
+
+        # Column conversion mode
+        "conv_board_id": None,  # Selected board ID for conversion
+        "conv_column_id": None,  # Selected column ID to convert
+        "conv_column_title": "Conseiller",  # Default column name to convert
+        "conv_result": None,  # Migration result dict
+        "conv_is_executing": False,  # True during migration
         "agg_step": 1,  # 1-4 for aggregation wizard
         "agg_selected_sources": get_default_selected_sources(),  # {source_key: board_id}
         "agg_period": None,  # DatePeriod enum

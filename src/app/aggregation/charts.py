@@ -422,6 +422,10 @@ def render_pareto_chart(
         height=500,
         margin=dict(l=20, r=20, t=60, b=120),
         xaxis_tickangle=-45,
+        xaxis=dict(
+            categoryorder="array",
+            categoryarray=plot_df["Conseiller"].tolist(),  # Preserve descending order
+        ),
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -814,8 +818,8 @@ def render_profitability_by_advisor_chart(
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        height=max(450, len(df_sorted) * 38),
-        margin=dict(l=40, r=120, t=80, b=60),
+        height=max(550, len(df_sorted) * 50),  # More space per advisor
+        margin=dict(l=40, r=140, t=80, b=60),
         font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             title="Ratio Net (%)",
@@ -823,11 +827,11 @@ def render_profitability_by_advisor_chart(
             zerolinecolor="gray",
             ticksuffix="%",
         ),
-        yaxis=dict(title="", tickfont=dict(size=11)),
+        yaxis=dict(title="", tickfont=dict(size=12)),  # Larger font
         showlegend=False,
     )
 
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_profitability_metrics_chart(
