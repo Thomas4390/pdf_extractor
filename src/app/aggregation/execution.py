@@ -49,19 +49,19 @@ def _add_advisor_status(df: pd.DataFrame) -> pd.DataFrame:
         # Create a mapping of advisor name variations to status
         status_map = {}
         for advisor in advisors:
-            # Map the compact name format to status
-            status_map[advisor.display_name_compact] = advisor.status
+            # Map full name (primary format)
+            status_map[advisor.full_name] = advisor.status
             # Also map first name only
             status_map[advisor.first_name] = advisor.status
-            # Map full name
-            status_map[advisor.full_name] = advisor.status
+            # Map compact format for backward compatibility
+            status_map[advisor.display_name_compact] = advisor.status
 
         # Apply status to each advisor in the DataFrame
         def get_status(name):
             if name in status_map:
                 return status_map[name]
-            # Try matching via the matcher
-            matched = matcher.match_compact(name)
+            # Try matching via the matcher (returns full name)
+            matched = matcher.match_full_name(name)
             if matched and matched in status_map:
                 return status_map[matched]
             # Default to "Active" if not found

@@ -26,8 +26,8 @@ def _get_name_mapper():
 
         matcher = get_advisor_matcher()
         if matcher.is_configured:
-            # Return the mapping function
-            return matcher.match_compact_or_original
+            # Return the mapping function for full names
+            return matcher.match_full_name_or_original
         return None
     except Exception:
         return None
@@ -196,11 +196,11 @@ def _render_execution_section() -> None:
         use_mapping = st.checkbox(
             "🔗 Mapper les prénoms vers les noms complets",
             value=True,
-            help="Utilise la base de données des conseillers pour convertir les prénoms (ex: Thomas → Thomas, L)"
+            help="Utilise la base de données des conseillers pour convertir les prénoms (ex: Thomas → Thomas Lussier)"
         )
 
         if use_mapping:
-            st.success("✅ Le mapping des noms est activé. Les prénoms seront convertis en format compact (Prénom, Initiale).")
+            st.success("✅ Le mapping des noms est activé. Les prénoms seront convertis en noms complets.")
 
             # Show mapping preview
             with st.expander("📋 Aperçu du mapping disponible", expanded=False):
@@ -211,7 +211,7 @@ def _render_execution_section() -> None:
 
                     if advisors:
                         preview_data = [
-                            {"Prénom": a.first_name, "Nom complet": a.full_name, "Format compact": a.display_name_compact}
+                            {"Prénom": a.first_name, "Nom complet": a.full_name}
                             for a in advisors[:20]  # Show first 20
                         ]
                         st.dataframe(preview_data, use_container_width=True, hide_index=True)
@@ -303,7 +303,7 @@ def _render_result() -> None:
         st.success(success_msg)
 
         if values_mapped > 0:
-            st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur format complet (Prénom, Initiale).")
+            st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur nom complet (Prénom Nom).")
     else:
         st.error("La conversion a rencontré des problèmes.")
 

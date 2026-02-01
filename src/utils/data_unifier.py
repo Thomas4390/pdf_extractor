@@ -1177,8 +1177,8 @@ class DataUnifier:
 
                     results['total_cells'] += 1
 
-                    # Try to normalize
-                    normalized = matcher.match_compact(original_name)
+                    # Try to normalize to full name format
+                    normalized = matcher.match_full_name(original_name)
 
                     if normalized:
                         if normalized != original_name:

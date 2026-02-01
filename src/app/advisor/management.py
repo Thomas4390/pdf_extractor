@@ -318,7 +318,7 @@ def _render_matching_test(matcher) -> None:
     )
 
     if test_name:
-        result = matcher.match_compact(test_name)
+        result = matcher.match_full_name(test_name)
         if result:
             st.success(f"✅ Correspondance trouvée: **{result}**")
         else:
