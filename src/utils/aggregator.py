@@ -98,6 +98,9 @@ class FlexiblePeriod:
     Flexible date period supporting various period types.
 
     Can represent monthly, weekly, quarterly, annual, or custom date ranges.
+
+    IMPORTANT: The reference_date is stored when the period is created to ensure
+    consistent date calculations even when the actual date changes (e.g., month rollover).
     """
     period_type: PeriodType
     # For MONTH type - uses months_ago offset
@@ -111,9 +114,18 @@ class FlexiblePeriod:
     # For CUSTOM type - explicit date range
     custom_start: Optional[date] = None
     custom_end: Optional[date] = None
+    # Reference date for calculating offsets - stored at creation time
+    # This ensures the period doesn't shift when the month changes
+    reference_date: Optional[date] = None
 
     def __post_init__(self):
-        """Validate period inputs."""
+        """Validate period inputs and set reference date."""
+        # Store reference date at creation time if not provided
+        # This ensures consistent calculations even when the month changes
+        if self.reference_date is None:
+            # Use object.__setattr__ for frozen-like behavior in dataclass
+            object.__setattr__(self, 'reference_date', date.today())
+
         # Validate non-negative offsets
         if self.months_ago < 0:
             raise ValueError(f"months_ago must be >= 0, got {self.months_ago}")
@@ -143,10 +155,11 @@ class FlexiblePeriod:
     @property
     def display_name(self) -> str:
         """Human-readable name for the period."""
-        today = date.today()
+        # Use stored reference_date for consistent calculations
+        ref_date = self.reference_date or date.today()
 
         if self.period_type == PeriodType.MONTH:
-            target_date = get_month_from_offset(self.months_ago)
+            target_date = get_month_from_offset(self.months_ago, ref_date)
             return f"{MONTHS_FR[target_date.month]} {target_date.year}"
 
         elif self.period_type == PeriodType.WEEK:
@@ -159,7 +172,7 @@ class FlexiblePeriod:
             return f"{QUARTERS_FR[quarter]} {start.year}"
 
         elif self.period_type == PeriodType.YEAR:
-            target_year = today.year - self.years_ago
+            target_year = ref_date.year - self.years_ago
             return f"Année {target_year}"
 
         elif self.period_type == PeriodType.CUSTOM:
@@ -206,8 +219,9 @@ class FlexiblePeriod:
 
     def get_date_range(self, reference_date: Optional[date] = None) -> tuple[date, date]:
         """Get start and end dates for this period."""
+        # Use stored reference_date by default for consistent calculations
         if reference_date is None:
-            reference_date = date.today()
+            reference_date = self.reference_date or date.today()
 
         if self.period_type == PeriodType.MONTH:
             start = get_month_from_offset(self.months_ago, reference_date)
@@ -408,7 +422,7 @@ class MetricsConfig:
 # Default metrics board configuration
 # The metrics board "Data" has groups named by month (e.g., "Janvier 2026")
 METRICS_BOARD_CONFIG = MetricsConfig(
-    board_id=9142121714,  # Monday.com "Data" board
+    board_id=18394590851,  # Monday.com "2026 Copie de Data" board
 )
 
 
