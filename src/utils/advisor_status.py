@@ -563,9 +563,9 @@ class AdvisorStatusCalculator:
         first_month = cls._first_appearance_cache.get(normalized)
 
         if not first_month:
-            # No history found - treat as New
+            # No history found in Data board - treat as Past (no longer active)
             return AdvisorStatusInfo(
-                status="New",
+                status="Past",
                 first_appearance_month=None,
                 months_active=0,
                 is_manual_override=False,

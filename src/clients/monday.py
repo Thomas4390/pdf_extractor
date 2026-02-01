@@ -119,6 +119,8 @@ class MondayClient:
 
         # Status columns
         'Statut': ColumnType.STATUS,
+        'Profitable': ColumnType.STATUS,
+        'Advisor_Status': ColumnType.STATUS,
 
         # Checkbox columns
         'Verifié': ColumnType.CHECKBOX,
@@ -1476,6 +1478,9 @@ class MondayClient:
                     continue  # Don't update the advisor column itself
                 if col_name in row.index:
                     actual_type = column_type_map.get(col_name)
+                    # Skip formula columns - they are auto-calculated and can't be updated
+                    if actual_type == "formula":
+                        continue
                     formatted = self._format_column_value(row[col_name], col_name, actual_type)
                     if formatted is not None:
                         column_values[col_id] = formatted
@@ -1586,6 +1591,9 @@ class MondayClient:
                     continue  # Advisor is the item name, not a column
                 if col_name in row.index:
                     actual_type = column_type_map.get(col_name)
+                    # Skip formula columns - they are auto-calculated and can't be updated
+                    if actual_type == "formula":
+                        continue
                     formatted = self._format_column_value(row[col_name], col_name, actual_type)
                     if formatted is not None:
                         column_values[col_id] = formatted
