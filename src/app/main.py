@@ -39,9 +39,6 @@ from src.app.extraction import render_stage_1, render_stage_2, render_stage_3
 # Import aggregation mode
 from src.app.aggregation import render_aggregation_mode
 
-# Import column conversion mode
-from src.app.column_conversion import render_column_conversion_mode
-
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -97,8 +94,6 @@ def main() -> None:
     # Route based on mode
     if st.session_state.app_mode == "aggregation":
         render_aggregation_mode()
-    elif st.session_state.app_mode == "column_conversion":
-        render_column_conversion_mode()
     else:
         # Route to appropriate extraction stage
         if st.session_state.stage == 1:

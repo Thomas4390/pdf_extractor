@@ -25,6 +25,57 @@ from src.utils.aggregator import (
 from src.app.utils.async_helpers import run_async
 
 
+def _add_advisor_status(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add advisor status (Active/New/Inactive) from the advisor matcher.
+
+    Args:
+        df: DataFrame with 'Conseiller' column
+
+    Returns:
+        DataFrame with 'Advisor_Status' column added
+    """
+    try:
+        from src.utils.advisor_matcher import get_advisor_matcher
+        matcher = get_advisor_matcher()
+
+        if not matcher.is_configured:
+            # No advisor data available, default to "Active"
+            df["Advisor_Status"] = "Active"
+            return df
+
+        advisors = matcher.get_all_advisors()
+
+        # Create a mapping of advisor name variations to status
+        status_map = {}
+        for advisor in advisors:
+            # Map the compact name format to status
+            status_map[advisor.display_name_compact] = advisor.status
+            # Also map first name only
+            status_map[advisor.first_name] = advisor.status
+            # Map full name
+            status_map[advisor.full_name] = advisor.status
+
+        # Apply status to each advisor in the DataFrame
+        def get_status(name):
+            if name in status_map:
+                return status_map[name]
+            # Try matching via the matcher
+            matched = matcher.match_compact(name)
+            if matched and matched in status_map:
+                return status_map[matched]
+            # Default to "Active" if not found
+            return "Active"
+
+        df["Advisor_Status"] = df["Conseiller"].apply(get_status)
+        return df
+
+    except Exception:
+        # If anything fails, default to "Active"
+        df["Advisor_Status"] = "Active"
+        return df
+
+
 def load_source_data() -> bool:
     """
     Load raw data from all selected source boards.
@@ -151,7 +202,13 @@ def filter_and_aggregate_data() -> None:
     st.session_state.agg_unknown_advisors = unique_unknown_names
 
     # Combine aggregations
-    st.session_state.agg_combined_data = combine_aggregations(aggregated_data)
+    combined_df = combine_aggregations(aggregated_data)
+
+    # Add advisor status from advisor_matcher
+    if not combined_df.empty and "Conseiller" in combined_df.columns:
+        combined_df = _add_advisor_status(combined_df)
+
+    st.session_state.agg_combined_data = combined_df
 
     # Reset metrics loaded flag when period changes
     st.session_state.agg_metrics_loaded = False

@@ -27,28 +27,22 @@ def render_sidebar() -> None:
         st.markdown('<div class="sidebar-section-title">🎯 Mode</div>', unsafe_allow_html=True)
         current_mode = st.session_state.app_mode
 
-        # Mode toggle buttons - 3 modes
-        col1, col2, col3 = st.columns(3)
+        # Mode toggle buttons - 2 modes
+        col1, col2 = st.columns(2)
         with col1:
-            if st.button("📄 Extract", key="mode_extraction", width="stretch",
+            if st.button("📄 Extraction", key="mode_extraction", width="stretch",
                         type="primary" if current_mode == "extraction" else "secondary"):
                 if current_mode != "extraction":
                     st.session_state.app_mode = "extraction"
                     st.rerun()
         with col2:
-            if st.button("📊 Agrég.", key="mode_aggregation", width="stretch",
+            if st.button("📊 Agrégation", key="mode_aggregation", width="stretch",
                         type="primary" if current_mode == "aggregation" else "secondary"):
                 if current_mode != "aggregation":
                     st.session_state.app_mode = "aggregation"
                     st.session_state.agg_step = 1
                     if st.session_state.agg_period is None:
                         st.session_state.agg_period = DatePeriod.MONTH_1
-                    st.rerun()
-        with col3:
-            if st.button("🔄 Convert", key="mode_conversion", width="stretch",
-                        type="primary" if current_mode == "column_conversion" else "secondary"):
-                if current_mode != "column_conversion":
-                    st.session_state.app_mode = "column_conversion"
                     st.rerun()
 
         st.markdown("---")

@@ -48,6 +48,18 @@ COLOR_SCALES = {
 # Default chart height
 CHART_HEIGHT = 400
 
+# Columns to exclude from Pareto and Contribution charts (expense/cost related)
+EXCLUDED_PARETO_CONTRIBUTION_COLS = {
+    "Coût", "Dépenses par Conseiller", "Bonus", "Récompenses", "Total Dépenses",
+    "Ratio Net", "Ratio Brut", "Profitable"
+}
+
+# Columns that should only show non-"New" advisors
+PROFITABILITY_RELATED_COLS = {
+    "Ratio Net", "Ratio Brut", "Profitable", "Total Dépenses", "Profit",
+    "Dépenses par Conseiller"
+}
+
 
 # =============================================================================
 # KPI CARDS
@@ -683,6 +695,21 @@ def render_advisor_radar_chart(
 # PROFITABILITY CHARTS
 # =============================================================================
 
+def _filter_new_advisors(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Filter out advisors with 'New' status from a DataFrame.
+
+    Args:
+        df: DataFrame with 'Advisor_Status' column
+
+    Returns:
+        Filtered DataFrame without 'New' advisors
+    """
+    if "Advisor_Status" in df.columns:
+        return df[df["Advisor_Status"] != "New"].copy()
+    return df.copy()
+
+
 def render_profitability_distribution_chart(
     df: pd.DataFrame,
     title: str = "Répartition des statuts de profitabilité",
@@ -690,7 +717,7 @@ def render_profitability_distribution_chart(
     """
     Render a pie/donut chart showing the distribution of Profitable statuses.
 
-    Only includes advisors with valid expense data.
+    Only includes advisors with valid expense data. Excludes "New" advisors.
 
     Args:
         df: DataFrame with 'Profitable' column
@@ -702,6 +729,10 @@ def render_profitability_distribution_chart(
 
     # Filter out advisors without expense data
     df_filtered = df.copy()
+
+    # Filter out "New" advisors
+    df_filtered = _filter_new_advisors(df_filtered)
+
     if "Dépenses par Conseiller" in df_filtered.columns:
         df_filtered = df_filtered[
             (df_filtered["Dépenses par Conseiller"].notna()) &
@@ -768,6 +799,7 @@ def render_profitability_by_advisor_chart(
     Render a horizontal bar chart showing Ratio Net with color-coded Profitable status.
 
     Only includes advisors with valid expense data (Dépenses par Conseiller != 0).
+    Excludes "New" advisors.
 
     Args:
         df: DataFrame with 'Conseiller', 'Ratio Net', and 'Profitable' columns
@@ -779,6 +811,10 @@ def render_profitability_by_advisor_chart(
 
     # Filter out advisors without expense data (N/A status or null Dépenses par Conseiller)
     df_filtered = df.copy()
+
+    # Filter out "New" advisors
+    df_filtered = _filter_new_advisors(df_filtered)
+
     if "Dépenses par Conseiller" in df_filtered.columns:
         df_filtered = df_filtered[
             (df_filtered["Dépenses par Conseiller"].notna()) &
@@ -841,7 +877,7 @@ def render_profitability_metrics_chart(
     """
     Render a grouped bar chart comparing key metrics across Profitable statuses.
 
-    Only includes advisors with valid expense data.
+    Only includes advisors with valid expense data. Excludes "New" advisors.
 
     Args:
         df: DataFrame with 'Profitable' and financial metrics
@@ -853,6 +889,10 @@ def render_profitability_metrics_chart(
 
     # Filter out advisors without expense data
     df_filtered = df.copy()
+
+    # Filter out "New" advisors
+    df_filtered = _filter_new_advisors(df_filtered)
+
     if "Dépenses par Conseiller" in df_filtered.columns:
         df_filtered = df_filtered[
             (df_filtered["Dépenses par Conseiller"].notna()) &
@@ -935,6 +975,7 @@ def render_profitability_scatter_chart(
     - Size: AE CA (revenue)
 
     Advisors in the upper-left are most efficient (high profit, low costs).
+    Excludes "New" advisors.
 
     Args:
         df: DataFrame with financial metrics
@@ -948,6 +989,10 @@ def render_profitability_scatter_chart(
 
     # Prepare data - filter out rows with zero/null expenses (no data for profitability)
     plot_df = df.copy()
+
+    # Filter out "New" advisors
+    plot_df = _filter_new_advisors(plot_df)
+
     if "Dépenses par Conseiller" in plot_df.columns:
         plot_df = plot_df[
             (plot_df["Dépenses par Conseiller"].notna()) &
@@ -1132,6 +1177,10 @@ def render_charts_tab(
 
         # Filter for summary
         summary_df = combined_df.copy()
+
+        # Filter out "New" advisors
+        summary_df = _filter_new_advisors(summary_df)
+
         if "Dépenses par Conseiller" in summary_df.columns:
             summary_df = summary_df[
                 (summary_df["Dépenses par Conseiller"].notna()) &
@@ -1211,10 +1260,16 @@ def render_charts_tab(
     st.markdown("#### Analyse Pareto (80/20)")
     st.caption("Identifiez quels conseillers contribuent à 80% des résultats")
 
-    pareto_tabs = st.tabs([f"{col}" for col in metric_columns])
-    for idx, col in enumerate(metric_columns):
-        with pareto_tabs[idx]:
-            render_pareto_chart(combined_df, col)
+    # Filter out excluded columns for Pareto
+    pareto_columns = [col for col in metric_columns if col not in EXCLUDED_PARETO_CONTRIBUTION_COLS]
+
+    if pareto_columns:
+        pareto_tabs = st.tabs([f"{col}" for col in pareto_columns])
+        for idx, col in enumerate(pareto_columns):
+            with pareto_tabs[idx]:
+                render_pareto_chart(combined_df, col)
+    else:
+        st.info("Aucune métrique disponible pour l'analyse Pareto.")
 
     st.markdown("---")
 
@@ -1223,14 +1278,20 @@ def render_charts_tab(
     # =========================================================================
     st.markdown("#### Contribution individuelle")
 
-    contrib_tabs = st.tabs([f"{col}" for col in metric_columns])
-    for idx, col in enumerate(metric_columns):
-        with contrib_tabs[idx]:
-            render_contribution_chart(
-                combined_df,
-                col,
-                title=f"Part de chaque conseiller dans {col}",
-            )
+    # Filter out excluded columns for Contribution
+    contrib_columns = [col for col in metric_columns if col not in EXCLUDED_PARETO_CONTRIBUTION_COLS]
+
+    if contrib_columns:
+        contrib_tabs = st.tabs([f"{col}" for col in contrib_columns])
+        for idx, col in enumerate(contrib_columns):
+            with contrib_tabs[idx]:
+                render_contribution_chart(
+                    combined_df,
+                    col,
+                    title=f"Part de chaque conseiller dans {col}",
+                )
+    else:
+        st.info("Aucune métrique disponible pour l'analyse de contribution.")
 
     st.markdown("---")
 
@@ -1270,9 +1331,47 @@ def render_charts_tab(
 
                 for col in individual_metric_cols:
                     val = advisor_data[col].iloc[0]
-                    total = combined_df[col].sum()
-                    pct = (val / total * 100) if total > 0 else 0
-                    rank = (combined_df[col] > val).sum() + 1
+
+                    # Handle NaN values
+                    if pd.isna(val):
+                        val_display = "N/A"
+                        pct_display = "N/A"
+                        rank_display = "N/A"
+                    else:
+                        # Calculate total, handling negative values
+                        total = combined_df[col].sum()
+
+                        # For percentage calculation, handle edge cases
+                        if total == 0:
+                            pct_display = "0.0%"
+                        elif total < 0 and val < 0:
+                            # Both negative - show positive percentage
+                            pct = abs(val / total * 100)
+                            pct_display = f"{pct:.1f}%"
+                        elif (total > 0 and val >= 0) or (total < 0 and val <= 0):
+                            pct = abs(val / total * 100) if total != 0 else 0
+                            pct_display = f"{pct:.1f}%"
+                        else:
+                            # Mixed signs - contribution doesn't make sense
+                            pct_display = "N/A"
+
+                        # Calculate rank (higher is better for positive metrics, lower is better for negative)
+                        # For CA/Lead, Profit/Lead - these can be negative
+                        if "Lead" in col or "Ratio" in col:
+                            # Higher is better
+                            rank = (combined_df[col].dropna() > val).sum() + 1
+                        else:
+                            rank = (combined_df[col].dropna() > val).sum() + 1
+                        rank_display = f"#{rank}"
+
+                        # Format value display
+                        if abs(val) >= 1000:
+                            val_display = f"{val:,.0f}"
+                        elif abs(val) >= 1:
+                            val_display = f"{val:,.2f}"
+                        else:
+                            val_display = f"{val:,.2f}"
+
                     color = CHART_COLORS.get(col, CHART_COLORS["primary"])
 
                     st.markdown(f"""
@@ -1284,9 +1383,9 @@ def render_charts_tab(
                         border-radius: 4px;
                     ">
                         <div style="font-weight: 600; color: {color};">{col}</div>
-                        <div style="font-size: 20px; font-weight: 700;">{val:,.2f}</div>
+                        <div style="font-size: 20px; font-weight: 700;">{val_display}</div>
                         <div style="font-size: 12px; color: #6B7280;">
-                            {pct:.1f}% du total | Rang #{rank} sur {len(combined_df)}
+                            {pct_display} du total | Rang {rank_display} sur {len(combined_df)}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)

@@ -16,6 +16,7 @@ from src.app.utils.navigation import render_stepper, render_breadcrumb
 from src.app.utils.board_utils import sort_and_filter_boards, detect_board_type_from_name, load_boards_async
 from src.app.utils.date_utils import detect_date_from_filename
 from src.app.advisor.management import render_advisor_management_tab
+from src.app.column_conversion.mode import render_column_conversion_mode
 
 
 def render_stage_1() -> None:
@@ -30,13 +31,16 @@ def render_stage_1() -> None:
         return
 
     # Tabs for different workflows
-    tab1, tab2 = st.tabs(["Extraction PDF", "Gestion Conseillers"])
+    tab1, tab2, tab3 = st.tabs(["Extraction PDF", "Gestion Conseillers", "Conversion Colonne"])
 
     with tab1:
         render_pdf_extraction_tab()
 
     with tab2:
         render_advisor_management_tab()
+
+    with tab3:
+        render_column_conversion_mode()
 
 
 def render_pdf_extraction_tab() -> None:
