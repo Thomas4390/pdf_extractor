@@ -33,7 +33,9 @@ CHART_COLORS = {
     "Win": "#059669",              # Dark Green
     "Middle": "#F59E0B",           # Amber
     "Loss": "#DC2626",             # Dark Red
-    "N/A": "#9CA3AF",              # Gray for no data
+    "New": "#3B82F6",              # Blue for new advisors
+    "Past": "#6B7280",             # Gray for past advisors
+    "N/A": "#9CA3AF",              # Gray for no data (legacy)
 }
 
 # Gradient color scales for heatmaps and continuous data
@@ -881,8 +883,8 @@ def render_profitability_distribution_chart(
             (df_filtered["Dépenses par Conseiller"].notna()) &
             (df_filtered["Dépenses par Conseiller"] != 0)
         ]
-    # Also filter out N/A status
-    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+    # Filter to only Active advisors with Win/Middle/Loss status (exclude New/Past)
+    df_filtered = df_filtered[df_filtered["Profitable"].isin(["Win", "Middle", "Loss"])]
 
     if df_filtered.empty:
         st.info("Aucun conseiller avec des données de dépenses valides.")
@@ -963,8 +965,8 @@ def render_profitability_by_advisor_chart(
             (df_filtered["Dépenses par Conseiller"].notna()) &
             (df_filtered["Dépenses par Conseiller"] != 0)
         ]
-    # Also filter out N/A status
-    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+    # Filter to only Active advisors with Win/Middle/Loss status (exclude New/Past)
+    df_filtered = df_filtered[df_filtered["Profitable"].isin(["Win", "Middle", "Loss"])]
 
     if df_filtered.empty:
         st.info("Aucun conseiller avec des données de dépenses valides.")
@@ -1041,8 +1043,8 @@ def render_profitability_metrics_chart(
             (df_filtered["Dépenses par Conseiller"].notna()) &
             (df_filtered["Dépenses par Conseiller"] != 0)
         ]
-    # Also filter out N/A status
-    df_filtered = df_filtered[df_filtered["Profitable"] != "N/A"]
+    # Filter to only Active advisors with Win/Middle/Loss status (exclude New/Past)
+    df_filtered = df_filtered[df_filtered["Profitable"].isin(["Win", "Middle", "Loss"])]
 
     if df_filtered.empty:
         st.info("Aucun conseiller avec des données de dépenses valides.")
@@ -1142,8 +1144,8 @@ def render_profitability_scatter_chart(
             (plot_df["Dépenses par Conseiller"] != 0)
         ]
     plot_df = plot_df[plot_df["Total Dépenses"] != 0]
-    # Filter out N/A status
-    plot_df = plot_df[plot_df["Profitable"] != "N/A"]
+    # Filter to only Active advisors with Win/Middle/Loss status (exclude New/Past)
+    plot_df = plot_df[plot_df["Profitable"].isin(["Win", "Middle", "Loss"])]
 
     if plot_df.empty:
         st.info("Aucune donnée avec des dépenses non nulles.")
@@ -1168,8 +1170,8 @@ def render_profitability_scatter_chart(
 
     fig = go.Figure()
 
-    # Include N/A status
-    for status in ["Loss", "Middle", "Win", "N/A"]:
+    # Include all status types (New and Past advisors shown separately)
+    for status in ["Loss", "Middle", "Win", "New", "Past"]:
         status_df = plot_df[plot_df["Profitable"] == status]
         if not status_df.empty:
             # Build hover text with more info
@@ -1186,15 +1188,23 @@ def render_profitability_scatter_chart(
                     text += f"Ratio Net: {row['Ratio Net']:.1f}%"
                 hover_text.append(text)
 
+            # Display names for legend
+            status_names = {
+                "Win": "Win",
+                "Middle": "Middle",
+                "Loss": "Loss",
+                "New": "Nouveau",
+                "Past": "Passé",
+            }
             fig.add_trace(go.Scatter(
                 x=status_df["Total Dépenses"].abs(),  # Show as positive for readability
                 y=status_df["Profit"],
                 mode="markers",
-                name=status if status != "N/A" else "Sans données",
+                name=status_names.get(status, status),
                 marker=dict(
                     size=status_df["Size"],
                     color=color_map.get(status, "#888"),
-                    opacity=0.8 if status != "N/A" else 0.5,
+                    opacity=0.8 if status in ["Win", "Middle", "Loss"] else 0.5,
                     line=dict(width=1, color="white"),
                 ),
                 text=status_df["Conseiller"],
@@ -1327,7 +1337,7 @@ def render_charts_tab(
                 (summary_df["Dépenses par Conseiller"].notna()) &
                 (summary_df["Dépenses par Conseiller"] != 0)
             ]
-        summary_df = summary_df[summary_df["Profitable"] != "N/A"]
+        summary_df = summary_df[summary_df["Profitable"].isin(["Win", "Middle", "Loss"])]
 
         if not summary_df.empty:
             status_summary = summary_df.groupby("Profitable").agg({

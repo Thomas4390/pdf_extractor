@@ -441,17 +441,18 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     - Profit/Lead = ROUND(Profit / Leads, 2)
     - Ratio Brut = ROUND((AE CA / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
     - Ratio Net = ROUND((Profit / -(Coût + Bonus + Dépenses par Conseiller)) * 100, 2)
-    - Profitable = Win/Middle/Loss based on Ratio Net
-
-    IMPORTANT: When "Dépenses par Conseiller" is null/zero, the advisor has no expense
-    data and profitability cannot be accurately calculated. In this case:
-    - Ratio Brut and Ratio Net will be 0
-    - Profitable status will be "N/A" (no data)
+    - Profitable = Based on Advisor_Status and Ratio Net:
+        - "New" if Advisor_Status is "New" (first month advisor)
+        - "Past" if Advisor_Status is "Past" (advisor no longer active)
+        - "Win" if Ratio Net > 99 (for Active advisors)
+        - "Middle" if 20 <= Ratio Net <= 99 (for Active advisors)
+        - "Loss" if Ratio Net < 20 (for Active advisors)
 
     Uses vectorized NumPy operations for performance.
 
     Args:
         df: DataFrame with columns: AE CA, Coût, Dépenses par Conseiller, Leads, Bonus, Récompenses
+            Optionally includes Advisor_Status for status-based Profitable calculation
 
     Returns:
         DataFrame with additional calculated columns
@@ -531,19 +532,37 @@ def calculate_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 0.0
             )
 
-    # Calculate Profitable status based on Ratio Net (vectorized with np.select)
-    # Loss: Ratio Net < 20
-    # Middle: 20 <= Ratio Net <= 99
-    # Win: Ratio Net > 99
-    # N/A: No expense data (Dépenses par Conseiller = 0)
+    # Calculate Profitable status based on Advisor_Status and Ratio Net
+    # Priority order:
+    # 1. If Advisor_Status is "New" → Profitable = "New"
+    # 2. If Advisor_Status is "Past" → Profitable = "Past"
+    # 3. If Advisor_Status is "Active" → Calculate based on Ratio Net:
+    #    - Win: Ratio Net > 99
+    #    - Middle: 20 <= Ratio Net <= 99
+    #    - Loss: Ratio Net < 20
     if "Ratio Net" in df.columns:
-        conditions = [
-            ~has_expense_data,  # No expense data
-            df["Ratio Net"] > 99,
-            df["Ratio Net"] >= 20,
-        ]
-        choices = ["N/A", "Win", "Middle"]
-        df["Profitable"] = np.select(conditions, choices, default="Loss")
+        # Check if Advisor_Status column exists
+        has_advisor_status = "Advisor_Status" in df.columns
+
+        if has_advisor_status:
+            # Use database status to determine Profitable for New/Past advisors
+            conditions = [
+                df["Advisor_Status"] == "New",
+                df["Advisor_Status"] == "Past",
+                df["Ratio Net"] > 99,
+                df["Ratio Net"] >= 20,
+            ]
+            choices = ["New", "Past", "Win", "Middle"]
+            df["Profitable"] = np.select(conditions, choices, default="Loss")
+        else:
+            # Fallback: use old logic if Advisor_Status not available
+            conditions = [
+                ~has_expense_data,
+                df["Ratio Net"] > 99,
+                df["Ratio Net"] >= 20,
+            ]
+            choices = ["N/A", "Win", "Middle"]
+            df["Profitable"] = np.select(conditions, choices, default="Loss")
 
     return df
 
