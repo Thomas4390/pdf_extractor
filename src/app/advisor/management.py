@@ -38,10 +38,13 @@ def render_advisor_management_tab() -> None:
 
     # Check if Google Sheets is configured
     if not matcher.is_configured:
+        error_detail = matcher.configuration_error or "Unknown error"
         st.warning(f"""
         ⚠️ **Google Sheets non configuré**
 
         La gestion des conseillers nécessite une connexion à Google Sheets.
+
+        **Erreur:** `{error_detail}`
 
         **Pour configurer:**
         1. Créez un projet Google Cloud et activez l'API Sheets
@@ -60,6 +63,16 @@ def render_advisor_management_tab() -> None:
 
         *La normalisation des noms de conseillers sera désactivée.*
         """)
+
+        # Retry button
+        if st.button("🔄 Réessayer la connexion", type="primary"):
+            # Force reset all singletons
+            from src.utils import advisor_matcher as am_module
+            from src.utils.advisor_matcher import AdvisorMatcher
+            am_module._matcher_instance = None
+            AdvisorMatcher._instance = None
+            st.session_state.advisor_matcher = None
+            st.rerun()
         return
 
     st.info("""

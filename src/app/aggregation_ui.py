@@ -461,7 +461,7 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
 
     # Summary stats
     advisor_count = len(combined_df)
-    categorical_cols = ["Conseiller", "Profitable"]
+    categorical_cols = {"Conseiller", "Profitable", "Advisor_Status"}
     numeric_cols = [col for col in combined_df.columns if col not in categorical_cols]
 
     # Priority metrics to show first
@@ -592,7 +592,7 @@ def render_editable_preview(
 
     # Configure column display
     # Exclude categorical columns from numeric treatment
-    categorical_cols = ["Conseiller", "Profitable"]
+    categorical_cols = {"Conseiller", "Profitable", "Advisor_Status"}
     numeric_cols = [col for col in combined_df.columns if col not in categorical_cols]
 
     column_config = {
@@ -608,6 +608,14 @@ def render_editable_preview(
         column_config["Profitable"] = st.column_config.TextColumn(
             "Profitable",
             help="Statut de profitabilité",
+            disabled=True,
+        )
+
+    # Add Advisor_Status as a text column if present
+    if "Advisor_Status" in combined_df.columns:
+        column_config["Advisor_Status"] = st.column_config.TextColumn(
+            "Advisor_Status",
+            help="Statut du conseiller (Active/New/Inactive)",
             disabled=True,
         )
 

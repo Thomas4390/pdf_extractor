@@ -70,8 +70,10 @@ def _add_advisor_status(df: pd.DataFrame) -> pd.DataFrame:
         df["Advisor_Status"] = df["Conseiller"].apply(get_status)
         return df
 
-    except Exception:
-        # If anything fails, default to "Active"
+    except Exception as e:
+        # If anything fails, log the error and default to "Active"
+        import logging
+        logging.warning(f"Failed to add advisor status: {e}")
         df["Advisor_Status"] = "Active"
         return df
 

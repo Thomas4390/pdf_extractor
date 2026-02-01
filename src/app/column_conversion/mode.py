@@ -52,11 +52,29 @@ def render_column_conversion_mode() -> None:
 
 
 def _render_board_selector() -> None:
-    """Render the board selection section."""
+    """Render the board selection section with keyword search."""
+    from src.app.utils.board_utils import sort_and_filter_boards
+
     st.subheader("1. Sélectionner le Board")
 
     boards = st.session_state.monday_boards or []
-    board_options = {f"{b['name']} (ID: {b['id']})": int(b['id']) for b in boards}
+
+    # Search filter
+    search = st.text_input(
+        "🔍 Rechercher un board",
+        placeholder="Filtrer par nom...",
+        key="conv_search_board"
+    )
+
+    # Filter and sort boards
+    filtered_boards = sort_and_filter_boards(boards, search)
+
+    if not filtered_boards:
+        st.warning("Aucun board trouvé avec ce filtre.")
+        return
+
+    # Build options
+    board_options = {b['name']: int(b['id']) for b in filtered_boards}
 
     # Find current selection in options
     current_board_name = None
@@ -68,12 +86,12 @@ def _render_board_selector() -> None:
 
     selected = st.selectbox(
         "Board Monday.com",
-        options=["-- Sélectionner un board --"] + list(board_options.keys()),
-        index=0 if current_board_name is None else list(board_options.keys()).index(current_board_name) + 1,
+        options=list(board_options.keys()),
+        index=list(board_options.keys()).index(current_board_name) if current_board_name else 0,
         key="conv_board_select"
     )
 
-    if selected and selected != "-- Sélectionner un board --":
+    if selected:
         new_board_id = board_options[selected]
         if new_board_id != st.session_state.conv_board_id:
             st.session_state.conv_board_id = new_board_id

@@ -383,7 +383,10 @@ def render_pareto_chart(
     # Calculate cumulative percentage
     total = plot_df[value_column].sum()
     plot_df["cumulative"] = plot_df[value_column].cumsum()
-    plot_df["cumulative_pct"] = (plot_df["cumulative"] / total * 100) if total > 0 else 0
+    if total > 0:
+        plot_df["cumulative_pct"] = plot_df["cumulative"] / total * 100
+    else:
+        plot_df["cumulative_pct"] = 0.0  # Assign scalar, pandas will broadcast to all rows
 
     # Find 80% threshold
     threshold_idx = (plot_df["cumulative_pct"] >= 80).idxmax() if (plot_df["cumulative_pct"] >= 80).any() else len(plot_df) - 1
@@ -1118,7 +1121,7 @@ def render_charts_tab(
         return
 
     # Get numeric columns (metrics) - exclude categorical columns
-    exclude_cols = ["Conseiller", "Profitable"]
+    exclude_cols = {"Conseiller", "Profitable", "Advisor_Status"}
     metric_columns = [col for col in combined_df.columns if col not in exclude_cols]
 
     if not metric_columns:

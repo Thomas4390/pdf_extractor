@@ -87,8 +87,10 @@ def get_gcp_credentials():
             if 'gcp_service_account' in st.secrets:
                 creds_dict = dict(st.secrets['gcp_service_account'])
                 return Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        except Exception:
-            pass
+        except Exception as e:
+            # Store error for debugging
+            import logging
+            logging.warning(f"Failed to load GCP credentials from Streamlit secrets: {e}")
 
     # Fallback to file-based credentials
     credentials_file = get_secret('GOOGLE_SHEETS_CREDENTIALS_FILE')
@@ -231,10 +233,12 @@ class AdvisorMatcher:
         self._init_gsheets()
 
         if not self._use_gsheets:
-            self._gsheets_error = (
-                "Google Sheets non configuré. "
-                "Configurez GOOGLE_SHEETS_SPREADSHEET_ID et les credentials GCP."
-            )
+            # Only set generic error if no specific error was set in _init_gsheets
+            if self._gsheets_error is None:
+                self._gsheets_error = (
+                    "Google Sheets non configuré. "
+                    "Configurez GOOGLE_SHEETS_SPREADSHEET_ID et les credentials GCP."
+                )
             if require_gsheets:
                 raise RuntimeError(self._gsheets_error)
             # Continue without Google Sheets - matcher will return None for all matches
@@ -246,15 +250,18 @@ class AdvisorMatcher:
     def _init_gsheets(self):
         """Initialize Google Sheets connection."""
         if not GSHEETS_AVAILABLE:
+            self._gsheets_error = "gspread library not installed"
             return
 
         spreadsheet_id = get_secret('GOOGLE_SHEETS_SPREADSHEET_ID')
         if not spreadsheet_id:
+            self._gsheets_error = "GOOGLE_SHEETS_SPREADSHEET_ID not configured"
             return
 
         # Get credentials (from Streamlit secrets or file)
         credentials = get_gcp_credentials()
         if not credentials:
+            self._gsheets_error = "GCP credentials not found (check gcp_service_account in secrets)"
             return
 
         try:
@@ -264,12 +271,16 @@ class AdvisorMatcher:
             # Get or create the Advisors worksheet
             try:
                 self._worksheet = spreadsheet.worksheet(self.GSHEETS_WORKSHEET_NAME)
-                # Check if status column exists, add it if not
-                headers = self._worksheet.row_values(1)
-                if 'status' not in headers:
-                    # Add status column header
-                    self._worksheet.update_cell(1, 5, 'status')
-                    self._worksheet.format('E1', {'textFormat': {'bold': True}})
+                # Check if status column exists, add it if not (non-critical)
+                try:
+                    headers = self._worksheet.row_values(1)
+                    if 'status' not in headers:
+                        # Add status column header
+                        self._worksheet.update_cell(1, 5, 'status')
+                        self._worksheet.format('E1', {'textFormat': {'bold': True}})
+                except Exception:
+                    # Status column update is non-critical, continue without it
+                    pass
             except gspread.WorksheetNotFound:
                 # Create the worksheet with headers (including status)
                 self._worksheet = spreadsheet.add_worksheet(
@@ -280,8 +291,11 @@ class AdvisorMatcher:
                 self._worksheet.format('A1:E1', {'textFormat': {'bold': True}})
 
             self._use_gsheets = True
+            self._gsheets_error = None  # Clear any previous error
         except Exception as e:
-            print(f"Warning: Could not initialize Google Sheets client: {e}")
+            import logging
+            logging.warning(f"Could not initialize Google Sheets client: {e}")
+            self._gsheets_error = f"Google Sheets connection failed: {e}"
             self._use_gsheets = False
 
     @property
