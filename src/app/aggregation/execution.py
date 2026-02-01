@@ -149,9 +149,6 @@ def filter_and_aggregate_data() -> None:
     filtering/aggregation. It's designed to be fast for real-time period changes.
     Supports both legacy DatePeriod and new FlexiblePeriod.
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     # Check for flexible period first (new approach)
     flexible_period = st.session_state.get("agg_flexible_period")
     legacy_period = st.session_state.agg_period
@@ -160,14 +157,7 @@ def filter_and_aggregate_data() -> None:
     # Clear any stale edited data when period changes
     st.session_state.agg_edited_data = None
 
-    # Log period info for debugging
-    if flexible_period:
-        start_date, end_date = flexible_period.get_date_range()
-        logger.info(f"[AGGREGATION] Filtering for period: {flexible_period.display_name} ({start_date} to {end_date})")
-        print(f"[AGGREGATION] Filtering for period: {flexible_period.display_name} ({start_date} to {end_date})")
-
     if not source_data:
-        logger.warning("[AGGREGATION] No source data available")
         return
 
     filtered_data = {}
@@ -180,10 +170,6 @@ def filter_and_aggregate_data() -> None:
             filtered_data[source_key] = pd.DataFrame()
             aggregated_data[source_key] = pd.DataFrame()
             continue
-
-        # Log source data info
-        logger.info(f"[AGGREGATION] Processing {config.display_name}: {len(df)} total rows")
-        print(f"[AGGREGATION] Processing {config.display_name}: {len(df)} total rows")
 
         # Filter by date using flexible period if available, otherwise legacy
         if flexible_period is not None:
@@ -198,24 +184,6 @@ def filter_and_aggregate_data() -> None:
                 period=legacy_period,
                 date_column=config.date_column,
             )
-
-        # Log filtered data info
-        logger.info(f"[AGGREGATION] {config.display_name} after filter: {len(filtered_df)} rows")
-        print(f"[AGGREGATION] {config.display_name} after filter: {len(filtered_df)} rows")
-
-        # Debug: Check for Ayoub's data specifically
-        if not filtered_df.empty:
-            advisor_col = config.advisor_column
-            value_col = config.aggregate_column
-            if advisor_col in filtered_df.columns:
-                ayoub_mask = filtered_df[advisor_col].astype(str).str.lower().str.contains('ayoub', na=False)
-                if ayoub_mask.any():
-                    ayoub_data = filtered_df[ayoub_mask]
-                    print(f"[DEBUG AYOUB] Found {len(ayoub_data)} rows for Ayoub in {config.display_name}")
-                    if value_col in ayoub_data.columns:
-                        print(f"[DEBUG AYOUB] Values: {ayoub_data[value_col].tolist()}")
-                    if config.date_column in ayoub_data.columns:
-                        print(f"[DEBUG AYOUB] Dates: {ayoub_data[config.date_column].tolist()}")
 
         filtered_data[source_key] = filtered_df
 
@@ -242,26 +210,6 @@ def filter_and_aggregate_data() -> None:
     # Combine aggregations
     combined_df = combine_aggregations(aggregated_data)
 
-    # Log combined data info
-    if not combined_df.empty:
-        logger.info(f"[AGGREGATION] Combined data: {len(combined_df)} advisors")
-        print(f"[AGGREGATION] Combined data: {len(combined_df)} advisors")
-        # Log sample values for debugging
-        for col in ["Collected", "AE CA", "PA Vendues"]:
-            if col in combined_df.columns:
-                total = combined_df[col].sum()
-                logger.info(f"[AGGREGATION] Total {col}: {total:,.2f}")
-                print(f"[AGGREGATION] Total {col}: {total:,.2f}")
-
-        # Debug: Check Ayoub's combined data
-        if "Conseiller" in combined_df.columns:
-            ayoub_mask = combined_df["Conseiller"].astype(str).str.lower().str.contains('ayoub', na=False)
-            if ayoub_mask.any():
-                ayoub_row = combined_df[ayoub_mask]
-                print(f"[DEBUG AYOUB] Combined data for Ayoub:")
-                for col in ayoub_row.columns:
-                    print(f"[DEBUG AYOUB]   {col}: {ayoub_row[col].values}")
-
     # Add advisor status from advisor_matcher
     if not combined_df.empty and "Conseiller" in combined_df.columns:
         combined_df = _add_advisor_status(combined_df)
@@ -271,9 +219,6 @@ def filter_and_aggregate_data() -> None:
     # Reset metrics loaded flag when period changes
     st.session_state.agg_metrics_loaded = False
     st.session_state.agg_metrics_group = ""
-
-    logger.info("[AGGREGATION] Filter and aggregate complete, metrics reset")
-    print("[AGGREGATION] Filter and aggregate complete, metrics reset")
 
 
 def load_and_aggregate_data() -> None:
@@ -381,9 +326,6 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
     Returns:
         True if metrics were loaded, False if using default values
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     flexible_period = st.session_state.get("agg_flexible_period")
 
     if flexible_period is None:
@@ -404,10 +346,6 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
 
     # Get the group name for the selected month
     group_name = flexible_period.get_group_name()
-
-    # Log metrics loading for debugging
-    logger.info(f"[METRICS] Loading metrics from group: {group_name}")
-    print(f"[METRICS] Loading metrics from group: {group_name}")
 
     # Load metrics from the configured board
     metrics_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)

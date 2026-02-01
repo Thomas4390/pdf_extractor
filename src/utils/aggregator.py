@@ -422,7 +422,7 @@ class MetricsConfig:
 # Default metrics board configuration
 # The metrics board "Data" has groups named by month (e.g., "Janvier 2026")
 METRICS_BOARD_CONFIG = MetricsConfig(
-    board_id=18394590851,  # Monday.com "2026 Copie de Data" board
+    board_id=9142121714,  # Monday.com "Data" board
 )
 
 
@@ -583,6 +583,9 @@ def merge_metrics_with_aggregation(
     result = aggregated_df.copy()
     metrics_df = metrics_df.copy()
 
+    # Get columns that already exist in result to avoid creating duplicates (_x, _y)
+    existing_result_cols = set(result.columns)
+
     if use_fuzzy_matching:
         # Normalize advisor names in both DataFrames for better matching
         # First, normalize aggregated_df names (should already be normalized)
@@ -605,8 +608,19 @@ def merge_metrics_with_aggregation(
             axis=1
         )
 
-        # Merge on normalized names
-        metrics_cols_to_merge = [c for c in metrics_df.columns if c not in [advisor_column, "_normalized_advisor"]]
+        # Merge on normalized names - only include columns that don't already exist in result
+        # This prevents creating duplicate columns with _x and _y suffixes
+        metrics_cols_to_merge = [
+            c for c in metrics_df.columns
+            if c not in [advisor_column, "_normalized_advisor"]
+            and c not in existing_result_cols
+        ]
+
+        if not metrics_cols_to_merge:
+            # All metrics columns already exist in result, nothing to merge
+            result = result.drop(columns=["_normalized_advisor"], errors="ignore")
+            return result
+
         metrics_subset = metrics_df[["_normalized_advisor"] + metrics_cols_to_merge]
 
         result = result.merge(
@@ -618,9 +632,18 @@ def merge_metrics_with_aggregation(
         # Clean up temporary column
         result = result.drop(columns=["_normalized_advisor"], errors="ignore")
     else:
-        # Standard exact merge
+        # Standard exact merge - only include columns that don't already exist
+        metrics_cols_to_merge = [
+            c for c in metrics_df.columns
+            if c != advisor_column and c not in existing_result_cols
+        ]
+
+        if not metrics_cols_to_merge:
+            return result
+
+        metrics_subset = metrics_df[[advisor_column] + metrics_cols_to_merge]
         result = result.merge(
-            metrics_df,
+            metrics_subset,
             on=advisor_column,
             how="left",
         )
@@ -864,28 +887,10 @@ def aggregate_by_advisor(
     # Make a copy
     df = df.copy()
 
-    # Debug: Check Ayoub's data before normalization
-    if advisor_column in df.columns:
-        ayoub_mask = df[advisor_column].astype(str).str.lower().str.contains('ayoub', na=False)
-        if ayoub_mask.any():
-            ayoub_before = df[ayoub_mask]
-            print(f"[DEBUG AYOUB] Before normalization: {len(ayoub_before)} rows")
-            print(f"[DEBUG AYOUB] Original names: {ayoub_before[advisor_column].unique().tolist()}")
-            print(f"[DEBUG AYOUB] Values before agg: {ayoub_before[value_column].tolist()}")
-
     # Normalize advisor names before aggregation (also filters unknown advisors)
     unknown_names = []
     if normalize_names:
         df, unknown_names = normalize_advisor_column(df, advisor_column, filter_unknown=True)
-
-        # Debug: Check Ayoub's data after normalization
-        if advisor_column in df.columns:
-            ayoub_mask = df[advisor_column].astype(str).str.lower().str.contains('ayoub', na=False)
-            if ayoub_mask.any():
-                ayoub_after = df[ayoub_mask]
-                print(f"[DEBUG AYOUB] After normalization: {len(ayoub_after)} rows")
-                print(f"[DEBUG AYOUB] Normalized names: {ayoub_after[advisor_column].unique().tolist()}")
-                print(f"[DEBUG AYOUB] Values after norm: {ayoub_after[value_column].tolist()}")
 
     # Convert value column to numeric
     df[value_column] = pd.to_numeric(df[value_column], errors="coerce").fillna(0)
