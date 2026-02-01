@@ -858,7 +858,7 @@ def render_profitability_by_advisor_chart(
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
         height=max(550, len(df_sorted) * 50),  # More space per advisor
-        margin=dict(l=40, r=140, t=80, b=60),
+        margin=dict(l=120, r=180, t=80, b=60),  # Increased left and right margins
         font=dict(family="Inter, sans-serif"),
         xaxis=dict(
             title="Ratio Net (%)",
