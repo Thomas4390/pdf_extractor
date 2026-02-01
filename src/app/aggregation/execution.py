@@ -22,53 +22,42 @@ from src.utils.aggregator import (
     FlexiblePeriod,
     PeriodType,
 )
+from src.utils.advisor_status import (
+    AdvisorStatusCalculator,
+    load_advisor_history,
+)
 from src.app.utils.async_helpers import run_async
 
 
-def _add_advisor_status(df: pd.DataFrame) -> pd.DataFrame:
+def _add_advisor_status(df: pd.DataFrame, period_month: str) -> pd.DataFrame:
     """
-    Add advisor status (Active/New/Inactive) from the advisor matcher.
+    Add dynamically calculated advisor status based on Data board history.
+
+    Status is calculated relative to the period being viewed:
+    - "New": First month the advisor appears in the Data board
+    - "Active": Advisor has been present for more than 1 month
+    - "Past": Manually set override (stored in advisor settings)
 
     Args:
         df: DataFrame with 'Conseiller' column
+        period_month: The month being viewed (e.g., "Janvier 2026")
 
     Returns:
         DataFrame with 'Advisor_Status' column added
     """
     try:
-        from src.utils.advisor_matcher import get_advisor_matcher
-        matcher = get_advisor_matcher()
-
-        if not matcher.is_configured:
-            # No advisor data available, default to "Active"
+        # Check if history has been loaded
+        if not AdvisorStatusCalculator._cache_loaded:
+            # History not loaded yet, default to "Active"
             df["Advisor_Status"] = "Active"
             return df
 
-        advisors = matcher.get_all_advisors()
-
-        # Create a mapping of advisor name variations to status
-        status_map = {}
-        for advisor in advisors:
-            # Map full name (primary format)
-            status_map[advisor.full_name] = advisor.status
-            # Also map first name only
-            status_map[advisor.first_name] = advisor.status
-            # Map compact format for backward compatibility
-            status_map[advisor.display_name_compact] = advisor.status
-
-        # Apply status to each advisor in the DataFrame
-        def get_status(name):
-            if name in status_map:
-                return status_map[name]
-            # Try matching via the matcher (returns full name)
-            matched = matcher.match_full_name(name)
-            if matched and matched in status_map:
-                return status_map[matched]
-            # Default to "Active" if not found
-            return "Active"
-
-        df["Advisor_Status"] = df["Conseiller"].apply(get_status)
-        return df
+        # Use the dynamic status calculator
+        return AdvisorStatusCalculator.add_status_to_dataframe(
+            df=df,
+            period_month=period_month,
+            advisor_column="Conseiller",
+        )
 
     except Exception as e:
         # If anything fails, log the error and default to "Active"
@@ -84,6 +73,8 @@ def load_source_data() -> bool:
 
     This only loads the raw data from Monday.com. Filtering and aggregation
     are done separately to allow real-time period changes without reloading.
+
+    Also loads advisor history from the Data board for dynamic status calculation.
 
     Returns:
         True if data was loaded successfully, False otherwise.
@@ -102,6 +93,16 @@ def load_source_data() -> bool:
     # Progress bar for loading
     progress_bar = st.progress(0)
     status_text = st.empty()
+
+    # Load advisor history from the Data board for dynamic status calculation
+    status_text.text("📊 Chargement de l'historique des conseillers...")
+    try:
+        data_board_id = METRICS_BOARD_CONFIG.board_id
+        load_advisor_history(client, data_board_id)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load advisor history: {e}")
+        # Continue anyway - status will default to "Active"
 
     success = True
     for idx, (source_key, board_id) in enumerate(selected_sources.items()):
@@ -210,9 +211,15 @@ def filter_and_aggregate_data() -> None:
     # Combine aggregations
     combined_df = combine_aggregations(aggregated_data)
 
-    # Add advisor status from advisor_matcher
+    # Add dynamically calculated advisor status
     if not combined_df.empty and "Conseiller" in combined_df.columns:
-        combined_df = _add_advisor_status(combined_df)
+        # Get the period month for status calculation
+        if flexible_period is not None:
+            period_month = flexible_period.get_group_name()
+        else:
+            # Legacy period - use group name format
+            period_month = get_group_name_for_period(legacy_period)
+        combined_df = _add_advisor_status(combined_df, period_month)
 
     st.session_state.agg_combined_data = combined_df
 
