@@ -170,40 +170,64 @@ def render_advisor_bar_chart(
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Sort by value descending
-    plot_df = df.copy()
+    # Filter out NaN values and sort
+    plot_df = df[df[value_column].notna()].copy()
     plot_df = plot_df.sort_values(value_column, ascending=horizontal)
 
-    # Get color
-    bar_color = color or CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    if plot_df.empty:
+        st.info(f"Aucune donnée pour {value_column}")
+        return
 
-    # Create chart
-    if horizontal:
-        fig = px.bar(
-            plot_df,
-            x=value_column,
-            y="Conseiller",
-            orientation="h",
-            title=title or f"{value_column} par conseiller",
-            color_discrete_sequence=[bar_color],
-        )
-    else:
-        fig = px.bar(
-            plot_df,
-            x="Conseiller",
-            y=value_column,
-            title=title or f"{value_column} par conseiller",
-            color_discrete_sequence=[bar_color],
-        )
+    # Get base color and parse to RGB for gradient
+    bar_color = color or CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    r = int(bar_color[1:3], 16)
+    g = int(bar_color[3:5], 16)
+    b = int(bar_color[5:7], 16)
+
+    # Generate gradient colors based on value
+    max_val = plot_df[value_column].max()
+    min_val = plot_df[value_column].min()
+    val_range = max_val - min_val if max_val != min_val else 1
+
+    colors = []
+    for val in plot_df[value_column]:
+        intensity = (val - min_val) / val_range if val_range > 0 else 1
+        opacity = 0.5 + (intensity * 0.5)
+        colors.append(f"rgba({r}, {g}, {b}, {opacity})")
 
     # Calculate axis range for proper bar proportions
-    max_val = plot_df[value_column].max()
     range_max = max_val * 1.15 if max_val > 0 else 1  # 15% padding for labels
+
+    # Create chart with go.Figure for more control
+    fig = go.Figure()
+
+    if horizontal:
+        fig.add_trace(go.Bar(
+            x=plot_df[value_column],
+            y=plot_df["Conseiller"],
+            orientation="h",
+            marker=dict(color=colors),
+            text=plot_df[value_column].apply(lambda x: f"{x:,.0f}"),
+            textposition="auto",
+            textfont=dict(size=11),
+            hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
+        ))
+    else:
+        fig.add_trace(go.Bar(
+            x=plot_df["Conseiller"],
+            y=plot_df[value_column],
+            marker=dict(color=colors),
+            text=plot_df[value_column].apply(lambda x: f"{x:,.0f}"),
+            textposition="auto",
+            textfont=dict(size=11),
+            hovertemplate="<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
+        ))
 
     # Style the chart
     fig.update_layout(
-        height=max(CHART_HEIGHT, len(plot_df) * 25) if horizontal else CHART_HEIGHT,
-        margin=dict(l=20, r=20, t=50, b=20),
+        title=title or f"{value_column} par conseiller",
+        height=max(CHART_HEIGHT, len(plot_df) * 30) if horizontal else CHART_HEIGHT,
+        margin=dict(l=120, r=80, t=50, b=20) if horizontal else dict(l=20, r=20, t=50, b=80),
         xaxis_title=value_column if horizontal else "Conseiller",
         yaxis_title="Conseiller" if horizontal else value_column,
         showlegend=False,
@@ -211,17 +235,9 @@ def render_advisor_bar_chart(
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
         # Explicit axis range from 0 for proper bar proportions
-        xaxis=dict(range=[0, range_max]) if horizontal else {},
-        yaxis=dict(range=[0, range_max]) if not horizontal else {},
-    )
-
-    # Enhanced tooltips
-    fig.update_traces(
-        texttemplate="%{x:,.0f}" if horizontal else "%{y:,.0f}",
-        textposition="outside",
-        textfont_size=10,
-        hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>" if horizontal else
-                      "<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
+        xaxis=dict(range=[0, range_max], zeroline=True) if horizontal else dict(tickangle=-45),
+        yaxis=dict(range=[0, range_max], zeroline=True) if not horizontal else {},
+        bargap=0.2,
     )
 
     st.plotly_chart(fig, width="stretch")
@@ -252,6 +268,9 @@ def render_stacked_comparison_chart(
 
     # Sort by total value (sum of all columns)
     plot_df = df.copy()
+    # Handle NaN values for sorting
+    for col in existing_cols:
+        plot_df[col] = plot_df[col].fillna(0)
     plot_df["_total"] = plot_df[existing_cols].sum(axis=1)
     plot_df = plot_df.sort_values("_total", ascending=True)
     plot_df = plot_df.drop(columns=["_total"])
@@ -260,7 +279,7 @@ def render_stacked_comparison_chart(
     fig = go.Figure()
 
     for col in existing_cols:
-        color = CHART_COLORS.get(col, None)
+        color = CHART_COLORS.get(col, CHART_COLORS["primary"])
         fig.add_trace(go.Bar(
             name=col,
             y=plot_df["Conseiller"],
@@ -268,23 +287,29 @@ def render_stacked_comparison_chart(
             orientation="h",
             marker_color=color,
             text=plot_df[col].apply(lambda x: f"{x:,.0f}"),
-            textposition="auto",
+            textposition="auto",  # Let Plotly decide best position
+            textfont=dict(size=11),
             hovertemplate="<b>%{y}</b><br>" + f"{col}: " + "%{x:,.0f}<extra></extra>",
         ))
 
     # Calculate x-axis range for proper bar proportions
     max_val = plot_df[existing_cols].max().max()
-    x_max = max_val * 1.15 if max_val > 0 else 1
+    x_max = max_val * 1.2 if max_val > 0 else 1
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=18)),
         barmode="group",
-        height=max(500, len(plot_df) * 45),
-        margin=dict(l=20, r=40, t=60, b=20),
+        height=max(500, len(plot_df) * 50),
+        margin=dict(l=140, r=80, t=60, b=20),  # Increased margins
         xaxis_title="Montant",
         yaxis_title="",
-        xaxis=dict(tickfont=dict(size=12), range=[0, x_max]),  # Explicit range from 0
-        yaxis=dict(tickfont=dict(size=13)),
+        xaxis=dict(
+            tickfont=dict(size=12),
+            range=[0, x_max],  # Explicit range from 0
+            zeroline=True,
+            zerolinecolor="rgba(0,0,0,0.2)",
+        ),
+        yaxis=dict(tickfont=dict(size=12)),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -296,10 +321,8 @@ def render_stacked_comparison_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", size=12),
+        bargap=0.2,
     )
-
-    # Larger text on bars
-    fig.update_traces(textfont_size=12)
 
     st.plotly_chart(fig, width="stretch")
 
@@ -330,23 +353,42 @@ def render_top_advisors_chart(
     if filter_new_advisors:
         plot_df = _filter_new_advisors(plot_df)
 
-    # Remove rows with NaN values for this column
+    # Remove rows with NaN values for this column but keep zeros
     plot_df = plot_df[plot_df[value_column].notna()]
+
+    # Also remove rows where value is 0 (no meaningful data)
+    plot_df = plot_df[plot_df[value_column] != 0]
 
     if plot_df.empty:
         st.info(f"Aucune donnée pour {value_column}")
         return
 
+    # Get actual number of advisors (may be less than requested top_n)
+    actual_n = min(top_n, len(plot_df))
+
     # Get top N and sort by value (ascending for horizontal bars = largest at top)
-    top_df = plot_df.nlargest(top_n, value_column)[["Conseiller", value_column]]
+    top_df = plot_df.nlargest(actual_n, value_column)[["Conseiller", value_column]].copy()
     top_df = top_df.sort_values(value_column, ascending=True)  # Ascending so largest is at top
 
-    # Create chart with single color (not gradient based on value)
-    color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    # Base color for gradient - parse hex to RGB
+    base_color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    r = int(base_color[1:3], 16)
+    g = int(base_color[3:5], 16)
+    b = int(base_color[5:7], 16)
 
-    # Calculate x-axis range: from 0 to max value + 15% padding for labels
+    # Create gradient colors based on value (lighter for lower, darker for higher)
     max_val = top_df[value_column].max()
-    x_max = max_val * 1.15 if max_val > 0 else 1
+    min_val = top_df[value_column].min()
+    val_range = max_val - min_val if max_val != min_val else 1
+
+    # Generate gradient colors with proper RGBA format
+    colors = []
+    for val in top_df[value_column]:
+        # Normalize value to 0-1 range
+        intensity = (val - min_val) / val_range if val_range > 0 else 1
+        # Create color with varying opacity (0.5 to 1.0)
+        opacity = 0.5 + (intensity * 0.5)
+        colors.append(f"rgba({r}, {g}, {b}, {opacity})")
 
     fig = go.Figure()
 
@@ -354,27 +396,40 @@ def render_top_advisors_chart(
         x=top_df[value_column],
         y=top_df["Conseiller"],
         orientation="h",
-        marker_color=color,
+        marker=dict(
+            color=colors,  # Use computed gradient colors
+        ),
         text=top_df[value_column].apply(lambda x: f"{x:,.0f}"),
-        textposition="outside",
+        textposition="auto",  # Let Plotly decide best position
+        textfont=dict(size=12),
         hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
     ))
 
+    # Ensure axis starts at 0 and has enough room for labels
+    x_max = max_val * 1.15 if max_val > 0 else 1
+
     fig.update_layout(
-        title=dict(text=title or f"Top {top_n} - {value_column}", font=dict(size=14)),
-        height=280,
-        margin=dict(l=20, r=80, t=50, b=20),
+        title=dict(text=title or f"Top {actual_n} - {value_column}", font=dict(size=14)),
+        height=60 + (actual_n * 55),  # Dynamic height based on number of bars
+        margin=dict(l=120, r=80, t=40, b=20),  # More margins for names and labels
         xaxis_title="",
         yaxis_title="",
         showlegend=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
-        # Explicit x-axis range from 0 to max for proper bar proportions
-        xaxis=dict(range=[0, x_max]),
+        xaxis=dict(
+            range=[0, x_max],  # Explicit range starting at 0
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.1)",
+            zeroline=True,
+            zerolinecolor="rgba(0,0,0,0.2)",
+        ),
+        yaxis=dict(
+            tickfont=dict(size=12),
+        ),
+        bargap=0.25,  # Space between bars
     )
-
-    fig.update_traces(cliponaxis=False)
 
     st.plotly_chart(fig, width="stretch")
 
@@ -403,13 +458,14 @@ def render_pareto_chart(
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Sort by value descending and remove NaN
+    # Sort by value descending and remove NaN and zeros
     plot_df = df[["Conseiller", value_column]].copy()
     plot_df = plot_df[plot_df[value_column].notna()]
+    plot_df = plot_df[plot_df[value_column] > 0]  # Pareto only makes sense for positive values
     plot_df = plot_df.sort_values(value_column, ascending=False).reset_index(drop=True)
 
     if plot_df.empty:
-        st.info(f"Aucune donnée pour {value_column}")
+        st.info(f"Aucune donnée positive pour {value_column}")
         return
 
     # Calculate cumulative percentage
@@ -423,13 +479,25 @@ def render_pareto_chart(
     # Find 80% threshold
     threshold_idx = (plot_df["cumulative_pct"] >= 80).idxmax() if (plot_df["cumulative_pct"] >= 80).any() else len(plot_df) - 1
 
-    # Color bars: those contributing to 80% in primary color, others in gray
-    colors = [CHART_COLORS.get(value_column, CHART_COLORS["primary"]) if i <= threshold_idx else "#D1D5DB"
-              for i in range(len(plot_df))]
+    # Base color for gradient - parse hex to RGB
+    base_color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    r = int(base_color[1:3], 16)
+    g = int(base_color[3:5], 16)
+    b = int(base_color[5:7], 16)
+
+    # Create gradient colors based on value rank
+    colors = []
+    max_val = plot_df[value_column].max()
+    for i, val in enumerate(plot_df[value_column]):
+        if i <= threshold_idx:
+            # Gradient for 80% contributors (darker for higher values)
+            intensity = val / max_val if max_val > 0 else 1
+            colors.append(f"rgba({r}, {g}, {b}, {0.5 + intensity * 0.5})")
+        else:
+            colors.append("rgba(209, 213, 219, 0.8)")  # Gray for others
 
     # Calculate y-axis range for proper bar proportions
-    max_val = plot_df[value_column].max()
-    y_max = max_val * 1.15 if max_val > 0 else 1
+    y_max = max_val * 1.25 if max_val > 0 else 1
 
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -444,7 +512,8 @@ def render_pareto_chart(
             name=value_column,
             marker_color=colors,
             text=[f"{x:,.0f}" for x in plot_df[value_column]],
-            textposition="outside",
+            textposition="auto",  # Let Plotly decide best position
+            textfont=dict(size=11),
             hovertemplate="<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
         ),
         secondary_y=False,
@@ -473,7 +542,7 @@ def render_pareto_chart(
     fig.update_layout(
         title=title or f"Analyse Pareto - {value_column}",
         height=500,
-        margin=dict(l=20, r=20, t=60, b=120),
+        margin=dict(l=80, r=80, t=60, b=120),  # Increased margins
         xaxis_tickangle=-45,
         xaxis=dict(
             type="category",
@@ -485,10 +554,11 @@ def render_pareto_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
+        bargap=0.2,
     )
 
     # Set y-axis to start at 0 for proper bar proportions
-    fig.update_yaxes(title_text=value_column, secondary_y=False, range=[0, y_max])
+    fig.update_yaxes(title_text=value_column, secondary_y=False, range=[0, y_max], zeroline=True)
     fig.update_yaxes(title_text="Cumul (%)", secondary_y=True, range=[0, 105])
 
     st.plotly_chart(fig, width="stretch")
@@ -618,24 +688,36 @@ def render_contribution_chart(
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Calculate contributions - filter out NaN values
+    # Calculate contributions - filter out NaN and zero values
     plot_df = df[["Conseiller", value_column]].copy()
     plot_df = plot_df[plot_df[value_column].notna()]
+    plot_df = plot_df[plot_df[value_column] > 0]  # Only positive contributions
 
     if plot_df.empty:
-        st.info(f"Aucune donnée pour {value_column}")
+        st.info(f"Aucune donnée positive pour {value_column}")
         return
 
     total = plot_df[value_column].sum()
     plot_df["contribution_pct"] = (plot_df[value_column] / total * 100) if total > 0 else 0
     plot_df = plot_df.sort_values("contribution_pct", ascending=True)
 
-    # Get color
+    # Get base color for gradient - parse hex to RGB
     bar_color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+    r = int(bar_color[1:3], 16)
+    g = int(bar_color[3:5], 16)
+    b = int(bar_color[5:7], 16)
 
     # Calculate x-axis range for proper proportions
     max_pct = plot_df["contribution_pct"].max()
-    x_max = max_pct * 1.2 if max_pct > 0 else 100  # 20% padding for labels
+    min_pct = plot_df["contribution_pct"].min()
+    pct_range = max_pct - min_pct if max_pct != min_pct else 1
+
+    # Generate gradient colors
+    colors = []
+    for pct in plot_df["contribution_pct"]:
+        intensity = (pct - min_pct) / pct_range if pct_range > 0 else 1
+        opacity = 0.5 + (intensity * 0.5)
+        colors.append(f"rgba({r}, {g}, {b}, {opacity})")
 
     fig = go.Figure()
 
@@ -644,29 +726,35 @@ def render_contribution_chart(
         x=plot_df["contribution_pct"],
         orientation="h",
         marker=dict(
-            color=plot_df["contribution_pct"],
-            colorscale=[[0, "#E5E7EB"], [1, bar_color]],
+            color=colors,  # Use computed gradient colors
         ),
-        text=plot_df.apply(lambda r: f"{r['contribution_pct']:.1f}% ({r[value_column]:,.0f})", axis=1),
-        textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Contribution: %{x:.1f}%<extra></extra>",
+        text=plot_df.apply(lambda r: f"{r['contribution_pct']:.1f}%", axis=1),
+        textposition="auto",  # Let Plotly decide best position
+        textfont=dict(size=11),
+        customdata=plot_df[value_column],
+        hovertemplate="<b>%{y}</b><br>Contribution: %{x:.1f}%<br>Valeur: %{customdata:,.0f}<extra></extra>",
     ))
 
     fig.update_layout(
         title=title or f"Contribution au {value_column}",
-        height=max(CHART_HEIGHT, len(plot_df) * 25),
-        margin=dict(l=20, r=120, t=50, b=20),
+        height=max(CHART_HEIGHT, len(plot_df) * 35),
+        margin=dict(l=140, r=80, t=50, b=20),  # Increased margins
         xaxis_title="Contribution (%)",
         yaxis_title="",
         showlegend=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
-        # Explicit x-axis range from 0 for proper bar proportions
-        xaxis=dict(range=[0, x_max]),
+        xaxis=dict(
+            range=[0, max_pct * 1.15],  # More padding for labels
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.1)",
+            zeroline=True,
+            zerolinecolor="rgba(0,0,0,0.2)",
+        ),
+        yaxis=dict(tickfont=dict(size=11)),
+        bargap=0.2,
     )
-
-    fig.update_traces(cliponaxis=False)
 
     st.plotly_chart(fig, width="stretch")
 
