@@ -196,6 +196,10 @@ def render_advisor_bar_chart(
             color_discrete_sequence=[bar_color],
         )
 
+    # Calculate axis range for proper bar proportions
+    max_val = plot_df[value_column].max()
+    range_max = max_val * 1.15 if max_val > 0 else 1  # 15% padding for labels
+
     # Style the chart
     fig.update_layout(
         height=max(CHART_HEIGHT, len(plot_df) * 25) if horizontal else CHART_HEIGHT,
@@ -206,9 +210,9 @@ def render_advisor_bar_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
-        # Ensure axis starts at 0 for proper bar proportions
-        xaxis=dict(rangemode="tozero") if horizontal else {},
-        yaxis=dict(rangemode="tozero") if not horizontal else {},
+        # Explicit axis range from 0 for proper bar proportions
+        xaxis=dict(range=[0, range_max]) if horizontal else {},
+        yaxis=dict(range=[0, range_max]) if not horizontal else {},
     )
 
     # Enhanced tooltips
@@ -268,6 +272,10 @@ def render_stacked_comparison_chart(
             hovertemplate="<b>%{y}</b><br>" + f"{col}: " + "%{x:,.0f}<extra></extra>",
         ))
 
+    # Calculate x-axis range for proper bar proportions
+    max_val = plot_df[existing_cols].max().max()
+    x_max = max_val * 1.15 if max_val > 0 else 1
+
     fig.update_layout(
         title=dict(text=title, font=dict(size=18)),
         barmode="group",
@@ -275,7 +283,7 @@ def render_stacked_comparison_chart(
         margin=dict(l=20, r=40, t=60, b=20),
         xaxis_title="Montant",
         yaxis_title="",
-        xaxis=dict(tickfont=dict(size=12), rangemode="tozero"),  # Ensure starts at 0
+        xaxis=dict(tickfont=dict(size=12), range=[0, x_max]),  # Explicit range from 0
         yaxis=dict(tickfont=dict(size=13)),
         legend=dict(
             orientation="h",
@@ -322,6 +330,9 @@ def render_top_advisors_chart(
     if filter_new_advisors:
         plot_df = _filter_new_advisors(plot_df)
 
+    # Remove rows with NaN values for this column
+    plot_df = plot_df[plot_df[value_column].notna()]
+
     if plot_df.empty:
         st.info(f"Aucune donnée pour {value_column}")
         return
@@ -332,6 +343,10 @@ def render_top_advisors_chart(
 
     # Create chart with single color (not gradient based on value)
     color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+
+    # Calculate x-axis range: from 0 to max value + 15% padding for labels
+    max_val = top_df[value_column].max()
+    x_max = max_val * 1.15 if max_val > 0 else 1
 
     fig = go.Figure()
 
@@ -355,8 +370,8 @@ def render_top_advisors_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
-        # Ensure x-axis starts at 0 for proper bar proportions
-        xaxis=dict(rangemode="tozero"),
+        # Explicit x-axis range from 0 to max for proper bar proportions
+        xaxis=dict(range=[0, x_max]),
     )
 
     fig.update_traces(cliponaxis=False)
@@ -388,9 +403,14 @@ def render_pareto_chart(
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Sort by value descending
+    # Sort by value descending and remove NaN
     plot_df = df[["Conseiller", value_column]].copy()
+    plot_df = plot_df[plot_df[value_column].notna()]
     plot_df = plot_df.sort_values(value_column, ascending=False).reset_index(drop=True)
+
+    if plot_df.empty:
+        st.info(f"Aucune donnée pour {value_column}")
+        return
 
     # Calculate cumulative percentage
     total = plot_df[value_column].sum()
@@ -398,7 +418,7 @@ def render_pareto_chart(
     if total > 0:
         plot_df["cumulative_pct"] = plot_df["cumulative"] / total * 100
     else:
-        plot_df["cumulative_pct"] = 0.0  # Assign scalar, pandas will broadcast to all rows
+        plot_df["cumulative_pct"] = 0.0
 
     # Find 80% threshold
     threshold_idx = (plot_df["cumulative_pct"] >= 80).idxmax() if (plot_df["cumulative_pct"] >= 80).any() else len(plot_df) - 1
@@ -407,17 +427,23 @@ def render_pareto_chart(
     colors = [CHART_COLORS.get(value_column, CHART_COLORS["primary"]) if i <= threshold_idx else "#D1D5DB"
               for i in range(len(plot_df))]
 
+    # Calculate y-axis range for proper bar proportions
+    max_val = plot_df[value_column].max()
+    y_max = max_val * 1.15 if max_val > 0 else 1
+
     # Create figure with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Bar chart
+    # Bar chart - use explicit category order list
+    advisor_order = plot_df["Conseiller"].tolist()
+
     fig.add_trace(
         go.Bar(
-            x=plot_df["Conseiller"],
-            y=plot_df[value_column],
+            x=advisor_order,
+            y=plot_df[value_column].tolist(),
             name=value_column,
             marker_color=colors,
-            text=plot_df[value_column].apply(lambda x: f"{x:,.0f}"),
+            text=[f"{x:,.0f}" for x in plot_df[value_column]],
             textposition="outside",
             hovertemplate="<b>%{x}</b><br>" + f"{value_column}: " + "%{y:,.0f}<extra></extra>",
         ),
@@ -427,8 +453,8 @@ def render_pareto_chart(
     # Cumulative line
     fig.add_trace(
         go.Scatter(
-            x=plot_df["Conseiller"],
-            y=plot_df["cumulative_pct"],
+            x=advisor_order,
+            y=plot_df["cumulative_pct"].tolist(),
             name="Cumul %",
             mode="lines+markers",
             line=dict(color=CHART_COLORS["accent"], width=2),
@@ -450,8 +476,9 @@ def render_pareto_chart(
         margin=dict(l=20, r=20, t=60, b=120),
         xaxis_tickangle=-45,
         xaxis=dict(
+            type="category",
             categoryorder="array",
-            categoryarray=plot_df["Conseiller"].tolist(),  # Preserve descending order
+            categoryarray=advisor_order,
         ),
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -460,7 +487,8 @@ def render_pareto_chart(
         font=dict(family="Inter, sans-serif"),
     )
 
-    fig.update_yaxes(title_text=value_column, secondary_y=False)
+    # Set y-axis to start at 0 for proper bar proportions
+    fig.update_yaxes(title_text=value_column, secondary_y=False, range=[0, y_max])
     fig.update_yaxes(title_text="Cumul (%)", secondary_y=True, range=[0, 105])
 
     st.plotly_chart(fig, width="stretch")
@@ -590,14 +618,24 @@ def render_contribution_chart(
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Calculate contributions
+    # Calculate contributions - filter out NaN values
     plot_df = df[["Conseiller", value_column]].copy()
+    plot_df = plot_df[plot_df[value_column].notna()]
+
+    if plot_df.empty:
+        st.info(f"Aucune donnée pour {value_column}")
+        return
+
     total = plot_df[value_column].sum()
     plot_df["contribution_pct"] = (plot_df[value_column] / total * 100) if total > 0 else 0
     plot_df = plot_df.sort_values("contribution_pct", ascending=True)
 
     # Get color
     bar_color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
+
+    # Calculate x-axis range for proper proportions
+    max_pct = plot_df["contribution_pct"].max()
+    x_max = max_pct * 1.2 if max_pct > 0 else 100  # 20% padding for labels
 
     fig = go.Figure()
 
@@ -617,15 +655,15 @@ def render_contribution_chart(
     fig.update_layout(
         title=title or f"Contribution au {value_column}",
         height=max(CHART_HEIGHT, len(plot_df) * 25),
-        margin=dict(l=20, r=100, t=50, b=20),
+        margin=dict(l=20, r=120, t=50, b=20),
         xaxis_title="Contribution (%)",
         yaxis_title="",
         showlegend=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
-        # Ensure x-axis starts at 0 for proper bar proportions
-        xaxis=dict(rangemode="tozero"),
+        # Explicit x-axis range from 0 for proper bar proportions
+        xaxis=dict(range=[0, x_max]),
     )
 
     fig.update_traces(cliponaxis=False)
