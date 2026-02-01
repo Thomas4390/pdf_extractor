@@ -3,6 +3,8 @@ Test script for dynamic advisor status calculation.
 
 Tests that advisor status (New/Active/Past) is calculated correctly
 based on their first appearance in the Data board.
+
+Also tests cloud storage synchronization to Google Sheets.
 """
 
 import os
@@ -21,9 +23,13 @@ load_dotenv(project_root / ".env")
 from src.clients.monday import MondayClient
 from src.utils.advisor_status import (
     AdvisorStatusCalculator,
+    AdvisorStatusHistoryStore,
     load_advisor_history,
     get_advisor_status,
     clear_advisor_status_cache,
+    get_status_history_store,
+    get_advisor_status_history,
+    save_advisor_status_to_cloud,
 )
 from src.utils.aggregator import METRICS_BOARD_CONFIG
 
@@ -135,5 +141,80 @@ def test_advisor_status_calculation():
     print("=" * 80)
 
 
+def test_cloud_storage():
+    """Test cloud storage synchronization for advisor status history."""
+    print("=" * 80)
+    print("TESTING CLOUD STORAGE SYNCHRONIZATION")
+    print("=" * 80)
+
+    # Get the status history store
+    store = get_status_history_store()
+
+    print(f"\nCloud Storage Status:")
+    print(f"  Configured: {store.is_configured}")
+    if store.configuration_error:
+        print(f"  Error: {store.configuration_error}")
+        print("\nSkipping cloud storage tests (not configured)")
+        return
+
+    # Step 1: Save a test status
+    print("\n" + "-" * 40)
+    print("STEP 1: Save Test Status")
+    print("-" * 40)
+
+    test_advisor = "Thomas Lussier"
+    test_month = "Janvier 2026"
+    test_status = "Active"
+
+    success = save_advisor_status_to_cloud(
+        advisor_name=test_advisor,
+        month=test_month,
+        status=test_status,
+        first_appearance_month="Mars 2025",
+    )
+    print(f"  Saved status for {test_advisor}: {success}")
+
+    # Step 2: Retrieve status history
+    print("\n" + "-" * 40)
+    print("STEP 2: Retrieve Status History")
+    print("-" * 40)
+
+    history = get_advisor_status_history(test_advisor)
+    print(f"  Found {len(history)} history records for {test_advisor}:")
+    for record in history:
+        print(f"    - {record['month']}: {record['status']} (updated: {record.get('updated_at', 'N/A')})")
+
+    # Step 3: Get all statuses for a month
+    print("\n" + "-" * 40)
+    print("STEP 3: Get All Statuses for Month")
+    print("-" * 40)
+
+    all_statuses = store.get_all_status_for_month(test_month)
+    print(f"  Found {len(all_statuses)} advisors with status for {test_month}:")
+    for advisor, status in list(all_statuses.items())[:5]:  # Show first 5
+        print(f"    - {advisor}: {status}")
+    if len(all_statuses) > 5:
+        print(f"    ... and {len(all_statuses) - 5} more")
+
+    # Step 4: Test batch saving
+    print("\n" + "-" * 40)
+    print("STEP 4: Test Batch Save")
+    print("-" * 40)
+
+    batch_records = [
+        {'advisor_name': 'Thomas Lussier', 'month': 'Février 2026', 'status': 'Active', 'first_appearance_month': 'Mars 2025'},
+        {'advisor_name': 'Ayoub Chamoumi', 'month': 'Février 2026', 'status': 'Active', 'first_appearance_month': 'Mars 2025'},
+    ]
+
+    count = store.save_batch_status(batch_records)
+    print(f"  Saved {count} records in batch")
+
+    print("\n" + "=" * 80)
+    print("CLOUD STORAGE TEST COMPLETE")
+    print("=" * 80)
+
+
 if __name__ == "__main__":
     test_advisor_status_calculation()
+    print("\n\n")
+    test_cloud_storage()
