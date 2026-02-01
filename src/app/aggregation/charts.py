@@ -870,7 +870,7 @@ def render_profitability_by_advisor_chart(
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_profitability_metrics_chart(

@@ -214,7 +214,7 @@ def _render_execution_section() -> None:
                             {"Prénom": a.first_name, "Nom complet": a.full_name}
                             for a in advisors[:20]  # Show first 20
                         ]
-                        st.dataframe(preview_data, use_container_width=True, hide_index=True)
+                        st.dataframe(preview_data, width="stretch", hide_index=True)
                         if len(advisors) > 20:
                             st.caption(f"... et {len(advisors) - 20} autres conseillers")
                     else:
@@ -273,7 +273,7 @@ def _render_execution_section() -> None:
             st.session_state.conv_is_executing = False
             st.error(f"Erreur lors de la conversion: {e}")
     else:
-        if st.button("🚀 Lancer la Conversion", type="primary", use_container_width=True):
+        if st.button("🚀 Lancer la Conversion", type="primary", width="stretch"):
             st.session_state.conv_result = None
             st.session_state.conv_is_executing = True
             st.rerun()
@@ -320,7 +320,7 @@ def _render_result() -> None:
                 st.text(f"- {error}")
 
     # Reset button
-    if st.button("🔄 Nouvelle Conversion", use_container_width=True):
+    if st.button("🔄 Nouvelle Conversion", width="stretch"):
         st.session_state.conv_board_id = None
         st.session_state.conv_column_id = None
         st.session_state.conv_result = None
