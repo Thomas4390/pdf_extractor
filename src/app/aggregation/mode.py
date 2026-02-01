@@ -777,51 +777,18 @@ def render_agg_step_3_execute() -> None:
     if st.session_state.agg_upsert_result:
         render_execution_result(st.session_state.agg_upsert_result)
 
-    # Confirmation dialog
-    if st.session_state.get("agg_confirm_upsert", False):
-        validation_passed = st.session_state.get("agg_validation_passed", True)
+    # Navigation - execute directly without confirmation
+    go_back, go_next = render_navigation_buttons(
+        current_step=3,
+        max_step=3,
+        can_proceed=not st.session_state.agg_is_executing,
+    )
 
-        if not validation_passed:
-            st.error("⚠️ **Attention: La validation a détecté des problèmes**")
-            st.markdown("Des erreurs ont été détectées dans les données. "
-                       "Vérifiez la section 'Validation des données' ci-dessus avant de continuer.")
-        else:
-            st.warning("⚠️ **Confirmation requise**")
+    if go_back:
+        st.session_state.agg_step = 2
+        st.session_state.agg_upsert_result = None
+        st.rerun()
 
-        st.markdown(f"""
-        Vous êtes sur le point d'envoyer les données suivantes:
-        - **Board cible:** {target_board_name}
-        - **Groupe:** {group_name}
-        - **Conseillers:** {advisor_count}
-        - **Sources:** {sources_count}
-
-        Cette action va créer ou mettre à jour les éléments dans Monday.com.
-        """)
-
-        col_confirm, col_cancel = st.columns(2)
-        with col_confirm:
-            btn_label = "✅ Confirmer l'envoi" if validation_passed else "⚠️ Envoyer malgré les erreurs"
-            btn_type = "primary" if validation_passed else "secondary"
-            if st.button(btn_label, type=btn_type, key="confirm_upsert_btn"):
-                st.session_state.agg_confirm_upsert = False
-                execute_aggregation_upsert()
-        with col_cancel:
-            if st.button("❌ Annuler", type="secondary", key="cancel_upsert_btn"):
-                st.session_state.agg_confirm_upsert = False
-                st.rerun()
-    else:
-        # Navigation
-        go_back, go_next = render_navigation_buttons(
-            current_step=3,
-            max_step=3,
-            can_proceed=not st.session_state.agg_is_executing,
-        )
-
-        if go_back:
-            st.session_state.agg_step = 2
-            st.session_state.agg_upsert_result = None
-            st.rerun()
-
-        if go_next and not st.session_state.agg_is_executing:
-            st.session_state.agg_confirm_upsert = True
-            st.rerun()
+    if go_next and not st.session_state.agg_is_executing:
+        # Execute upload directly without confirmation dialog
+        execute_aggregation_upsert()
