@@ -173,7 +173,6 @@ def init_session_state() -> None:
         "agg_flexible_period": None,  # FlexiblePeriod object for flexible date selection
         "agg_metrics_loaded": False,  # True when metrics have been imported
         "agg_metrics_group": "",  # Group name from which metrics were loaded
-        "agg_metrics_board_id": 9142121714,  # Board ID for metrics source (Data)
         "agg_confirm_upsert": False,  # Confirmation flag before upsert
         "agg_validation_passed": True,  # Validation status for pre-upload check
     }
@@ -246,6 +245,5 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_flexible_period = None
     st.session_state.agg_metrics_loaded = False
     st.session_state.agg_metrics_group = ""
-    st.session_state.agg_metrics_board_id = 9142121714  # Data board
     st.session_state.agg_confirm_upsert = False
     st.session_state.agg_validation_passed = True

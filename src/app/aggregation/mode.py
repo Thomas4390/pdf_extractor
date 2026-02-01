@@ -458,57 +458,10 @@ def render_agg_step_2_period_preview() -> None:
     # Metrics board selection section
     st.subheader("📊 Source des métriques")
 
-    # Get available boards for metrics selection
-    metrics_boards = [b for b in boards if "data" in b["name"].lower() or "métrique" in b["name"].lower() or "copie" in b["name"].lower()]
-    if not metrics_boards:
-        metrics_boards = boards[:20]  # Show first 20 if no match
-
-    # Current metrics board
-    current_metrics_board_id = st.session_state.get("agg_metrics_board_id", 9142121714)
-
-    # Find current board name
-    current_metrics_board_name = None
-    for b in boards:
-        if int(b["id"]) == current_metrics_board_id:
-            current_metrics_board_name = b["name"]
-            break
-
-    # Board selector
-    metrics_board_options = {b["name"]: int(b["id"]) for b in metrics_boards}
-
-    # Add current board if not in filtered list
-    if current_metrics_board_name and current_metrics_board_name not in metrics_board_options:
-        metrics_board_options[current_metrics_board_name] = current_metrics_board_id
-
-    col_metrics1, col_metrics2 = st.columns([3, 1])
-
-    with col_metrics1:
-        selected_metrics_board = st.selectbox(
-            "Board de métriques (Coût, Dépenses, Leads, etc.)",
-            options=list(metrics_board_options.keys()),
-            index=list(metrics_board_options.keys()).index(current_metrics_board_name) if current_metrics_board_name in metrics_board_options else 0,
-            key="agg_metrics_board_selector",
-        )
-
-    with col_metrics2:
-        if st.button("🔄 Recharger métriques", key="reload_metrics_btn"):
-            new_board_id = metrics_board_options.get(selected_metrics_board, current_metrics_board_id)
-            st.session_state.agg_metrics_board_id = new_board_id
-            st.session_state.agg_metrics_loaded = False
-            st.rerun()
-
-    # Update metrics board ID if changed
-    new_metrics_board_id = metrics_board_options.get(selected_metrics_board, current_metrics_board_id)
-    if new_metrics_board_id != current_metrics_board_id:
-        st.session_state.agg_metrics_board_id = new_metrics_board_id
-        st.session_state.agg_metrics_loaded = False
-        st.info(f"Board de métriques changé. Cliquez sur 'Recharger métriques' pour appliquer.")
-
-    # Metrics status section
+    # Auto-import metrics from the Data board (constant source)
     metrics_loaded = st.session_state.get("agg_metrics_loaded", False)
     metrics_group = st.session_state.get("agg_metrics_group", "")
 
-    # Auto-import metrics if not already loaded
     if not metrics_loaded:
         with st.spinner("📊 Import des métriques..."):
             apply_metrics_to_aggregation(silent=True)
@@ -520,7 +473,7 @@ def render_agg_step_2_period_preview() -> None:
         if "non disponibles" in metrics_group or "N/A" in metrics_group:
             st.info(f"📊 Métriques: **{metrics_group}** (valeurs par défaut utilisées)")
         else:
-            st.success(f"📊 Métriques importées depuis: **{metrics_group}** (Board: {selected_metrics_board})")
+            st.success(f"📊 Métriques importées depuis: **{metrics_group}**")
 
     st.markdown("---")
 

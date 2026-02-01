@@ -348,7 +348,7 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
     group_name = flexible_period.get_group_name()
 
     # Load metrics from the configured board
-    metrics_board_id = st.session_state.get("agg_metrics_board_id", METRICS_BOARD_CONFIG.board_id)
+    metrics_board_id = METRICS_BOARD_CONFIG.board_id
 
     try:
         metrics_df = load_metrics_for_period(metrics_board_id, group_name, silent=silent)
