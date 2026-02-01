@@ -203,6 +203,20 @@ def filter_and_aggregate_data() -> None:
         logger.info(f"[AGGREGATION] {config.display_name} after filter: {len(filtered_df)} rows")
         print(f"[AGGREGATION] {config.display_name} after filter: {len(filtered_df)} rows")
 
+        # Debug: Check for Ayoub's data specifically
+        if not filtered_df.empty:
+            advisor_col = config.advisor_column
+            value_col = config.aggregate_column
+            if advisor_col in filtered_df.columns:
+                ayoub_mask = filtered_df[advisor_col].astype(str).str.lower().str.contains('ayoub', na=False)
+                if ayoub_mask.any():
+                    ayoub_data = filtered_df[ayoub_mask]
+                    print(f"[DEBUG AYOUB] Found {len(ayoub_data)} rows for Ayoub in {config.display_name}")
+                    if value_col in ayoub_data.columns:
+                        print(f"[DEBUG AYOUB] Values: {ayoub_data[value_col].tolist()}")
+                    if config.date_column in ayoub_data.columns:
+                        print(f"[DEBUG AYOUB] Dates: {ayoub_data[config.date_column].tolist()}")
+
         filtered_data[source_key] = filtered_df
 
         # Aggregate by advisor (using config's advisor_column)
@@ -238,6 +252,15 @@ def filter_and_aggregate_data() -> None:
                 total = combined_df[col].sum()
                 logger.info(f"[AGGREGATION] Total {col}: {total:,.2f}")
                 print(f"[AGGREGATION] Total {col}: {total:,.2f}")
+
+        # Debug: Check Ayoub's combined data
+        if "Conseiller" in combined_df.columns:
+            ayoub_mask = combined_df["Conseiller"].astype(str).str.lower().str.contains('ayoub', na=False)
+            if ayoub_mask.any():
+                ayoub_row = combined_df[ayoub_mask]
+                print(f"[DEBUG AYOUB] Combined data for Ayoub:")
+                for col in ayoub_row.columns:
+                    print(f"[DEBUG AYOUB]   {col}: {ayoub_row[col].values}")
 
     # Add advisor status from advisor_matcher
     if not combined_df.empty and "Conseiller" in combined_df.columns:

@@ -864,10 +864,28 @@ def aggregate_by_advisor(
     # Make a copy
     df = df.copy()
 
+    # Debug: Check Ayoub's data before normalization
+    if advisor_column in df.columns:
+        ayoub_mask = df[advisor_column].astype(str).str.lower().str.contains('ayoub', na=False)
+        if ayoub_mask.any():
+            ayoub_before = df[ayoub_mask]
+            print(f"[DEBUG AYOUB] Before normalization: {len(ayoub_before)} rows")
+            print(f"[DEBUG AYOUB] Original names: {ayoub_before[advisor_column].unique().tolist()}")
+            print(f"[DEBUG AYOUB] Values before agg: {ayoub_before[value_column].tolist()}")
+
     # Normalize advisor names before aggregation (also filters unknown advisors)
     unknown_names = []
     if normalize_names:
         df, unknown_names = normalize_advisor_column(df, advisor_column, filter_unknown=True)
+
+        # Debug: Check Ayoub's data after normalization
+        if advisor_column in df.columns:
+            ayoub_mask = df[advisor_column].astype(str).str.lower().str.contains('ayoub', na=False)
+            if ayoub_mask.any():
+                ayoub_after = df[ayoub_mask]
+                print(f"[DEBUG AYOUB] After normalization: {len(ayoub_after)} rows")
+                print(f"[DEBUG AYOUB] Normalized names: {ayoub_after[advisor_column].unique().tolist()}")
+                print(f"[DEBUG AYOUB] Values after norm: {ayoub_after[value_column].tolist()}")
 
     # Convert value column to numeric
     df[value_column] = pd.to_numeric(df[value_column], errors="coerce").fillna(0)
