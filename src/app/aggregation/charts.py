@@ -29,12 +29,12 @@ CHART_COLORS = {
     "success": "#10B981",          # Green
     "warning": "#F59E0B",          # Amber
     "danger": "#EF4444",           # Red
-    # Profitability colors
-    "Win": "#059669",              # Dark Green
-    "Middle": "#F59E0B",           # Amber
-    "Loss": "#DC2626",             # Dark Red
-    "New": "#3B82F6",              # Blue for new advisors
-    "Past": "#6B7280",             # Gray for past advisors
+    # Profitability colors (from Monday.com Profitable column)
+    "Win": "#00c875",              # Green (Monday)
+    "Middle": "#007eb5",           # Blue (Monday)
+    "Loss": "#df2f4a",             # Red (Monday)
+    "New": "#fdab3d",              # Orange (Monday) - new advisors
+    "Past": "#9d50dd",             # Purple (Monday) - past advisors
     "N/A": "#9CA3AF",              # Gray for no data (legacy)
 }
 
