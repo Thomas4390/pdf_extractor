@@ -206,6 +206,9 @@ def render_advisor_bar_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
+        # Ensure axis starts at 0 for proper bar proportions
+        xaxis=dict(rangemode="tozero") if horizontal else {},
+        yaxis=dict(rangemode="tozero") if not horizontal else {},
     )
 
     # Enhanced tooltips
@@ -272,7 +275,7 @@ def render_stacked_comparison_chart(
         margin=dict(l=20, r=40, t=60, b=20),
         xaxis_title="Montant",
         yaxis_title="",
-        xaxis=dict(tickfont=dict(size=12)),
+        xaxis=dict(tickfont=dict(size=12), rangemode="tozero"),  # Ensure starts at 0
         yaxis=dict(tickfont=dict(size=13)),
         legend=dict(
             orientation="h",
@@ -298,6 +301,7 @@ def render_top_advisors_chart(
     value_column: str,
     top_n: int = 5,
     title: str | None = None,
+    filter_new_advisors: bool = False,
 ) -> None:
     """
     Render a chart showing the top N advisors for a specific metric.
@@ -307,47 +311,55 @@ def render_top_advisors_chart(
         value_column: Column to rank by
         top_n: Number of top advisors to show
         title: Chart title
+        filter_new_advisors: If True, exclude "New" advisors
     """
     if df.empty or value_column not in df.columns:
         st.warning(f"Aucune donnée pour {value_column}")
         return
 
-    # Get top N
-    top_df = df.nlargest(top_n, value_column)[["Conseiller", value_column]]
+    # Filter "New" advisors if requested (for Ratio Brut/Ratio Net)
+    plot_df = df.copy()
+    if filter_new_advisors:
+        plot_df = _filter_new_advisors(plot_df)
 
-    # Create chart with gradient colors
+    if plot_df.empty:
+        st.info(f"Aucune donnée pour {value_column}")
+        return
+
+    # Get top N and sort by value (ascending for horizontal bars = largest at top)
+    top_df = plot_df.nlargest(top_n, value_column)[["Conseiller", value_column]]
+    top_df = top_df.sort_values(value_column, ascending=True)  # Ascending so largest is at top
+
+    # Create chart with single color (not gradient based on value)
     color = CHART_COLORS.get(value_column, CHART_COLORS["primary"])
 
-    fig = px.bar(
-        top_df,
-        x=value_column,
-        y="Conseiller",
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=top_df[value_column],
+        y=top_df["Conseiller"],
         orientation="h",
-        title=title or f"Top {top_n} - {value_column}",
-        color=value_column,
-        color_continuous_scale=[[0, "#f0f0f0"], [1, color]],
-    )
+        marker_color=color,
+        text=top_df[value_column].apply(lambda x: f"{x:,.0f}"),
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
+    ))
 
     fig.update_layout(
+        title=dict(text=title or f"Top {top_n} - {value_column}", font=dict(size=14)),
         height=280,
-        margin=dict(l=20, r=50, t=50, b=20),
+        margin=dict(l=20, r=80, t=50, b=20),
         xaxis_title="",
         yaxis_title="",
         showlegend=False,
-        coloraxis_showscale=False,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
+        # Ensure x-axis starts at 0 for proper bar proportions
+        xaxis=dict(rangemode="tozero"),
     )
 
-    # Add value labels with better formatting
-    fig.update_traces(
-        texttemplate="%{x:,.0f}",
-        textposition="outside",
-        textfont_size=12,
-        cliponaxis=False,
-        hovertemplate="<b>%{y}</b><br>" + f"{value_column}: " + "%{x:,.0f}<extra></extra>",
-    )
+    fig.update_traces(cliponaxis=False)
 
     st.plotly_chart(fig, width="stretch")
 
@@ -612,6 +624,8 @@ def render_contribution_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif"),
+        # Ensure x-axis starts at 0 for proper bar proportions
+        xaxis=dict(rangemode="tozero"),
     )
 
     fig.update_traces(cliponaxis=False)
@@ -1145,22 +1159,20 @@ def render_charts_tab(
         st.markdown("#### 💰 Analyse de profitabilité")
         st.caption("Répartition des conseillers selon leur statut de profitabilité (basé sur le Ratio Net)")
 
-        # Row 1: Distribution pie + Status by advisor
-        prof_col1, prof_col2 = st.columns([1, 2])
+        # Row 1: Distribution pie only
+        render_profitability_distribution_chart(
+            combined_df,
+            title="Distribution des statuts",
+        )
 
-        with prof_col1:
-            render_profitability_distribution_chart(
-                combined_df,
-                title="Distribution des statuts",
-            )
+        # Row 2: Ratio Net par conseiller (full width on its own row)
+        st.markdown("##### Ratio Net par conseiller")
+        render_profitability_by_advisor_chart(
+            combined_df,
+            title="",
+        )
 
-        with prof_col2:
-            render_profitability_by_advisor_chart(
-                combined_df,
-                title="Ratio Net par conseiller",
-            )
-
-        # Row 2: Metrics by status + Scatter plot
+        # Row 3: Metrics by status + Scatter plot
         prof_col3, prof_col4 = st.columns(2)
 
         with prof_col3:
@@ -1230,15 +1242,21 @@ def render_charts_tab(
     # =========================================================================
     st.markdown("#### Top 3 par métrique")
 
+    # Columns that should filter out "New" advisors
+    ratio_columns = {"Ratio Brut", "Ratio Net"}
+
     if len(metric_columns) >= 1:
         top_cols = st.columns(min(len(metric_columns), 3))
         for idx, col in enumerate(metric_columns[:3]):
             with top_cols[idx]:
+                # Filter "New" advisors only for Ratio Brut and Ratio Net
+                should_filter_new = col in ratio_columns
                 render_top_advisors_chart(
                     combined_df,
                     col,
                     top_n=3,
                     title=f"{col}",
+                    filter_new_advisors=should_filter_new,
                 )
 
     st.markdown("---")
