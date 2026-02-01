@@ -514,7 +514,9 @@ class MondayClient:
         board_id: int,
         source_column_id: str,
         source_column_title: str,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        name_mapper: Optional[callable] = None,
+        max_concurrent: int = 10
     ) -> dict:
         """Migrate a column (status/text) to a new dropdown column.
 
@@ -522,12 +524,15 @@ class MondayClient:
         1. Renames the source column to "{title} old"
         2. Creates a new dropdown column with the original title
         3. Copies all values from the old column to the new dropdown
+        4. Optionally maps values using a name_mapper function
 
         Args:
             board_id: Board ID
             source_column_id: Column ID to migrate
             source_column_title: Original column title
             progress_callback: Optional callback(current, total, message)
+            name_mapper: Optional function(str) -> str to transform values
+            max_concurrent: Maximum concurrent API calls (default 10)
 
         Returns:
             Dict with migration results
@@ -537,6 +542,7 @@ class MondayClient:
             "old_column_id": source_column_id,
             "new_column_id": None,
             "items_migrated": 0,
+            "values_mapped": 0,
             "errors": []
         }
 
@@ -550,21 +556,39 @@ class MondayClient:
             )
 
             if progress_callback:
-                progress_callback(20, 100, f"Trouvé {len(item_values)} éléments avec des valeurs")
+                progress_callback(15, 100, f"Trouvé {len(item_values)} éléments avec des valeurs")
 
-            # Step 2: Rename the source column to "{title} old"
+            # Step 2: Apply name mapping if provided
+            if name_mapper:
+                if progress_callback:
+                    progress_callback(20, 100, "Application du mapping des noms...")
+
+                for item_data in item_values:
+                    original_value = item_data["value"]
+                    mapped_value = name_mapper(original_value)
+                    if mapped_value != original_value:
+                        result["values_mapped"] += 1
+                    item_data["mapped_value"] = mapped_value
+
+                if progress_callback:
+                    progress_callback(25, 100, f"Mappé {result['values_mapped']} noms")
+            else:
+                for item_data in item_values:
+                    item_data["mapped_value"] = item_data["value"]
+
+            # Step 3: Rename the source column to "{title} old"
             old_title = f"{source_column_title} old"
             if progress_callback:
-                progress_callback(25, 100, f"Renommage de la colonne en '{old_title}'...")
+                progress_callback(28, 100, f"Renommage de la colonne en '{old_title}'...")
 
             await self.rename_column(board_id, source_column_id, old_title)
 
-            # Step 3: Create new dropdown column with original title
+            # Step 4: Create new dropdown column with original title
             if progress_callback:
-                progress_callback(35, 100, f"Création de la colonne dropdown '{source_column_title}'...")
+                progress_callback(32, 100, f"Création de la colonne dropdown '{source_column_title}'...")
 
-            # Get unique labels for dropdown defaults
-            unique_labels = list(set(iv["value"] for iv in item_values if iv["value"]))
+            # Get unique labels for dropdown defaults (using mapped values)
+            unique_labels = list(set(iv["mapped_value"] for iv in item_values if iv["mapped_value"]))
 
             # Create dropdown with labels as defaults if we have values
             defaults = None
@@ -580,35 +604,54 @@ class MondayClient:
             result["new_column_id"] = new_column["id"]
 
             if progress_callback:
-                progress_callback(45, 100, "Copie des valeurs vers la nouvelle colonne...")
+                progress_callback(40, 100, "Copie des valeurs vers la nouvelle colonne...")
 
-            # Step 4: Copy values to new dropdown column
+            # Step 5: Copy values to new dropdown column using concurrent updates
             total_items = len(item_values)
-            for idx, item_data in enumerate(item_values):
-                item_id = item_data["item_id"]
-                value = item_data["value"]
+            semaphore = asyncio.Semaphore(max_concurrent)
+            completed = {"count": 0}  # Use dict for closure
 
-                try:
-                    column_values = {
-                        new_column["id"]: {"labels": [value]}
-                    }
-                    await self.update_item_column_values(
-                        item_id=item_id,
-                        board_id=board_id,
-                        column_values=column_values,
-                        create_labels_if_missing=True
-                    )
+            async def update_single_item(item_data: dict) -> Optional[str]:
+                """Update a single item with semaphore-controlled concurrency."""
+                async with semaphore:
+                    item_id = item_data["item_id"]
+                    value = item_data["mapped_value"]
+
+                    try:
+                        column_values = {
+                            new_column["id"]: {"labels": [value]}
+                        }
+                        await self.update_item_column_values(
+                            item_id=item_id,
+                            board_id=board_id,
+                            column_values=column_values,
+                            create_labels_if_missing=True
+                        )
+
+                        # Small delay to respect rate limits
+                        await asyncio.sleep(0.1)
+
+                        completed["count"] += 1
+                        if progress_callback and total_items > 0:
+                            progress = 40 + int(completed["count"] / total_items * 55)
+                            progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
+
+                        return None  # Success
+                    except MondayError as e:
+                        return f"Item {item_id}: {e}"
+
+            # Run all updates concurrently
+            errors = await asyncio.gather(*[
+                update_single_item(item_data)
+                for item_data in item_values
+            ])
+
+            # Count successes and collect errors
+            for error in errors:
+                if error is None:
                     result["items_migrated"] += 1
-
-                    # Rate limiting
-                    await asyncio.sleep(RATE_LIMIT_DELAY)
-
-                except MondayError as e:
-                    result["errors"].append(f"Item {item_id}: {e}")
-
-                if progress_callback and total_items > 0:
-                    progress = 45 + int((idx + 1) / total_items * 50)
-                    progress_callback(progress, 100, f"Migration {idx + 1}/{total_items}")
+                else:
+                    result["errors"].append(error)
 
             result["success"] = True
             if progress_callback:
@@ -624,12 +667,15 @@ class MondayClient:
         board_id: int,
         source_column_id: str,
         source_column_title: str,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        name_mapper: Optional[callable] = None,
+        max_concurrent: int = 10
     ) -> dict:
         """Synchronous wrapper for migrate_column_to_dropdown."""
         return asyncio.run(
             self.migrate_column_to_dropdown(
-                board_id, source_column_id, source_column_title, progress_callback
+                board_id, source_column_id, source_column_title,
+                progress_callback, name_mapper, max_concurrent
             )
         )
 

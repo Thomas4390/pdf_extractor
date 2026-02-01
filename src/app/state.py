@@ -151,6 +151,7 @@ def init_session_state() -> None:
         "conv_column_title": "Conseiller",  # Default column name to convert
         "conv_result": None,  # Migration result dict
         "conv_is_executing": False,  # True during migration
+        "conv_use_mapping": True,  # Whether to use advisor name mapping
         "agg_step": 1,  # 1-4 for aggregation wizard
         "agg_selected_sources": get_default_selected_sources(),  # {source_key: board_id}
         "agg_period": None,  # DatePeriod enum

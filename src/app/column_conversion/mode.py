@@ -4,11 +4,33 @@ Column Conversion Mode rendering.
 Provides the UI for converting label/status columns to dropdown columns.
 The original column is renamed to "{name} old" and a new dropdown column
 is created with the original values migrated.
+
+Features:
+- Automatic advisor name mapping using the advisor database
+- Concurrent API calls for faster migration
 """
 
 import streamlit as st
 
 from src.clients.monday import MondayClient, MondayError
+
+
+def _get_name_mapper():
+    """Get the advisor name mapper function if available.
+
+    Returns:
+        A function that maps first names to full names, or None if not configured.
+    """
+    try:
+        from src.utils.advisor_matcher import get_advisor_matcher
+
+        matcher = get_advisor_matcher()
+        if matcher.is_configured:
+            # Return the mapping function
+            return matcher.match_compact_or_original
+        return None
+    except Exception:
+        return None
 
 
 def render_column_conversion_mode() -> None:
@@ -163,16 +185,62 @@ def _render_execution_section() -> None:
 
     col_title = st.session_state.conv_column_title
 
+    # Check if name mapping is available
+    name_mapper = _get_name_mapper()
+    mapping_available = name_mapper is not None
+
+    # Mapping options
+    st.markdown("#### Options de mapping")
+
+    if mapping_available:
+        use_mapping = st.checkbox(
+            "🔗 Mapper les prénoms vers les noms complets",
+            value=True,
+            help="Utilise la base de données des conseillers pour convertir les prénoms (ex: Thomas → Thomas, L)"
+        )
+
+        if use_mapping:
+            st.success("✅ Le mapping des noms est activé. Les prénoms seront convertis en format compact (Prénom, Initiale).")
+
+            # Show mapping preview
+            with st.expander("📋 Aperçu du mapping disponible", expanded=False):
+                try:
+                    from src.utils.advisor_matcher import get_advisor_matcher
+                    matcher = get_advisor_matcher()
+                    advisors = matcher.get_all_advisors()
+
+                    if advisors:
+                        preview_data = [
+                            {"Prénom": a.first_name, "Nom complet": a.full_name, "Format compact": a.display_name_compact}
+                            for a in advisors[:20]  # Show first 20
+                        ]
+                        st.dataframe(preview_data, use_container_width=True, hide_index=True)
+                        if len(advisors) > 20:
+                            st.caption(f"... et {len(advisors) - 20} autres conseillers")
+                    else:
+                        st.info("Aucun conseiller dans la base de données.")
+                except Exception as e:
+                    st.warning(f"Impossible de charger l'aperçu: {e}")
+    else:
+        use_mapping = False
+        st.info("ℹ️ Le mapping des noms n'est pas disponible (Google Sheets non configuré). "
+                "Les valeurs seront copiées telles quelles.")
+
+    st.markdown("---")
+
     # Preview of changes
     st.markdown(f"""
     **Changements prévus:**
     - La colonne `{col_title}` sera renommée en `{col_title} old`
     - Une nouvelle colonne dropdown `{col_title}` sera créée
-    - Toutes les valeurs existantes seront copiées vers la nouvelle colonne
+    - Toutes les valeurs existantes seront {"mappées puis " if use_mapping else ""}copiées vers la nouvelle colonne
     """)
 
-    st.warning("Cette opération ne peut pas être annulée automatiquement. "
+    st.warning("⚠️ Cette opération ne peut pas être annulée automatiquement. "
                "Assurez-vous de vouloir continuer.")
+
+    # Store mapping preference in session state
+    st.session_state.conv_use_mapping = use_mapping
 
     # Execution button
     if st.session_state.conv_is_executing:
@@ -186,11 +254,17 @@ def _render_execution_section() -> None:
 
         try:
             client = MondayClient(api_key=st.session_state.monday_api_key)
+
+            # Get name mapper if enabled
+            active_mapper = name_mapper if st.session_state.get("conv_use_mapping", False) else None
+
             result = client.migrate_column_to_dropdown_sync(
                 board_id=st.session_state.conv_board_id,
                 source_column_id=st.session_state.conv_column_id,
                 source_column_title=st.session_state.conv_column_title,
-                progress_callback=update_progress
+                progress_callback=update_progress,
+                name_mapper=active_mapper,
+                max_concurrent=10  # 10 concurrent updates for speed
             )
             st.session_state.conv_result = result
             st.session_state.conv_is_executing = False
@@ -213,16 +287,28 @@ def _render_result() -> None:
     result = st.session_state.conv_result
 
     if result.get("success"):
-        st.success(f"""
+        items_migrated = result.get('items_migrated', 0)
+        values_mapped = result.get('values_mapped', 0)
+        new_column_id = result.get('new_column_id', 'N/A')
+
+        success_msg = f"""
         **Conversion réussie!**
-        - Éléments migrés: {result.get('items_migrated', 0)}
-        - Nouvelle colonne ID: {result.get('new_column_id', 'N/A')}
-        """)
+        - Éléments migrés: {items_migrated}
+        - Nouvelle colonne ID: {new_column_id}
+        """
+
+        if values_mapped > 0:
+            success_msg += f"\n        - Noms mappés: {values_mapped}"
+
+        st.success(success_msg)
+
+        if values_mapped > 0:
+            st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur format complet (Prénom, Initiale).")
     else:
         st.error("La conversion a rencontré des problèmes.")
 
     if result.get("errors"):
-        with st.expander("Voir les erreurs", expanded=False):
+        with st.expander(f"Voir les erreurs ({len(result['errors'])})", expanded=False):
             for error in result["errors"]:
                 st.text(f"- {error}")
 
@@ -231,4 +317,5 @@ def _render_result() -> None:
         st.session_state.conv_board_id = None
         st.session_state.conv_column_id = None
         st.session_state.conv_result = None
+        st.session_state.conv_use_mapping = True
         st.rerun()
