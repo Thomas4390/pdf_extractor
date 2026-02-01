@@ -555,9 +555,12 @@ def merge_metrics_with_aggregation(
     use_fuzzy_matching: bool = True,
 ) -> pd.DataFrame:
     """
-    Merge metrics data with aggregated data by advisor using fuzzy name matching.
+    Add metrics to aggregated data using direct lookup (no pandas merge).
 
-    Uses AdvisorMatcher to handle name variations (e.g., "Brandeen" vs "Brandeen G.").
+    This approach avoids the duplicate column issue (_x, _y suffixes) that
+    can occur with pandas merge. Instead, it:
+    1. Creates a lookup dictionary from metrics_df (advisor → metrics)
+    2. For each advisor in aggregated_df, looks up and assigns their metrics
 
     Args:
         aggregated_df: DataFrame with aggregated data (from combine_aggregations)
@@ -566,7 +569,7 @@ def merge_metrics_with_aggregation(
         use_fuzzy_matching: If True, use AdvisorMatcher for fuzzy name matching
 
     Returns:
-        Merged DataFrame with all columns
+        DataFrame with metrics columns added
     """
     if aggregated_df.empty:
         return aggregated_df
@@ -581,78 +584,63 @@ def merge_metrics_with_aggregation(
         return aggregated_df
 
     result = aggregated_df.copy()
-    metrics_df = metrics_df.copy()
 
-    # Get columns that already exist in result to avoid creating duplicates (_x, _y)
-    existing_result_cols = set(result.columns)
+    # Determine which metrics columns to add (skip those that already exist)
+    metrics_columns = ["Coût", "Dépenses par Conseiller", "Leads", "Bonus", "Récompenses"]
+    columns_to_add = [col for col in metrics_columns if col in metrics_df.columns and col not in result.columns]
 
-    if use_fuzzy_matching:
-        # Normalize advisor names in both DataFrames for better matching
-        # First, normalize aggregated_df names (should already be normalized)
-        result["_normalized_advisor"] = result[advisor_column].apply(
-            lambda x: normalize_advisor_name_full(str(x)) if pd.notna(x) else x
-        )
-        # Replace None with original for fallback
-        result["_normalized_advisor"] = result.apply(
-            lambda row: row["_normalized_advisor"] if row["_normalized_advisor"] else row[advisor_column],
-            axis=1
-        )
+    if not columns_to_add:
+        # All metrics columns already exist, nothing to add
+        return result
 
-        # Normalize metrics_df names
-        metrics_df["_normalized_advisor"] = metrics_df[advisor_column].apply(
-            lambda x: normalize_advisor_name_full(str(x)) if pd.notna(x) else x
-        )
-        # Replace None with original for fallback
-        metrics_df["_normalized_advisor"] = metrics_df.apply(
-            lambda row: row["_normalized_advisor"] if row["_normalized_advisor"] else row[advisor_column],
-            axis=1
-        )
+    # Build a lookup dictionary: normalized_advisor_name → {metric_col: value, ...}
+    metrics_lookup = {}
 
-        # Merge on normalized names - only include columns that don't already exist in result
-        # This prevents creating duplicate columns with _x and _y suffixes
-        metrics_cols_to_merge = [
-            c for c in metrics_df.columns
-            if c not in [advisor_column, "_normalized_advisor"]
-            and c not in existing_result_cols
-        ]
+    for _, row in metrics_df.iterrows():
+        advisor_name = row[advisor_column]
+        if pd.isna(advisor_name):
+            continue
 
-        if not metrics_cols_to_merge:
-            # All metrics columns already exist in result, nothing to merge
-            result = result.drop(columns=["_normalized_advisor"], errors="ignore")
-            return result
+        # Normalize the advisor name for matching
+        if use_fuzzy_matching:
+            normalized_name = normalize_advisor_name_full(str(advisor_name))
+            if not normalized_name:
+                normalized_name = str(advisor_name)
+        else:
+            normalized_name = str(advisor_name)
 
-        metrics_subset = metrics_df[["_normalized_advisor"] + metrics_cols_to_merge]
+        # Store metrics for this advisor
+        metrics_lookup[normalized_name] = {
+            col: row[col] if col in row.index else 0
+            for col in columns_to_add
+        }
 
-        result = result.merge(
-            metrics_subset,
-            on="_normalized_advisor",
-            how="left",
-        )
+    # Initialize new columns with default values (0)
+    for col in columns_to_add:
+        result[col] = 0.0 if col != "Leads" else 0
 
-        # Clean up temporary column
-        result = result.drop(columns=["_normalized_advisor"], errors="ignore")
-    else:
-        # Standard exact merge - only include columns that don't already exist
-        metrics_cols_to_merge = [
-            c for c in metrics_df.columns
-            if c != advisor_column and c not in existing_result_cols
-        ]
+    # Look up and assign metrics for each advisor in the result
+    for idx, row in result.iterrows():
+        advisor_name = row[advisor_column]
+        if pd.isna(advisor_name):
+            continue
 
-        if not metrics_cols_to_merge:
-            return result
+        # Normalize for lookup
+        if use_fuzzy_matching:
+            normalized_name = normalize_advisor_name_full(str(advisor_name))
+            if not normalized_name:
+                normalized_name = str(advisor_name)
+        else:
+            normalized_name = str(advisor_name)
 
-        metrics_subset = metrics_df[[advisor_column] + metrics_cols_to_merge]
-        result = result.merge(
-            metrics_subset,
-            on=advisor_column,
-            how="left",
-        )
+        # Look up metrics
+        if normalized_name in metrics_lookup:
+            for col in columns_to_add:
+                result.at[idx, col] = metrics_lookup[normalized_name].get(col, 0)
 
-    # Fill NaN with 0 for numeric columns
-    numeric_cols = ["Coût", "Dépenses par Conseiller", "Leads", "Bonus", "Récompenses"]
-    for col in numeric_cols:
-        if col in result.columns:
-            result[col] = result[col].fillna(0)
+    # Ensure numeric types
+    for col in columns_to_add:
+        result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0)
 
     return result
 

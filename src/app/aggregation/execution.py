@@ -375,9 +375,6 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
     # Calculate derived metrics
     final_df = calculate_derived_metrics(merged_df)
 
-    # Clean up any duplicate columns (with _x or _y suffixes) that might have been created
-    final_df = _cleanup_duplicate_columns(final_df)
-
     # Store the result
     st.session_state.agg_combined_data = final_df
     st.session_state.agg_metrics_loaded = True
@@ -387,49 +384,6 @@ def apply_metrics_to_aggregation(silent: bool = False) -> bool:
         st.success(f"✅ Métriques importées depuis {group_name}")
 
     return True
-
-
-def _cleanup_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Remove duplicate columns (with _x or _y suffixes) from a DataFrame.
-
-    When pandas merges DataFrames with overlapping column names, it adds
-    _x and _y suffixes. This function cleans up such duplicates by:
-    - Keeping the _x version (original) if both exist
-    - Removing the _y version
-    - Renaming _x back to the original name
-
-    Args:
-        df: DataFrame that may have duplicate columns
-
-    Returns:
-        DataFrame with duplicate columns removed
-    """
-    if df.empty:
-        return df
-
-    df = df.copy()
-    cols_to_drop = []
-    cols_to_rename = {}
-
-    for col in df.columns:
-        if col.endswith('_y'):
-            # Drop _y columns
-            cols_to_drop.append(col)
-        elif col.endswith('_x'):
-            # Rename _x columns back to original name
-            original_name = col[:-2]  # Remove '_x' suffix
-            cols_to_rename[col] = original_name
-
-    # Drop _y columns
-    if cols_to_drop:
-        df = df.drop(columns=cols_to_drop, errors='ignore')
-
-    # Rename _x columns
-    if cols_to_rename:
-        df = df.rename(columns=cols_to_rename)
-
-    return df
 
 
 def _add_default_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -459,9 +413,6 @@ def _add_default_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     # Calculate derived metrics (will produce 0s due to 0 inputs)
     df = calculate_derived_metrics(df)
-
-    # Clean up any duplicate columns
-    df = _cleanup_duplicate_columns(df)
 
     return df
 
