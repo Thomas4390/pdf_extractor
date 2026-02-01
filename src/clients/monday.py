@@ -609,36 +609,78 @@ class MondayClient:
             # Step 5: Copy values to new dropdown column using concurrent updates
             total_items = len(item_values)
             semaphore = asyncio.Semaphore(max_concurrent)
-            completed = {"count": 0}  # Use dict for closure
+            completed = {"count": 0, "retried": 0}  # Use dict for closure
+            new_column_id = new_column["id"]
+
+            async def verify_item_value(item_id: str, expected_value: str) -> bool:
+                """Verify that an item's column value was set correctly."""
+                try:
+                    query = """
+                    query ($item_id: ID!) {
+                        items(ids: [$item_id]) {
+                            column_values {
+                                id
+                                text
+                            }
+                        }
+                    }
+                    """
+                    response = await self._make_request(query, {"item_id": item_id})
+                    items = response.get("data", {}).get("items", [])
+                    if items:
+                        for col_val in items[0].get("column_values", []):
+                            if col_val["id"] == new_column_id:
+                                return col_val.get("text") == expected_value
+                    return False
+                except Exception:
+                    return False
 
             async def update_single_item(item_data: dict) -> Optional[str]:
-                """Update a single item with semaphore-controlled concurrency."""
+                """Update a single item with semaphore-controlled concurrency and retry logic."""
                 async with semaphore:
                     item_id = item_data["item_id"]
                     value = item_data["mapped_value"]
+                    max_retries = 3
 
-                    try:
-                        column_values = {
-                            new_column["id"]: {"labels": [value]}
-                        }
-                        await self.update_item_column_values(
-                            item_id=item_id,
-                            board_id=board_id,
-                            column_values=column_values,
-                            create_labels_if_missing=True
-                        )
+                    for attempt in range(max_retries):
+                        try:
+                            column_values = {
+                                new_column_id: {"labels": [value]}
+                            }
+                            await self.update_item_column_values(
+                                item_id=item_id,
+                                board_id=board_id,
+                                column_values=column_values,
+                                create_labels_if_missing=True
+                            )
 
-                        # Small delay to respect rate limits
-                        await asyncio.sleep(0.1)
+                            # Delay to respect rate limits
+                            await asyncio.sleep(0.3)
 
-                        completed["count"] += 1
-                        if progress_callback and total_items > 0:
-                            progress = 40 + int(completed["count"] / total_items * 55)
-                            progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
+                            # Verify the value was set correctly
+                            if await verify_item_value(item_id, value):
+                                completed["count"] += 1
+                                if progress_callback and total_items > 0:
+                                    progress = 40 + int(completed["count"] / total_items * 55)
+                                    progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
+                                return None  # Success
 
-                        return None  # Success
-                    except MondayError as e:
-                        return f"Item {item_id}: {e}"
+                            # Verification failed, retry
+                            if attempt < max_retries - 1:
+                                completed["retried"] += 1
+                                await asyncio.sleep(0.5)  # Extra delay before retry
+                                continue
+                            else:
+                                return f"Item {item_id}: Vérification échouée après {max_retries} tentatives"
+
+                        except MondayError as e:
+                            if attempt < max_retries - 1:
+                                completed["retried"] += 1
+                                await asyncio.sleep(0.5)  # Extra delay before retry
+                                continue
+                            return f"Item {item_id}: {e}"
+
+                    return f"Item {item_id}: Échec après {max_retries} tentatives"
 
             # Run all updates concurrently
             errors = await asyncio.gather(*[
@@ -652,6 +694,9 @@ class MondayClient:
                     result["items_migrated"] += 1
                 else:
                     result["errors"].append(error)
+
+            # Add retry stats to result
+            result["retried_count"] = completed["retried"]
 
             result["success"] = True
             if progress_callback:

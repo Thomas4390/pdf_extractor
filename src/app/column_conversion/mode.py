@@ -289,6 +289,7 @@ def _render_result() -> None:
     if result.get("success"):
         items_migrated = result.get('items_migrated', 0)
         values_mapped = result.get('values_mapped', 0)
+        retried_count = result.get('retried_count', 0)
         new_column_id = result.get('new_column_id', 'N/A')
 
         success_msg = f"""
@@ -300,10 +301,16 @@ def _render_result() -> None:
         if values_mapped > 0:
             success_msg += f"\n        - Noms mappés: {values_mapped}"
 
+        if retried_count > 0:
+            success_msg += f"\n        - Tentatives supplémentaires: {retried_count}"
+
         st.success(success_msg)
 
         if values_mapped > 0:
             st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur nom complet (Prénom Nom).")
+
+        if retried_count > 0:
+            st.caption(f"ℹ️ {retried_count} éléments ont nécessité des tentatives supplémentaires (vérification automatique).")
     else:
         st.error("La conversion a rencontré des problèmes.")
 
