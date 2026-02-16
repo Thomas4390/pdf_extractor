@@ -203,11 +203,37 @@ def _render_advisors_list(advisors: list, matcher) -> None:
     if not advisors:
         st.info("Aucun conseiller enregistré. Ajoutez-en un ci-dessus.")
     else:
+        # Summary table for quick overview
+        import pandas as pd
+        status_icons = {"Active": "🟢", "New": "🔵", "Inactive": "⚪"}
+        table_data = []
+        for advisor in advisors:
+            icon = status_icons.get(advisor.status, "⚪")
+            table_data.append({
+                "Statut": f"{icon} {advisor.status}",
+                "Nom": f"{advisor.first_name} {advisor.last_name}",
+                "Format compact": advisor.display_name_compact,
+                "Variations": len(advisor.variations),
+            })
+        df = pd.DataFrame(table_data)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Variations": st.column_config.NumberColumn(format="%d"),
+            },
+        )
+
+        st.markdown("")
+
+        # Detailed expanders for edit/delete
         for idx, advisor in enumerate(advisors):
             advisor_id = getattr(advisor, '_row_id', idx)
+            icon = status_icons.get(advisor.status, "⚪")
+            n_vars = len(advisor.variations)
             status_badge = _get_status_badge(advisor.status)
-            with st.expander(f"**{advisor.first_name} {advisor.last_name}**", expanded=False):
-                # Show status and compact format
+            with st.expander(f"{icon} **{advisor.first_name} {advisor.last_name}** — {advisor.display_name_compact} · {advisor.status}", expanded=False):
                 st.markdown(f"**Format compact:** {advisor.display_name_compact} &nbsp; {status_badge}", unsafe_allow_html=True)
 
                 st.markdown("**Variations:**")
