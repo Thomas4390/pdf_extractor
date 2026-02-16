@@ -682,17 +682,21 @@ class MondayClient:
                 progress_callback(40, 100, "Copie des valeurs vers la nouvelle colonne...")
 
             # Step 5: Copy values to new dropdown column using concurrent updates
+            # IMPORTANT: create_labels_if_missing=False because all labels
+            # were pre-created in defaults (step 4). Using True here with
+            # concurrent requests causes Monday.com to create duplicate
+            # labels with different IDs but the same name.
             total_items = len(item_values)
             semaphore = asyncio.Semaphore(max_concurrent)
             completed = {"count": 0}
             new_column_id = new_column["id"]
 
             async def update_single_item(item_data: dict) -> Optional[str]:
-                """Update a single item with semaphore-controlled concurrency and retry logic."""
+                """Update a single item with semaphore-controlled concurrency and retry with exponential backoff."""
                 async with semaphore:
                     item_id = item_data["item_id"]
                     value = item_data["mapped_value"]
-                    max_retries = 3
+                    max_retries = 5
 
                     for attempt in range(max_retries):
                         try:
@@ -703,7 +707,7 @@ class MondayClient:
                                 item_id=item_id,
                                 board_id=board_id,
                                 column_values=column_values,
-                                create_labels_if_missing=True
+                                create_labels_if_missing=False
                             )
 
                             # Delay to respect rate limits
@@ -715,9 +719,11 @@ class MondayClient:
                                 progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
                             return None  # Success
 
-                        except MondayError as e:
+                        except (MondayError, Exception) as e:
                             if attempt < max_retries - 1:
-                                await asyncio.sleep(0.5)
+                                # Exponential backoff: 1s, 2s, 4s, 8s
+                                delay = min(2 ** attempt, 8)
+                                await asyncio.sleep(delay)
                                 continue
                             return f"Item {item_id}: {e}"
 
