@@ -1470,6 +1470,9 @@ def render_charts_tab(
         excluded_individual_cols = ["Dépenses par Conseiller", "Coût", "Bonus", "Total Dépenses"]
         individual_metric_cols = [col for col in metric_columns if col not in excluded_individual_cols]
 
+        # Only show key metrics in the stat boxes
+        box_metric_cols = [col for col in ["PA Vendues", "Collected", "AE CA"] if col in individual_metric_cols]
+
         col1, col2 = st.columns([1, 1])
 
         with col1:
@@ -1486,7 +1489,7 @@ def render_charts_tab(
             if not advisor_data.empty:
                 st.markdown(f"**Statistiques de {selected_advisor}**")
 
-                for col in individual_metric_cols:
+                for col in box_metric_cols:
                     val = advisor_data[col].iloc[0]
 
                     # Handle NaN values
