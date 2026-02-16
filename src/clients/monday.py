@@ -9,6 +9,7 @@ proper column type mapping.
 import asyncio
 import json
 import os
+import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -558,6 +559,25 @@ class MondayClient:
         """Synchronous wrapper for preview_column_mapping."""
         return asyncio.run(self.preview_column_mapping(board_id, column_id, name_mapper))
 
+    async def get_dropdown_label_map(self, board_id: int, column_id: str) -> dict[str, int]:
+        """Read dropdown column settings and return {label_name: label_id}.
+
+        Args:
+            board_id: Board ID containing the dropdown column
+            column_id: Column ID of the dropdown column
+
+        Returns:
+            Dict mapping label name to label ID
+        """
+        columns = await self.list_columns(board_id)
+        for col in columns:
+            if col["id"] == column_id:
+                settings = json.loads(col.get("settings_str", "{}"))
+                labels = settings.get("labels", [])
+                # labels is a list of {"id": int, "name": str}
+                return {label["name"]: label["id"] for label in labels}
+        return {}
+
     async def migrate_column_to_dropdown(
         self,
         board_id: int,
@@ -565,14 +585,20 @@ class MondayClient:
         source_column_title: str,
         progress_callback: Optional[callable] = None,
         name_mapper: Optional[callable] = None,
-        max_concurrent: int = 10
+        max_concurrent: int = 5
     ) -> dict:
         """Migrate a column (status/text) to a new dropdown column.
 
         This process:
         1. Reads all values and applies name mapping
-        2. Creates a new dropdown column with the same title
-        3. Copies all values from the old column to the new dropdown
+        2. Creates a new dropdown column with all labels pre-created
+        3. Reads back label name→ID mapping from column settings
+        4. Writes each item using {"ids": [label_id]} (not by name)
+        5. Verifies all values were written correctly
+        6. Retries any mismatches sequentially
+
+        Writing by label ID eliminates duplicate labels caused by
+        Monday.com's unreliable name-matching under concurrent writes.
 
         The source column is left unchanged (not renamed or deleted).
 
@@ -582,7 +608,7 @@ class MondayClient:
             source_column_title: Original column title
             progress_callback: Optional callback(current, total, message)
             name_mapper: Optional function(str) -> str to transform values
-            max_concurrent: Maximum concurrent API calls (default 10)
+            max_concurrent: Maximum concurrent API calls (default 5)
 
         Returns:
             Dict with migration results
@@ -593,6 +619,9 @@ class MondayClient:
             "new_column_id": None,
             "items_migrated": 0,
             "values_mapped": 0,
+            "verified": 0,
+            "mismatches": 0,
+            "retried": 0,
             "errors": []
         }
 
@@ -632,7 +661,7 @@ class MondayClient:
                 if raw and isinstance(raw, str):
                     item_data["mapped_value"] = raw.strip().title()
 
-            # Step 3: Create new dropdown column with the same title
+            # Step 3: Create new dropdown column with all labels pre-created
             if progress_callback:
                 progress_callback(30, 100, f"Création de la colonne dropdown '{source_column_title}'...")
 
@@ -656,32 +685,42 @@ class MondayClient:
                 defaults=defaults
             )
 
-            result["new_column_id"] = new_column["id"]
+            new_column_id = new_column["id"]
+            result["new_column_id"] = new_column_id
 
+            # Step 4: Read back label name→ID mapping
+            if progress_callback:
+                progress_callback(35, 100, "Lecture des labels créés...")
+
+            label_map = await self.get_dropdown_label_map(board_id, new_column_id)
+
+            if progress_callback:
+                progress_callback(38, 100, f"Trouvé {len(label_map)} labels")
+
+            # Step 5: Write each item using {"ids": [label_id]} instead of {"labels": [name]}
             if progress_callback:
                 progress_callback(40, 100, "Copie des valeurs vers la nouvelle colonne...")
 
-            # Step 5: Copy values to new dropdown column using concurrent updates
-            # IMPORTANT: create_labels_if_missing=False because all labels
-            # were pre-created in defaults (step 4). Using True here with
-            # concurrent requests causes Monday.com to create duplicate
-            # labels with different IDs but the same name.
             total_items = len(item_values)
             semaphore = asyncio.Semaphore(max_concurrent)
             completed = {"count": 0}
-            new_column_id = new_column["id"]
 
             async def update_single_item(item_data: dict) -> Optional[str]:
-                """Update a single item with semaphore-controlled concurrency and retry with exponential backoff."""
+                """Update a single item with semaphore-controlled concurrency and retry with exponential backoff + jitter."""
                 async with semaphore:
                     item_id = item_data["item_id"]
                     value = item_data["mapped_value"]
+                    label_id = label_map.get(value)
+
+                    if label_id is None:
+                        return f"Item {item_id}: pas de label ID pour '{value}'"
+
                     max_retries = 5
 
                     for attempt in range(max_retries):
                         try:
                             column_values = {
-                                new_column_id: {"labels": [value]}
+                                new_column_id: {"ids": [label_id]}
                             }
                             await self.update_item_column_values(
                                 item_id=item_id,
@@ -695,14 +734,14 @@ class MondayClient:
 
                             completed["count"] += 1
                             if progress_callback and total_items > 0:
-                                progress = 40 + int(completed["count"] / total_items * 55)
+                                progress = 40 + int(completed["count"] / total_items * 50)
                                 progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
                             return None  # Success
 
                         except (MondayError, Exception) as e:
                             if attempt < max_retries - 1:
-                                # Exponential backoff: 1s, 2s, 4s, 8s
-                                delay = min(2 ** attempt, 8)
+                                # Exponential backoff + jitter to prevent thundering herd
+                                delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
                                 await asyncio.sleep(delay)
                                 continue
                             return f"Item {item_id}: {e}"
@@ -722,6 +761,52 @@ class MondayClient:
                 else:
                     result["errors"].append(error)
 
+            # Step 6: Verify all values were written correctly
+            if progress_callback:
+                progress_callback(92, 100, "Vérification des valeurs...")
+
+            actual_values = await self.get_column_values_for_all_items(
+                board_id, new_column_id
+            )
+            actual_map = {iv["item_id"]: iv["value"] for iv in actual_values}
+            expected = {iv["item_id"]: iv["mapped_value"] for iv in item_values}
+
+            mismatches = []
+            for item_id, expected_value in expected.items():
+                actual_value = actual_map.get(item_id)
+                if actual_value != expected_value:
+                    mismatches.append(item_id)
+
+            result["verified"] = len(expected) - len(mismatches)
+            result["mismatches"] = len(mismatches)
+
+            # Step 7: Retry mismatches sequentially (no concurrency to avoid race)
+            if mismatches:
+                if progress_callback:
+                    progress_callback(95, 100, f"Retry de {len(mismatches)} éléments...")
+
+                for item_id in mismatches:
+                    value = expected[item_id]
+                    label_id = label_map.get(value)
+                    if label_id is None:
+                        result["errors"].append(f"Retry item {item_id}: pas de label ID pour '{value}'")
+                        continue
+
+                    try:
+                        column_values = {
+                            new_column_id: {"ids": [label_id]}
+                        }
+                        await self.update_item_column_values(
+                            item_id=item_id,
+                            board_id=board_id,
+                            column_values=column_values,
+                            create_labels_if_missing=False
+                        )
+                        result["retried"] += 1
+                        await asyncio.sleep(0.5)
+                    except (MondayError, Exception) as e:
+                        result["errors"].append(f"Retry item {item_id}: {e}")
+
             result["success"] = True
             if progress_callback:
                 progress_callback(100, 100, "Migration terminée!")
@@ -738,7 +823,7 @@ class MondayClient:
         source_column_title: str,
         progress_callback: Optional[callable] = None,
         name_mapper: Optional[callable] = None,
-        max_concurrent: int = 10
+        max_concurrent: int = 5
     ) -> dict:
         """Synchronous wrapper for migrate_column_to_dropdown."""
         return asyncio.run(

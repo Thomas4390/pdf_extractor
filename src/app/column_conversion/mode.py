@@ -287,7 +287,10 @@ def _render_execution_section() -> None:
             20: ("Mapping des noms", "Application du mapping..."),
             25: ("Mapping des noms", None),
             30: ("Création dropdown", f"Création de la colonne '{col_title}'..."),
+            35: ("Lecture des labels", "Lecture des labels créés..."),
             40: ("Copie des valeurs", "Copie des valeurs vers la nouvelle colonne..."),
+            92: ("Vérification", "Vérification des valeurs..."),
+            95: ("Retry", "Retry des éléments en erreur..."),
             100: ("Terminé", "Migration terminée!"),
         }
 
@@ -322,7 +325,7 @@ def _render_execution_section() -> None:
                 source_column_title=st.session_state.conv_column_title,
                 progress_callback=update_progress,
                 name_mapper=active_mapper,
-                max_concurrent=10
+                max_concurrent=5
             )
             st.session_state.conv_result = result
             st.session_state.conv_is_executing = False
@@ -385,21 +388,32 @@ def _render_result() -> None:
     if result.get("success"):
         items_migrated = result.get('items_migrated', 0)
         values_mapped = result.get('values_mapped', 0)
+        verified = result.get('verified', 0)
+        mismatches = result.get('mismatches', 0)
+        retried = result.get('retried', 0)
         new_column_id = result.get('new_column_id', 'N/A')
 
         success_msg = f"""
         **Conversion réussie!**
         - Éléments migrés: {items_migrated}
+        - Vérifiés OK: {verified}
         - Nouvelle colonne ID: {new_column_id}
         """
 
         if values_mapped > 0:
             success_msg += f"\n        - Noms mappés: {values_mapped}"
 
+        if mismatches > 0:
+            success_msg += f"\n        - Incohérences détectées: {mismatches}"
+            success_msg += f"\n        - Corrigées par retry: {retried}"
+
         st.success(success_msg)
 
         if values_mapped > 0:
             st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur nom complet (Prénom Nom).")
+
+        if mismatches > 0 and mismatches > retried:
+            st.warning(f"⚠️ {mismatches - retried} éléments n'ont pas pu être corrigés après retry.")
     else:
         st.error("La conversion a rencontré des problèmes.")
 
