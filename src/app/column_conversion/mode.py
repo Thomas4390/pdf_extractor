@@ -2,8 +2,8 @@
 Column Conversion Mode rendering.
 
 Provides the UI for converting label/status columns to dropdown columns.
-The original column is renamed to "{name} old" and a new dropdown column
-is created with the original values migrated.
+A new dropdown column is created with the same title and the original
+values are migrated to it.
 
 Features:
 - Automatic advisor name mapping using the advisor database
@@ -53,9 +53,9 @@ def render_column_conversion_mode() -> None:
     Convertissez une colonne d'étiquettes (status/text) en menu déroulant (dropdown).
 
     **Processus:**
-    1. L'ancienne colonne sera renommée en `{nom} old`
-    2. Une nouvelle colonne dropdown sera créée avec le nom original
-    3. Toutes les valeurs seront copiées vers la nouvelle colonne
+    1. Une nouvelle colonne dropdown sera créée avec le même nom
+    2. Toutes les valeurs seront copiées vers la nouvelle colonne
+    3. L'ancienne colonne reste inchangée (à supprimer manuellement si souhaitée)
     """)
 
     # Check API connection
@@ -271,14 +271,12 @@ def _render_execution_section() -> None:
     # Summary of changes
     st.markdown(f"""
     **Changements prévus:**
-    - La colonne `{col_title}` sera renommée en `{col_title} old`
     - Une nouvelle colonne dropdown `{col_title}` sera créée
     - Toutes les valeurs existantes seront {"mappées puis " if use_mapping else ""}copiées vers la nouvelle colonne
-    - En cas d'erreur lors de la création de la colonne, le renommage sera annulé (rollback)
+    - L'ancienne colonne `{col_title}` restera inchangée
     """)
 
-    st.warning("⚠️ Cette opération ne peut pas être annulée automatiquement après la copie des valeurs. "
-               "Vérifiez l'aperçu ci-dessus avant de continuer.")
+    st.warning("⚠️ Vérifiez l'aperçu ci-dessus avant de continuer.")
 
     # Execution button
     if st.session_state.conv_is_executing:
@@ -288,9 +286,7 @@ def _render_execution_section() -> None:
             15: ("Lecture des valeurs", None),
             20: ("Mapping des noms", "Application du mapping..."),
             25: ("Mapping des noms", None),
-            28: ("Renommage colonne", f"Renommage en '{col_title} old'..."),
-            32: ("Création dropdown", f"Création de la colonne '{col_title}'..."),
-            35: ("Création dropdown", None),  # rollback case
+            30: ("Création dropdown", f"Création de la colonne '{col_title}'..."),
             40: ("Copie des valeurs", "Copie des valeurs vers la nouvelle colonne..."),
             100: ("Terminé", "Migration terminée!"),
         }

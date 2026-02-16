@@ -571,12 +571,10 @@ class MondayClient:
 
         This process:
         1. Reads all values and applies name mapping
-        2. Renames the source column to "{title} old"
-        3. Creates a new dropdown column with the original title
-        4. Copies all values from the old column to the new dropdown
+        2. Creates a new dropdown column with the same title
+        3. Copies all values from the old column to the new dropdown
 
-        If creating the new column fails after renaming, the old column
-        is renamed back to its original title (rollback).
+        The source column is left unchanged (not renamed or deleted).
 
         Args:
             board_id: Board ID
@@ -634,47 +632,29 @@ class MondayClient:
                 if raw and isinstance(raw, str):
                     item_data["mapped_value"] = raw.strip().title()
 
-            # Step 3: Rename the source column to "{title} old"
-            old_title = f"{source_column_title} old"
+            # Step 3: Create new dropdown column with the same title
             if progress_callback:
-                progress_callback(28, 100, f"Renommage de la colonne en '{old_title}'...")
+                progress_callback(30, 100, f"Création de la colonne dropdown '{source_column_title}'...")
 
-            await self.rename_column(board_id, source_column_id, old_title)
+            # Deduplicate labels case-insensitively
+            seen: dict[str, str] = {}
+            for label in (iv["mapped_value"] for iv in item_values if iv["mapped_value"]):
+                key = label.lower()
+                if key not in seen:
+                    seen[key] = label
+            unique_labels = list(seen.values())[:200]
 
-            # Step 4: Create new dropdown column with original title
-            # Wrapped in try/except for rollback: if this fails, rename back
-            try:
-                if progress_callback:
-                    progress_callback(32, 100, f"Création de la colonne dropdown '{source_column_title}'...")
+            # Create dropdown with labels as defaults if we have values
+            defaults = None
+            if unique_labels:
+                defaults = {"labels": [{"name": label} for label in unique_labels]}
 
-                # Deduplicate labels case-insensitively
-                seen: dict[str, str] = {}
-                for label in (iv["mapped_value"] for iv in item_values if iv["mapped_value"]):
-                    key = label.lower()
-                    if key not in seen:
-                        seen[key] = label
-                unique_labels = list(seen.values())[:200]
-
-                # Create dropdown with labels as defaults if we have values
-                defaults = None
-                if unique_labels:
-                    defaults = {"labels": [{"name": label} for label in unique_labels]}
-
-                new_column = await self.create_column(
-                    board_id=board_id,
-                    title=source_column_title,
-                    column_type=ColumnType.DROPDOWN,
-                    defaults=defaults
-                )
-            except MondayError as e:
-                # Rollback: rename the old column back to its original title
-                if progress_callback:
-                    progress_callback(35, 100, "Erreur — rollback du renommage...")
-                try:
-                    await self.rename_column(board_id, source_column_id, source_column_title)
-                except MondayError:
-                    result["errors"].append("Rollback failed: could not restore original column name")
-                raise e
+            new_column = await self.create_column(
+                board_id=board_id,
+                title=source_column_title,
+                column_type=ColumnType.DROPDOWN,
+                defaults=defaults
+            )
 
             result["new_column_id"] = new_column["id"]
 
