@@ -559,23 +559,39 @@ class MondayClient:
         """Synchronous wrapper for preview_column_mapping."""
         return asyncio.run(self.preview_column_mapping(board_id, column_id, name_mapper))
 
-    async def get_dropdown_label_map(self, board_id: int, column_id: str) -> dict[str, int]:
+    async def get_dropdown_label_map(
+        self,
+        board_id: int,
+        column_id: str,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+    ) -> dict[str, int]:
         """Read dropdown column settings and return {label_name: label_id}.
+
+        Retries if the label map is empty, since Monday.com may need time
+        to propagate column settings after creation.
 
         Args:
             board_id: Board ID containing the dropdown column
             column_id: Column ID of the dropdown column
+            max_retries: Number of retries if label map is empty
+            retry_delay: Seconds to wait between retries
 
         Returns:
             Dict mapping label name to label ID
         """
-        columns = await self.list_columns(board_id)
-        for col in columns:
-            if col["id"] == column_id:
-                settings = json.loads(col.get("settings_str", "{}"))
-                labels = settings.get("labels", [])
-                # labels is a list of {"id": int, "name": str}
-                return {label["name"]: label["id"] for label in labels}
+        for attempt in range(max_retries):
+            columns = await self.list_columns(board_id)
+            for col in columns:
+                if col["id"] == column_id:
+                    settings = json.loads(col.get("settings_str", "{}"))
+                    labels = settings.get("labels", [])
+                    # labels is a list of {"id": int, "name": str}
+                    if labels:
+                        return {label["name"]: label["id"] for label in labels}
+            # Labels not yet available, wait and retry
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
         return {}
 
     async def migrate_column_to_dropdown(
@@ -676,7 +692,7 @@ class MondayClient:
             # Create dropdown with labels as defaults if we have values
             defaults = None
             if unique_labels:
-                defaults = {"labels": [{"name": label} for label in unique_labels]}
+                defaults = {"labels": [{"label": label} for label in unique_labels]}
 
             new_column = await self.create_column(
                 board_id=board_id,
@@ -687,6 +703,9 @@ class MondayClient:
 
             new_column_id = new_column["id"]
             result["new_column_id"] = new_column_id
+
+            # Wait for Monday.com to propagate column settings
+            await asyncio.sleep(2)
 
             # Step 4: Read back label name→ID mapping
             if progress_callback:
