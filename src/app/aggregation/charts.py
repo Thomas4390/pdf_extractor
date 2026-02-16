@@ -798,18 +798,25 @@ def render_advisor_radar_chart(
     # Normalize values (0-100 scale based on max in each column)
     normalized_values = []
     actual_values = []
+    ranks = []
+    total_advisors = len(df)
     for col in existing_cols:
         max_val = df[col].max()
         val = advisor_data[col].iloc[0]
         actual_values.append(val)
         normalized_values.append((val / max_val * 100) if max_val > 0 else 0)
+        rank = int((df[col].dropna() > val).sum()) + 1
+        ranks.append(rank)
+
+    # Build labels with rank info
+    labels = [f"{col} (#{r})" for col, r in zip(existing_cols, ranks)]
 
     # Create radar chart
     fig = go.Figure()
 
     fig.add_trace(go.Scatterpolar(
         r=normalized_values + [normalized_values[0]],  # Close the polygon
-        theta=existing_cols + [existing_cols[0]],
+        theta=labels + [labels[0]],
         fill="toself",
         name=advisor_name,
         line_color=CHART_COLORS["primary"],
