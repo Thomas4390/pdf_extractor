@@ -215,8 +215,11 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
     """
     Verify that Reçu is within tolerance range of calculated Com for each row.
 
-    The comparison uses a CALCULATED commission value based on the formula:
-        Com_calculée = ROUND((PA * 0.4) * 0.5, 2)
+    When _Taux Partage and _Taux Boni columns are present (UV data):
+        If _Taux Boni != 0: Com_calculée = ROUND((PA * _Taux Partage) * 0.5 * _Taux Boni, 2)
+        If _Taux Boni == 0: Com_calculée = ROUND((PA * _Taux Partage) * 0.5, 2)
+
+    Fallback (no taux columns): Com_calculée = ROUND((PA * 0.4) * 0.5, 2)
 
     Args:
         df: DataFrame with 'Reçu' and 'PA' columns
@@ -237,8 +240,22 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
     recu = pd.to_numeric(result_df['Reçu'], errors='coerce')
     pa = pd.to_numeric(result_df['PA'], errors='coerce')
 
-    # Calculate expected commission: ROUND((PA * 0.4) * 0.5, 2)
-    com_calculee = (pa * 0.4 * 0.5).round(2)
+    # Use extracted taux columns when available, otherwise fallback to hardcoded 0.4
+    if '_Taux Partage' in result_df.columns:
+        taux_partage = pd.to_numeric(result_df['_Taux Partage'], errors='coerce').fillna(0.4)
+    else:
+        taux_partage = 0.4
+
+    if '_Taux Boni' in result_df.columns:
+        taux_boni = pd.to_numeric(result_df['_Taux Boni'], errors='coerce').fillna(0.0)
+    else:
+        taux_boni = 0.0
+
+    # Calculate: base = (PA * Taux Partage) * 0.5
+    # If Taux Boni != 0: multiply by Taux Boni
+    base = pa * taux_partage * 0.5
+    boni_multiplier = taux_boni.where(taux_boni != 0, 1.0) if isinstance(taux_boni, pd.Series) else (taux_boni if taux_boni != 0 else 1.0)
+    com_calculee = (base * boni_multiplier).round(2)
 
     # Add calculated commission column
     result_df['Com Calculée'] = com_calculee

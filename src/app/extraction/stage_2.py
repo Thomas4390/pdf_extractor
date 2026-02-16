@@ -425,7 +425,7 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
     """Render the verification tab."""
     if has_verification_cols:
         st.markdown("### Vérification Reçu vs Commission")
-        st.caption("Formule: `Com Calculée = ROUND((PA x 0.4) x 0.5, 2)`")
+        st.caption("Formule: `Com Calculée = ROUND((PA × Taux Partage) × 0.5 [× Taux Boni si ≠ 0], 2)`")
 
         tolerance = st.slider(
             "Tolérance (%)",

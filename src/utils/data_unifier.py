@@ -481,6 +481,8 @@ class DataUnifier:
                 'Reçu': remuneration,  # Utilise la rémunération extraite du JSON
                 'Date': self._format_date(report.date_rapport),
                 'Texte': texte,
+                '_Taux Partage': sharing_rate / 100 if sharing_rate else None,
+                '_Taux Boni': bonus_rate if bonus_rate else 0.0,
             }
             rows.append(row)
 
