@@ -249,17 +249,18 @@ def _render_execution_section() -> None:
 
     if st.button("🔍 Charger l'aperçu", key="conv_preview_btn"):
         st.session_state.conv_preview = None  # Reset before loading
-        try:
-            client = MondayClient(api_key=st.session_state.monday_api_key)
-            active_mapper = name_mapper if use_mapping else None
-            preview = client.preview_column_mapping_sync(
-                board_id=st.session_state.conv_board_id,
-                column_id=st.session_state.conv_column_id,
-                name_mapper=active_mapper,
-            )
-            st.session_state.conv_preview = preview
-        except Exception as e:
-            st.error(f"Erreur lors du chargement de l'aperçu: {e}")
+        with st.spinner("Lecture des valeurs de la colonne..."):
+            try:
+                client = MondayClient(api_key=st.session_state.monday_api_key)
+                active_mapper = name_mapper if use_mapping else None
+                preview = client.preview_column_mapping_sync(
+                    board_id=st.session_state.conv_board_id,
+                    column_id=st.session_state.conv_column_id,
+                    name_mapper=active_mapper,
+                )
+                st.session_state.conv_preview = preview
+            except Exception as e:
+                st.error(f"Erreur lors du chargement de l'aperçu: {e}")
 
     preview = st.session_state.get("conv_preview")
     if preview:
@@ -281,13 +282,37 @@ def _render_execution_section() -> None:
 
     # Execution button
     if st.session_state.conv_is_executing:
-        st.info("Conversion en cours...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # Step labels keyed by progress percentage thresholds
+        step_labels = {
+            0: ("Lecture des valeurs", "Lecture des valeurs existantes..."),
+            15: ("Lecture des valeurs", None),
+            20: ("Mapping des noms", "Application du mapping..."),
+            25: ("Mapping des noms", None),
+            28: ("Renommage colonne", f"Renommage en '{col_title} old'..."),
+            32: ("Création dropdown", f"Création de la colonne '{col_title}'..."),
+            35: ("Création dropdown", None),  # rollback case
+            40: ("Copie des valeurs", "Copie des valeurs vers la nouvelle colonne..."),
+            100: ("Terminé", "Migration terminée!"),
+        }
+
+        status = st.status("Conversion en cours...", expanded=True)
+        progress_bar = status.progress(0, text="Initialisation...")
+        step_text = status.empty()
+        current_step = {"label": ""}
 
         def update_progress(current: int, total: int, message: str) -> None:
-            progress_bar.progress(current / total)
-            status_text.text(message)
+            pct = current / total
+            # Find matching step label
+            matched_label = None
+            for threshold in sorted(step_labels.keys(), reverse=True):
+                if current >= threshold:
+                    matched_label, _ = step_labels[threshold]
+                    break
+            # Update step header when it changes
+            if matched_label and matched_label != current_step["label"]:
+                current_step["label"] = matched_label
+                step_text.markdown(f"**Étape:** {matched_label}")
+            progress_bar.progress(pct, text=message)
 
         try:
             client = MondayClient(api_key=st.session_state.monday_api_key)
@@ -305,11 +330,13 @@ def _render_execution_section() -> None:
             )
             st.session_state.conv_result = result
             st.session_state.conv_is_executing = False
-            st.session_state.conv_preview = None  # Clear preview after execution
+            st.session_state.conv_preview = None
+            status.update(label="Conversion terminée!", state="complete", expanded=False)
             st.rerun()
         except Exception as e:
             st.session_state.conv_is_executing = False
-            st.error(f"Erreur lors de la conversion: {e}")
+            status.update(label="Erreur lors de la conversion", state="error", expanded=True)
+            st.error(f"Erreur: {e}")
     else:
         if st.button("🚀 Lancer la Conversion", type="primary", width="stretch"):
             st.session_state.conv_result = None
