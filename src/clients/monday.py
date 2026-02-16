@@ -692,9 +692,18 @@ class MondayClient:
                 if raw and isinstance(raw, str):
                     item_data["mapped_value"] = raw.strip().title()
 
-            # Step 3: Create new dropdown column with all labels pre-created
+            # Step 3: Create new empty dropdown column
             if progress_callback:
                 progress_callback(30, 100, f"Création de la colonne dropdown '{source_column_title}'...")
+
+            new_column = await self.create_column(
+                board_id=board_id,
+                title=source_column_title,
+                column_type=ColumnType.DROPDOWN,
+            )
+
+            new_column_id = new_column["id"]
+            result["new_column_id"] = new_column_id
 
             # Deduplicate labels case-insensitively
             seen: dict[str, str] = {}
@@ -704,32 +713,48 @@ class MondayClient:
                     seen[key] = label
             unique_labels = list(seen.values())[:200]
 
-            # Create dropdown with labels as defaults if we have values
-            defaults = None
-            if unique_labels:
-                defaults = {"labels": [{"label": label} for label in unique_labels]}
-
-            new_column = await self.create_column(
-                board_id=board_id,
-                title=source_column_title,
-                column_type=ColumnType.DROPDOWN,
-                defaults=defaults
-            )
-
-            new_column_id = new_column["id"]
-            result["new_column_id"] = new_column_id
-
-            # Wait for Monday.com to propagate column settings
-            await asyncio.sleep(2)
-
-            # Step 4: Read back label name→ID mapping
+            # Step 4: Seed each unique label sequentially to avoid duplicates.
+            # Monday.com's create_column defaults don't actually create labels,
+            # so we write one item per unique label with create_labels_if_missing=True.
             if progress_callback:
-                progress_callback(35, 100, "Lecture des labels créés...")
+                progress_callback(33, 100, f"Création de {len(unique_labels)} labels...")
+
+            # Build a map: label -> first item_id that uses it
+            label_to_first_item: dict[str, str] = {}
+            for iv in item_values:
+                val = iv["mapped_value"]
+                if val and val not in label_to_first_item:
+                    label_to_first_item[val] = iv["item_id"]
+
+            for i, label in enumerate(unique_labels):
+                seed_item_id = label_to_first_item.get(label)
+                if not seed_item_id:
+                    continue
+                try:
+                    await self.update_item_column_values(
+                        item_id=seed_item_id,
+                        board_id=board_id,
+                        column_values={new_column_id: {"labels": [label]}},
+                        create_labels_if_missing=True
+                    )
+                    await asyncio.sleep(0.3)
+                except (MondayError, Exception) as e:
+                    result["errors"].append(f"Seed label '{label}': {e}")
+
+                if progress_callback:
+                    progress = 33 + int((i + 1) / len(unique_labels) * 5)
+                    progress_callback(progress, 100, f"Label {i + 1}/{len(unique_labels)}: {label}")
+
+            await asyncio.sleep(1)
+
+            # Step 5: Read back label name→ID mapping
+            if progress_callback:
+                progress_callback(38, 100, "Lecture des labels créés...")
 
             label_map = await self.get_dropdown_label_map(board_id, new_column_id)
 
             if progress_callback:
-                progress_callback(38, 100, f"Trouvé {len(label_map)} labels")
+                progress_callback(39, 100, f"Trouvé {len(label_map)} labels")
 
             if not label_map:
                 result["errors"].append(
@@ -738,11 +763,17 @@ class MondayClient:
                 )
                 return result
 
-            # Step 5: Write each item using {"ids": [label_id]} instead of {"labels": [name]}
-            if progress_callback:
-                progress_callback(40, 100, "Copie des valeurs vers la nouvelle colonne...")
+            # Step 6: Write remaining items using {"ids": [label_id]}
+            # Items already seeded in step 4 are skipped.
+            seeded_item_ids = set(label_to_first_item.values())
+            remaining_items = [iv for iv in item_values if iv["item_id"] not in seeded_item_ids]
+            # Count seeded items as already migrated
+            result["items_migrated"] = len(seeded_item_ids)
 
-            total_items = len(item_values)
+            if progress_callback:
+                progress_callback(40, 100, f"Copie des valeurs ({len(remaining_items)} restants)...")
+
+            total_items = len(remaining_items)
             semaphore = asyncio.Semaphore(max_concurrent)
             completed = {"count": 0}
 
@@ -789,10 +820,10 @@ class MondayClient:
 
                     return f"Item {item_id}: Échec après {max_retries} tentatives"
 
-            # Run all updates concurrently
+            # Run all updates concurrently (only non-seeded items)
             errors = await asyncio.gather(*[
                 update_single_item(item_data)
-                for item_data in item_values
+                for item_data in remaining_items
             ])
 
             # Count successes and collect errors
