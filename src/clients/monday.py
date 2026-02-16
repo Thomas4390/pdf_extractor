@@ -586,12 +586,27 @@ class MondayClient:
                 if col["id"] == column_id:
                     settings = json.loads(col.get("settings_str", "{}"))
                     labels = settings.get("labels", [])
-                    # labels is a list of {"id": int, "name": str}
                     if labels:
-                        return {label["name"]: label["id"] for label in labels}
+                        label_map = {}
+                        if isinstance(labels, list):
+                            # List format: [{"id": int, "name": str}, ...]
+                            for label in labels:
+                                label_map[label["name"]] = label["id"]
+                        elif isinstance(labels, dict):
+                            # Dict format: {"1": "Label Name", ...}
+                            # or {"1": {"id": 1, "name": "Label Name"}, ...}
+                            for key, val in labels.items():
+                                if isinstance(val, str):
+                                    label_map[val] = int(key)
+                                elif isinstance(val, dict):
+                                    label_map[val["name"]] = val.get("id", int(key))
+                        if label_map:
+                            return label_map
             # Labels not yet available, wait and retry
             if attempt < max_retries - 1:
+                print(f"[dropdown] Label map empty on attempt {attempt + 1}, retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
+        print(f"[dropdown] WARNING: Label map still empty after {max_retries} attempts")
         return {}
 
     async def migrate_column_to_dropdown(
@@ -715,6 +730,13 @@ class MondayClient:
 
             if progress_callback:
                 progress_callback(38, 100, f"Trouvé {len(label_map)} labels")
+
+            if not label_map:
+                result["errors"].append(
+                    f"Impossible de lire les labels de la colonne {new_column_id}. "
+                    f"Attendus: {len(unique_labels)} labels. Migration annulée."
+                )
+                return result
 
             # Step 5: Write each item using {"ids": [label_id]} instead of {"labels": [name]}
             if progress_callback:
