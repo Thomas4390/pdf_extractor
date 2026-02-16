@@ -218,7 +218,7 @@ def _render_advisors_list(advisors: list, matcher) -> None:
         df = pd.DataFrame(table_data)
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Variations": st.column_config.NumberColumn(format="%d"),
