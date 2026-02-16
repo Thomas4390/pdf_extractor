@@ -167,6 +167,7 @@ AVAILABLE_MODELS: dict[str, str] = {
     "google/gemini-3-pro-preview": "Gemini 3 Pro (Haute précision)",
     "qwen/qwen3-vl-235b-a22b-instruct": "Qwen 3 VL 235B (Alternative)",
     "qwen/qwen2.5-vl-72b-instruct": "Qwen 2.5 VL 72B (Legacy)",
+    "moonshotai/kimi-k2.5": "Kimi K2.5 (Vision + Code)",
     "anthropic/claude-sonnet-4": "Claude Sonnet 4 (Vision avancée)",
     "openai/gpt-4o": "GPT-4o (OpenAI Vision)",
 }
