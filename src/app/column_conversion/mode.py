@@ -10,6 +10,7 @@ Features:
 - Concurrent API calls for faster migration
 """
 
+import pandas as pd
 import streamlit as st
 
 from src.clients.monday import MondayClient, MondayError
@@ -20,14 +21,26 @@ def _get_name_mapper():
 
     Returns:
         A function that maps first names to full names, or None if not configured.
+        The returned function handles edge cases: strips whitespace, skips
+        empty/whitespace-only strings, and normalizes casing with .title().
     """
     try:
         from src.utils.advisor_matcher import get_advisor_matcher
 
         matcher = get_advisor_matcher()
         if matcher.is_configured:
-            # Return the mapping function for full names
-            return matcher.match_full_name_or_original
+            raw_mapper = matcher.match_full_name_or_original
+
+            def safe_mapper(value: str) -> str:
+                if not value or not isinstance(value, str):
+                    return value
+                stripped = value.strip()
+                if not stripped:
+                    return value
+                result = raw_mapper(stripped)
+                return result.strip().title() if result else value
+
+            return safe_mapper
         return None
     except Exception:
         return None
@@ -226,21 +239,45 @@ def _render_execution_section() -> None:
         st.info("ℹ️ Le mapping des noms n'est pas disponible (Google Sheets non configuré). "
                 "Les valeurs seront copiées telles quelles.")
 
+    # Store mapping preference in session state
+    st.session_state.conv_use_mapping = use_mapping
+
     st.markdown("---")
 
-    # Preview of changes
+    # Dry-run preview: load actual values and show mapping result
+    st.markdown("#### Aperçu du mapping")
+
+    if st.button("🔍 Charger l'aperçu", key="conv_preview_btn"):
+        st.session_state.conv_preview = None  # Reset before loading
+        try:
+            client = MondayClient(api_key=st.session_state.monday_api_key)
+            active_mapper = name_mapper if use_mapping else None
+            preview = client.preview_column_mapping_sync(
+                board_id=st.session_state.conv_board_id,
+                column_id=st.session_state.conv_column_id,
+                name_mapper=active_mapper,
+            )
+            st.session_state.conv_preview = preview
+        except Exception as e:
+            st.error(f"Erreur lors du chargement de l'aperçu: {e}")
+
+    preview = st.session_state.get("conv_preview")
+    if preview:
+        _render_mapping_preview(preview)
+
+    st.markdown("---")
+
+    # Summary of changes
     st.markdown(f"""
     **Changements prévus:**
     - La colonne `{col_title}` sera renommée en `{col_title} old`
     - Une nouvelle colonne dropdown `{col_title}` sera créée
     - Toutes les valeurs existantes seront {"mappées puis " if use_mapping else ""}copiées vers la nouvelle colonne
+    - En cas d'erreur lors de la création de la colonne, le renommage sera annulé (rollback)
     """)
 
-    st.warning("⚠️ Cette opération ne peut pas être annulée automatiquement. "
-               "Assurez-vous de vouloir continuer.")
-
-    # Store mapping preference in session state
-    st.session_state.conv_use_mapping = use_mapping
+    st.warning("⚠️ Cette opération ne peut pas être annulée automatiquement après la copie des valeurs. "
+               "Vérifiez l'aperçu ci-dessus avant de continuer.")
 
     # Execution button
     if st.session_state.conv_is_executing:
@@ -264,10 +301,11 @@ def _render_execution_section() -> None:
                 source_column_title=st.session_state.conv_column_title,
                 progress_callback=update_progress,
                 name_mapper=active_mapper,
-                max_concurrent=10  # 10 concurrent updates for speed
+                max_concurrent=10
             )
             st.session_state.conv_result = result
             st.session_state.conv_is_executing = False
+            st.session_state.conv_preview = None  # Clear preview after execution
             st.rerun()
         except Exception as e:
             st.session_state.conv_is_executing = False
@@ -277,6 +315,41 @@ def _render_execution_section() -> None:
             st.session_state.conv_result = None
             st.session_state.conv_is_executing = True
             st.rerun()
+
+
+def _render_mapping_preview(preview: list[dict]) -> None:
+    """Render the dry-run mapping preview table."""
+    if not preview:
+        st.info("Aucune valeur trouvée dans la colonne.")
+        return
+
+    # Aggregate: group by (original, mapped) and count occurrences
+    counts: dict[tuple[str, str], int] = {}
+    for entry in preview:
+        key = (entry["original"], entry["mapped"])
+        counts[key] = counts.get(key, 0) + 1
+
+    rows = []
+    for (original, mapped), count in sorted(counts.items(), key=lambda x: -x[1]):
+        rows.append({
+            "Valeur originale": original,
+            "Valeur mappée": mapped,
+            "Nombre": count,
+            "Modifié": "oui" if original != mapped else "",
+        })
+
+    df = pd.DataFrame(rows)
+
+    total = len(preview)
+    changed = sum(1 for e in preview if e["changed"])
+    unique_labels = len({e["mapped"] for e in preview if e["mapped"]})
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total éléments", total)
+    col2.metric("Valeurs modifiées", changed)
+    col3.metric("Labels uniques", unique_labels)
+
+    st.dataframe(df, width="stretch", hide_index=True)
 
 
 def _render_result() -> None:
@@ -289,7 +362,6 @@ def _render_result() -> None:
     if result.get("success"):
         items_migrated = result.get('items_migrated', 0)
         values_mapped = result.get('values_mapped', 0)
-        retried_count = result.get('retried_count', 0)
         new_column_id = result.get('new_column_id', 'N/A')
 
         success_msg = f"""
@@ -301,16 +373,10 @@ def _render_result() -> None:
         if values_mapped > 0:
             success_msg += f"\n        - Noms mappés: {values_mapped}"
 
-        if retried_count > 0:
-            success_msg += f"\n        - Tentatives supplémentaires: {retried_count}"
-
         st.success(success_msg)
 
         if values_mapped > 0:
             st.info(f"🔗 {values_mapped} prénoms ont été convertis vers leur nom complet (Prénom Nom).")
-
-        if retried_count > 0:
-            st.caption(f"ℹ️ {retried_count} éléments ont nécessité des tentatives supplémentaires (vérification automatique).")
     else:
         st.error("La conversion a rencontré des problèmes.")
 
@@ -323,6 +389,8 @@ def _render_result() -> None:
     if st.button("🔄 Nouvelle Conversion", width="stretch"):
         st.session_state.conv_board_id = None
         st.session_state.conv_column_id = None
+        st.session_state.conv_column_title = "Conseiller"
         st.session_state.conv_result = None
         st.session_state.conv_use_mapping = True
+        st.session_state.conv_preview = None
         st.rerun()

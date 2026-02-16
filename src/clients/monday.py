@@ -511,6 +511,53 @@ class MondayClient:
 
         return result
 
+    async def preview_column_mapping(
+        self,
+        board_id: int,
+        column_id: str,
+        name_mapper: Optional[callable] = None,
+    ) -> list[dict]:
+        """Preview the mapping that would be applied during migration.
+
+        Reads all values from the column, applies the mapper, and returns
+        a list of {original, mapped, changed} dicts for UI display.
+        No writes are performed.
+
+        Args:
+            board_id: Board ID
+            column_id: Column ID to read values from
+            name_mapper: Optional function(str) -> str to transform values
+
+        Returns:
+            List of dicts with keys: original, mapped, changed
+        """
+        item_values = await self.get_column_values_for_all_items(board_id, column_id)
+        preview = []
+        for item_data in item_values:
+            original = item_data["value"]
+            if name_mapper:
+                mapped = name_mapper(original)
+            else:
+                mapped = original
+            # Normalize same as migration
+            if mapped and isinstance(mapped, str):
+                mapped = mapped.strip().title()
+            preview.append({
+                "original": original,
+                "mapped": mapped,
+                "changed": original != mapped,
+            })
+        return preview
+
+    def preview_column_mapping_sync(
+        self,
+        board_id: int,
+        column_id: str,
+        name_mapper: Optional[callable] = None,
+    ) -> list[dict]:
+        """Synchronous wrapper for preview_column_mapping."""
+        return asyncio.run(self.preview_column_mapping(board_id, column_id, name_mapper))
+
     async def migrate_column_to_dropdown(
         self,
         board_id: int,
@@ -523,10 +570,13 @@ class MondayClient:
         """Migrate a column (status/text) to a new dropdown column.
 
         This process:
-        1. Renames the source column to "{title} old"
-        2. Creates a new dropdown column with the original title
-        3. Copies all values from the old column to the new dropdown
-        4. Optionally maps values using a name_mapper function
+        1. Reads all values and applies name mapping
+        2. Renames the source column to "{title} old"
+        3. Creates a new dropdown column with the original title
+        4. Copies all values from the old column to the new dropdown
+
+        If creating the new column fails after renaming, the old column
+        is renamed back to its original title (rollback).
 
         Args:
             board_id: Board ID
@@ -578,6 +628,12 @@ class MondayClient:
                 for item_data in item_values:
                     item_data["mapped_value"] = item_data["value"]
 
+            # Normalize all mapped values to prevent duplicate labels
+            for item_data in item_values:
+                raw = item_data["mapped_value"]
+                if raw and isinstance(raw, str):
+                    item_data["mapped_value"] = raw.strip().title()
+
             # Step 3: Rename the source column to "{title} old"
             old_title = f"{source_column_title} old"
             if progress_callback:
@@ -586,23 +642,40 @@ class MondayClient:
             await self.rename_column(board_id, source_column_id, old_title)
 
             # Step 4: Create new dropdown column with original title
-            if progress_callback:
-                progress_callback(32, 100, f"Création de la colonne dropdown '{source_column_title}'...")
+            # Wrapped in try/except for rollback: if this fails, rename back
+            try:
+                if progress_callback:
+                    progress_callback(32, 100, f"Création de la colonne dropdown '{source_column_title}'...")
 
-            # Get unique labels for dropdown defaults (using mapped values)
-            unique_labels = list(set(iv["mapped_value"] for iv in item_values if iv["mapped_value"]))
+                # Deduplicate labels case-insensitively
+                seen: dict[str, str] = {}
+                for label in (iv["mapped_value"] for iv in item_values if iv["mapped_value"]):
+                    key = label.lower()
+                    if key not in seen:
+                        seen[key] = label
+                unique_labels = list(seen.values())[:200]
 
-            # Create dropdown with labels as defaults if we have values
-            defaults = None
-            if unique_labels:
-                defaults = {"labels": [{"name": label} for label in unique_labels[:200]]}  # Max 200 labels
+                # Create dropdown with labels as defaults if we have values
+                defaults = None
+                if unique_labels:
+                    defaults = {"labels": [{"name": label} for label in unique_labels]}
 
-            new_column = await self.create_column(
-                board_id=board_id,
-                title=source_column_title,
-                column_type=ColumnType.DROPDOWN,
-                defaults=defaults
-            )
+                new_column = await self.create_column(
+                    board_id=board_id,
+                    title=source_column_title,
+                    column_type=ColumnType.DROPDOWN,
+                    defaults=defaults
+                )
+            except MondayError as e:
+                # Rollback: rename the old column back to its original title
+                if progress_callback:
+                    progress_callback(35, 100, "Erreur — rollback du renommage...")
+                try:
+                    await self.rename_column(board_id, source_column_id, source_column_title)
+                except MondayError:
+                    result["errors"].append("Rollback failed: could not restore original column name")
+                raise e
+
             result["new_column_id"] = new_column["id"]
 
             if progress_callback:
@@ -611,31 +684,8 @@ class MondayClient:
             # Step 5: Copy values to new dropdown column using concurrent updates
             total_items = len(item_values)
             semaphore = asyncio.Semaphore(max_concurrent)
-            completed = {"count": 0, "retried": 0}  # Use dict for closure
+            completed = {"count": 0}
             new_column_id = new_column["id"]
-
-            async def verify_item_value(item_id: str, expected_value: str) -> bool:
-                """Verify that an item's column value was set correctly."""
-                try:
-                    query = """
-                    query ($item_id: ID!) {
-                        items(ids: [$item_id]) {
-                            column_values {
-                                id
-                                text
-                            }
-                        }
-                    }
-                    """
-                    response = await self._make_request(query, {"item_id": item_id})
-                    items = response.get("data", {}).get("items", [])
-                    if items:
-                        for col_val in items[0].get("column_values", []):
-                            if col_val["id"] == new_column_id:
-                                return col_val.get("text") == expected_value
-                    return False
-                except Exception:
-                    return False
 
             async def update_single_item(item_data: dict) -> Optional[str]:
                 """Update a single item with semaphore-controlled concurrency and retry logic."""
@@ -659,26 +709,15 @@ class MondayClient:
                             # Delay to respect rate limits
                             await asyncio.sleep(0.3)
 
-                            # Verify the value was set correctly
-                            if await verify_item_value(item_id, value):
-                                completed["count"] += 1
-                                if progress_callback and total_items > 0:
-                                    progress = 40 + int(completed["count"] / total_items * 55)
-                                    progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
-                                return None  # Success
-
-                            # Verification failed, retry
-                            if attempt < max_retries - 1:
-                                completed["retried"] += 1
-                                await asyncio.sleep(0.5)  # Extra delay before retry
-                                continue
-                            else:
-                                return f"Item {item_id}: Vérification échouée après {max_retries} tentatives"
+                            completed["count"] += 1
+                            if progress_callback and total_items > 0:
+                                progress = 40 + int(completed["count"] / total_items * 55)
+                                progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
+                            return None  # Success
 
                         except MondayError as e:
                             if attempt < max_retries - 1:
-                                completed["retried"] += 1
-                                await asyncio.sleep(0.5)  # Extra delay before retry
+                                await asyncio.sleep(0.5)
                                 continue
                             return f"Item {item_id}: {e}"
 
@@ -696,9 +735,6 @@ class MondayClient:
                     result["items_migrated"] += 1
                 else:
                     result["errors"].append(error)
-
-            # Add retry stats to result
-            result["retried_count"] = completed["retried"]
 
             result["success"] = True
             if progress_callback:
