@@ -867,8 +867,9 @@ class DataUnifier:
             if col not in df.columns:
                 df[col] = None
 
-        # Réordonner et filtrer aux colonnes finales uniquement
-        return df[columns].copy()
+        # Préserver les colonnes internes (_Taux Partage, _Taux Boni, _source_file, etc.)
+        internal_cols = [c for c in df.columns if c.startswith('_') and c not in columns]
+        return df[columns + internal_cols].copy()
 
     # =========================================================================
     # UTILITAIRES
