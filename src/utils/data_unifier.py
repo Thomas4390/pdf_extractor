@@ -512,8 +512,9 @@ class DataUnifier:
 
         rows = []
         for prop in report.propositions:
-            # IDC: Toujours utiliser "IDC" comme nom de compagnie
-            insurer_name = 'IDC'
+            # IDC: Utiliser le nom de la compagnie extrait du PDF, normalisé
+            raw_insurer = prop.assureur or ''
+            insurer_name = self._normalize_insurer_name(raw_insurer) if raw_insurer else None
 
             # Convertir les valeurs extraites du JSON
             premium = self._clean_currency(prop.prime_police)
@@ -545,7 +546,7 @@ class DataUnifier:
                 'Nom Client': prop.client,
                 'Compagnie': insurer_name,
                 'Statut': status,
-                'Conseiller': report.vendeur,
+                'Conseiller': None,
                 'Complet': None,
                 'PA': premium,
                 'Lead/MC': 'Lead',
@@ -594,8 +595,8 @@ class DataUnifier:
                 # Try to extract company from raw_client_data
                 company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
 
-            # IDC Statement: Toujours utiliser "IDC" comme nom de compagnie
-            company_name = 'IDC'
+            # Normaliser le nom de la compagnie extrait du PDF
+            company_name = self._normalize_insurer_name(company_name) if company_name else None
 
             # Convertir le montant des frais de suivi
             trailing_fee = self._clean_currency(fee.net_trailing_fee)
@@ -616,7 +617,7 @@ class DataUnifier:
                 'Nom Client': client_name or 'Unknown',
                 'Compagnie': company_name,
                 'Statut': status,
-                'Conseiller': advisor_name,
+                'Conseiller': None,
                 'Verifié': None,  # Sera calculé plus tard si nécessaire
                 'PA': None,  # Pas de prime dans les relevés
                 'Com': None,
