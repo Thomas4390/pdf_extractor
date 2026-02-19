@@ -595,8 +595,8 @@ class DataUnifier:
                 # Try to extract company from raw_client_data
                 company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
 
-            # Normaliser le nom de la compagnie extrait du PDF
-            company_name = self._normalize_insurer_name(company_name) if company_name else None
+            # IDC Statement: Toujours utiliser "IDC" comme nom de compagnie
+            company_name = 'IDC'
 
             # Convertir le montant des frais de suivi
             trailing_fee = self._clean_currency(fee.net_trailing_fee)
@@ -617,7 +617,7 @@ class DataUnifier:
                 'Nom Client': client_name or 'Unknown',
                 'Compagnie': company_name,
                 'Statut': status,
-                'Conseiller': None,
+                'Conseiller': advisor_name,
                 'Verifié': None,  # Sera calculé plus tard si nécessaire
                 'PA': None,  # Pas de prime dans les relevés
                 'Com': None,
