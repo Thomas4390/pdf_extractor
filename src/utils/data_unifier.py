@@ -385,6 +385,71 @@ class DataUnifier:
         except (ValueError, TypeError):
             return None
 
+    def _is_uv_corporate_line(self, act, report: UVReport) -> bool:
+        """
+        Détermine si une activité UV appartient au conseiller corporatif (Inc).
+
+        Compare le sous_conseiller de l'activité avec le numéro du conseiller
+        principal du rapport. Si le sous_conseiller contient le numéro du
+        conseiller principal (ex: "21621"), c'est une ligne Inc.
+        Sinon, c'est une ligne Perso.
+        """
+        sous = str(act.sous_conseiller or "").strip()
+
+        # Si le numéro du conseiller principal est dans le sous_conseiller → Inc
+        if report.numero_conseiller:
+            numero = str(report.numero_conseiller).strip()
+            if numero and numero in sous:
+                return True
+
+        # Si le nom corporatif est dans le sous_conseiller → Inc
+        if report.nom_conseiller and self._is_corporate_advisor(report.nom_conseiller):
+            nom = str(report.nom_conseiller).strip().upper()
+            if nom and nom in sous.upper():
+                return True
+
+        # Pas de sous_conseiller: fallback sur le nom_conseiller principal
+        if not sous:
+            return self._is_corporate_advisor(report.nom_conseiller)
+
+        return False
+
+    def _parse_uv_advisor_name(self, sous_conseiller: str) -> Optional[str]:
+        """
+        Extrait le nom du conseiller depuis le champ sous_conseiller UV.
+
+        Format attendu: "NUMBER - NOM COMPLET" (ex: "21639 - ROBINSON VIAUD")
+
+        Règles:
+        - Retourne None si sous_conseiller est vide ou corporatif (contient des chiffres dans le nom)
+        - Retourne None si le nom contient "Achraf" (cas spécial)
+        - Sinon retourne le nom en title case (ex: "Robinson Viaud")
+        """
+        if not sous_conseiller:
+            return None
+
+        sous = str(sous_conseiller).strip()
+
+        # Extraire la partie nom après "NUMBER - "
+        if ' - ' in sous:
+            name_part = sous.split(' - ', 1)[1].strip()
+        else:
+            return None
+
+        if not name_part:
+            return None
+
+        # Exclure les noms corporatifs (contiennent des chiffres)
+        if re.search(r'\d', name_part):
+            return None
+
+        # Exclure si le nom contient "Achraf"
+        if 'achraf' in name_part.lower():
+            return None
+
+        # Retourner en title case
+        return name_part.title()
+
     # =========================================================================
     # CONVERTISSEURS PAR SOURCE
     # =========================================================================
@@ -400,63 +465,99 @@ class DataUnifier:
         - act.remuneration → 'Reçu' (total reçu incluant boni)
         - act.montant_base → 'PA' (prime annualisée)
 
-        FILTRE: Conserve UNIQUEMENT les activités avec taux_partage != 100%
-        (exclut les lignes à 100% de partage)
+        FILTRES:
+        - Exclut les lignes avec taux_partage == None
+        - UV Perso: exclut les lignes avec taux_partage == 100%
+        - UV Perso: exclut les lignes boni de reconnaissances (assure == None)
+        - UV Inc: exclut les lignes avec taux_partage == 100% SAUF si
+          taux_boni != 0% et != 175% (ces lignes sont des sur-com)
+
+        COMPAGNIE:
+        - Déterminée par le nom_conseiller au sommet du document (niveau document):
+          Si nom_conseiller est corporatif (contient des chiffres) → UV Inc pour tout le document
+          Sinon → UV Perso pour tout le document
         """
         if not report.activites:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
         filtered_count = 0
+        surcom_count = 0
 
         for act in report.activites:
-            # Filtrer les activités avec taux de partage == 100%
-            # On ne conserve QUE les lignes avec partage != 100%
             sharing_rate = self._decimal_to_float(act.taux_partage)
-            if sharing_rate is None or sharing_rate == 100.0:
-                filtered_count += 1
-                continue  # Exclure les lignes à 100%
+            bonus_rate_pct = self._decimal_to_float(act.taux_boni)  # En pourcentage (ex: 175.0)
 
-            # Déterminer le type d'assureur (Inc vs Perso)
+            # Déterminer UV Inc vs UV Perso basé sur le nom_conseiller du DOCUMENT
+            # C'est le conseiller principal au sommet du PDF qui décide pour tout
             is_corporate = self._is_corporate_advisor(report.nom_conseiller)
             insurer_name = 'UV Inc' if is_corporate else 'UV Perso'
 
-            # UV: Toujours laisser le conseiller vide
-            # Le nom du conseiller n'est pas extrait pour les rapports UV
-            advisor_name = None
+            # --- FILTRAGE ---
 
-            # Convertir les valeurs Decimal - utiliser les valeurs EXTRAITES du PDF
+            # Exclure les lignes sans taux de partage
+            if sharing_rate is None:
+                filtered_count += 1
+                continue
+
+            # Logique pour taux de partage == 100%
+            is_surcom_line = False
+            if sharing_rate == 100.0:
+                if is_corporate and bonus_rate_pct is not None and bonus_rate_pct != 0.0 and bonus_rate_pct != 175.0:
+                    # UV Inc: taux_boni != 0% et != 175% → c'est une sur-com, on la garde
+                    is_surcom_line = True
+                    surcom_count += 1
+                else:
+                    # Toutes les autres lignes à 100% sont exclues
+                    filtered_count += 1
+                    continue
+
+            # UV Perso: exclure les boni de reconnaissances (lignes sans nom de client)
+            if not is_corporate:
+                assure_str = str(act.assure or "").strip().lower()
+                if not assure_str or assure_str in ('none', 'nan', 'null', ''):
+                    filtered_count += 1
+                    continue
+
+            # Extraire le nom du conseiller depuis sous_conseiller (format: "NUMBER - NOM")
+            # Laisser vide pour les lignes corporatives et pour Achraf
+            advisor_name = self._parse_uv_advisor_name(act.sous_conseiller)
+
+            # Convertir les valeurs Decimal
             premium = self._decimal_to_float(act.montant_base)
-            commission_base = self._decimal_to_float(act.resultat)  # Commission extraite du PDF
-            remuneration = self._decimal_to_float(act.remuneration)  # Total reçu
-            bonus_rate = self._decimal_to_float(act.taux_boni) / 100 if act.taux_boni else None
+            commission_base = self._decimal_to_float(act.resultat)
+            remuneration = self._decimal_to_float(act.remuneration)
+            bonus_rate = bonus_rate_pct / 100 if bonus_rate_pct else None
             commission_rate = self._decimal_to_float(act.taux_commission)
 
-            # Détecter si c'est un type Boni (ex: 'Boni 1ère année vie')
-            is_bonus_type = act.type_commission and 'boni' in str(act.type_commission).lower()
-
-            # Calculer la commission et le boni selon le type
-            # Si type Boni ou taux de boni != 0%, multiplier la commission par le facteur boni
-            # pour obtenir une comparaison correcte avec le reçu
-            if (is_bonus_type or (bonus_rate and bonus_rate > 0)) and commission_base and bonus_rate:
-                # Commission ajustée = commission_base * (1 + bonus_rate)
-                # Cela correspond au total reçu (commission + bonus)
-                commission = round(commission_base * (1 + bonus_rate), 2)
-                bonus = None  # Boni déjà inclus dans la commission ajustée
+            if is_surcom_line:
+                # Ligne sur-com: valeur dans Sur-Com, pas dans Com/Boni
+                commission = None
+                bonus = None
+                on_commission = remuneration
             else:
-                commission = commission_base
-                bonus = round(commission_base * bonus_rate, 2) if commission_base and bonus_rate else None
+                # Détecter si c'est un type Boni (ex: 'Boni 1ère année vie')
+                is_bonus_type = act.type_commission and 'boni' in str(act.type_commission).lower()
 
-            # Sur-Com n'est pas directement disponible dans UV, on le met à None
-            on_commission = None
+                # Calculer la commission et le boni selon le type
+                if (is_bonus_type or (bonus_rate and bonus_rate > 0)) and commission_base and bonus_rate:
+                    commission = round(commission_base * (1 + bonus_rate), 2)
+                    bonus = None
+                else:
+                    commission = commission_base
+                    bonus = round(commission_base * bonus_rate, 2) if commission_base and bonus_rate else None
 
-            # Construire le texte avec protection, taux de partage et taux de commission
+                on_commission = None
+
+            # Construire le texte
             sharing_rate_str = f"{int(sharing_rate)}%" if sharing_rate else "?"
             commission_rate_str = f"{int(commission_rate)}%" if commission_rate else "?"
             protection_str = act.protection or "N/A"
-            texte = f"{protection_str} | {act.type_commission} (Partage: {sharing_rate_str}, Com: {commission_rate_str})"
+            type_com_str = act.type_commission or ""
+            surcom_label = " [Sur-Com]" if is_surcom_line else ""
+            texte = f"{protection_str} | {type_com_str} (Partage: {sharing_rate_str}, Com: {commission_rate_str}){surcom_label}"
 
-            # Déterminer le statut basé sur la PA (prime annualisée)
+            # Déterminer le statut basé sur la PA
             if premium is not None:
                 if premium > 0:
                     status = 'Payé'
@@ -468,17 +569,17 @@ class DataUnifier:
                 status = None
 
             row = {
-                '# de Police': str(act.contrat),
+                '# de Police': str(act.contrat) if act.contrat else None,
                 'Nom Client': act.assure,
                 'Compagnie': insurer_name,
                 'Statut': status,
                 'Conseiller': advisor_name,
                 'Verifié': None,
                 'PA': premium,
-                'Com': commission,  # Utilise la commission extraite du JSON (act.resultat)
+                'Com': commission,
                 'Boni': bonus,
                 'Sur-Com': on_commission,
-                'Reçu': remuneration,  # Utilise la rémunération extraite du JSON
+                'Reçu': remuneration,
                 'Date': self._format_date(report.date_rapport),
                 'Texte': texte,
                 '_Taux Partage': sharing_rate / 100 if sharing_rate else None,
@@ -487,7 +588,9 @@ class DataUnifier:
             rows.append(row)
 
         if filtered_count > 0:
-            print(f"  ℹ️  UV: {filtered_count} ligne(s) exclue(s) (taux de partage = 100%)")
+            print(f"  ℹ️  UV: {filtered_count} ligne(s) exclue(s) (taux de partage = 100% ou boni de reconnaissance)")
+        if surcom_count > 0:
+            print(f"  ℹ️  UV Inc: {surcom_count} ligne(s) de sur-com conservée(s)")
 
         df = pd.DataFrame(rows)
 
@@ -511,7 +614,14 @@ class DataUnifier:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
         rows = []
+        filtered_nombre_count = 0
         for prop in report.propositions:
+            # Filtrer les lignes où nombre != 1.0
+            nombre_val = self._decimal_to_float(prop.nombre)
+            if nombre_val is not None and nombre_val != 1.0:
+                filtered_nombre_count += 1
+                continue
+
             # IDC: Utiliser le nom de la compagnie extrait du PDF, normalisé
             raw_insurer = prop.assureur or ''
             insurer_name = self._normalize_insurer_name(raw_insurer) if raw_insurer else None
@@ -562,6 +672,9 @@ class DataUnifier:
                 'Texte': f"{prop.type_regime} - {prop.couverture}",
             }
             rows.append(row)
+
+        if filtered_nombre_count > 0:
+            print(f"  ℹ️  IDC: {filtered_nombre_count} ligne(s) exclue(s) (nombre != 1)")
 
         return pd.DataFrame(rows)
 

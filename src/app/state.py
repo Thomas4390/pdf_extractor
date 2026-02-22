@@ -127,6 +127,11 @@ def init_session_state() -> None:
         "boards_loading": False,
         "boards_error": None,
 
+        # Duplicate detection
+        "existing_policy_numbers": None,
+        "duplicate_check_done": False,
+        "duplicate_count": 0,
+
         # Options
         "selected_source": None,
         "force_refresh": False,
@@ -201,7 +206,8 @@ def reset_pipeline() -> None:
         'current_file', 'selected_board_id', 'selected_group_id', 'monday_groups',
         'upload_result', 'is_uploading', 'selected_source', 'data_modified',
         'show_columns', '_current_board_name', 'selected_model', 'file_group_overrides',
-        'extraction_error', 'extraction_traceback'
+        'extraction_error', 'extraction_traceback',
+        'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
     ]
     for key in keys_to_reset:
         if key == 'stage':
@@ -210,10 +216,10 @@ def reset_pipeline() -> None:
             st.session_state[key] = []
         elif key in ['extraction_results', 'file_group_overrides']:
             st.session_state[key] = {}
-        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns']:
+        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns', 'duplicate_check_done']:
             st.session_state[key] = False
-        elif key == 'processing_progress':
-            st.session_state[key] = 0.0
+        elif key in ['processing_progress', 'duplicate_count']:
+            st.session_state[key] = 0
         else:
             st.session_state[key] = None
 

@@ -13,7 +13,7 @@ from src.utils.model_registry import get_available_models, get_default_vision_mo
 
 from src.app.state import get_pipeline
 from src.app.utils.navigation import render_stepper, render_breadcrumb
-from src.app.utils.board_utils import sort_and_filter_boards, detect_board_type_from_name, load_boards_async
+from src.app.utils.board_utils import sort_and_filter_boards, load_boards_async
 from src.app.utils.date_utils import detect_date_from_filename
 from src.app.advisor.management import render_advisor_management_tab
 from src.app.column_conversion.mode import render_column_conversion_mode
@@ -106,47 +106,8 @@ def render_pdf_extraction_tab() -> None:
 
     st.divider()
 
-    # Board selection
-    st.markdown("### 📋 Destination Monday.com")
-
-    if st.session_state.monday_boards is None and st.session_state.monday_api_key:
-        load_boards_async()
-
-    if st.session_state.boards_loading:
-        st.info("⏳ Chargement des boards...")
-        return
-
-    if st.session_state.monday_boards:
-        search = st.text_input(
-            "🔍 Rechercher un board",
-            placeholder="Filtrer par nom...",
-            key="pdf_search_board"
-        )
-
-        sorted_boards = sort_and_filter_boards(st.session_state.monday_boards, search)
-
-        if sorted_boards:
-            board_options = {b['name']: b['id'] for b in sorted_boards}
-            selected_name = st.selectbox(
-                "Board de destination",
-                options=list(board_options.keys()),
-                key="pdf_board_select"
-            )
-            st.session_state.selected_board_id = board_options[selected_name]
-            st.session_state._current_board_name = selected_name
-
-            # Auto-detect board type
-            detected_type = detect_board_type_from_name(selected_name)
-            st.caption(f"🔍 Type détecté: **{detected_type}**")
-        else:
-            st.warning("Aucun board trouvé")
-    else:
-        st.warning("⚠️ Configurez la clé API Monday.com dans la sidebar")
-
-    st.divider()
-
-    # Configuration options
-    st.markdown("### ⚙️ Configuration")
+    # Board type selection FIRST
+    st.markdown("### ⚙️ Type de table")
 
     type_options = ["Paiements Historiques", "Ventes et Production"]
     target_type = st.selectbox(
@@ -172,6 +133,57 @@ def render_pdf_extraction_tab() -> None:
             "ℹ️ **Traitement des données:** Chaque ligne représente un paiement individuel. "
             "Colonnes: Police, Client, Compagnie, Statut, Conseiller, PA, Com, Boni, Sur-Com, Reçu, Date."
         )
+
+    st.divider()
+
+    # Board selection
+    st.markdown("### 📋 Destination Monday.com")
+
+    if st.session_state.monday_boards is None and st.session_state.monday_api_key:
+        load_boards_async()
+
+    if st.session_state.boards_loading:
+        st.info("⏳ Chargement des boards...")
+        return
+
+    if st.session_state.monday_boards:
+        search = st.text_input(
+            "🔍 Rechercher un board",
+            placeholder="Filtrer par nom...",
+            key="pdf_search_board"
+        )
+
+        sorted_boards = sort_and_filter_boards(st.session_state.monday_boards, search)
+
+        if sorted_boards:
+            board_options = {b['name']: b['id'] for b in sorted_boards}
+            board_names = list(board_options.keys())
+
+            # Find default board based on selected board type
+            default_board_idx = 0
+            default_board_names = {
+                "Paiements Historiques": "Paiement Historique",
+                "Ventes et Production": "Ventes/Production",
+            }
+            default_name = default_board_names.get(target_type)
+            if default_name:
+                for i, name in enumerate(board_names):
+                    if name == default_name:
+                        default_board_idx = i
+                        break
+
+            selected_name = st.selectbox(
+                "Board de destination",
+                options=board_names,
+                index=default_board_idx,
+                key="pdf_board_select"
+            )
+            st.session_state.selected_board_id = board_options[selected_name]
+            st.session_state._current_board_name = selected_name
+        else:
+            st.warning("Aucun board trouvé")
+    else:
+        st.warning("⚠️ Configurez la clé API Monday.com dans la sidebar")
 
     # Model selection
     st.markdown("#### 🤖 Modèle d'extraction")

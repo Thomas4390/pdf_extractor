@@ -1817,6 +1817,30 @@ class MondayClient:
 
         return result
 
+    async def get_existing_policy_numbers(self, board_id: int) -> set[str]:
+        """
+        Get all existing policy numbers from a board.
+
+        Uses extract_board_data to fetch all items with pagination,
+        then extracts '# de Police' column values.
+
+        Args:
+            board_id: Board ID to read from
+
+        Returns:
+            Set of policy number strings
+        """
+        items = await self.extract_board_data(board_id)
+        policy_numbers = set()
+        for item in items:
+            for col_val in item.get("column_values", []):
+                if col_val.get("column", {}).get("title") == "# de Police":
+                    text = col_val.get("text")
+                    if text and text.strip():
+                        policy_numbers.add(text.strip())
+                    break
+        return policy_numbers
+
     # -------------------------------------------------------------------------
     # Synchronous wrappers
     # -------------------------------------------------------------------------

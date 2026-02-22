@@ -5,15 +5,12 @@ Provides the interface for confirming and executing the upload
 of extracted data to Monday.com boards.
 """
 
-from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
 from src.app.state import get_pipeline, reset_pipeline
 from src.app.utils.async_helpers import run_async
 from src.app.utils.navigation import render_stepper, render_breadcrumb
-from src.app.utils.date_utils import get_months_fr
 from src.app.components import (
     render_upload_dashboard,
     render_success_box,
@@ -38,16 +35,24 @@ def render_stage_3() -> None:
     if st.session_state.data_modified:
         st.warning("Upload de données modifiées")
 
+    # Count duplicates that will be excluded
+    dup_count = st.session_state.get('duplicate_count', 0)
+    has_duplicates = '_is_duplicate' in df.columns and dup_count > 0
+    upload_count = len(df) - dup_count if has_duplicates else len(df)
+
     # Summary Dashboard (similar to Stage 2)
     unique_groups = df['_target_group'].unique() if '_target_group' in df.columns else []
     board_name = st.session_state._current_board_name or "N/A"
 
     render_upload_dashboard(
-        item_count=len(df),
+        item_count=upload_count,
         board_name=board_name,
         group_count=len(unique_groups) if len(unique_groups) > 0 else 1,
         file_count=len(st.session_state.extraction_results)
     )
+
+    if has_duplicates:
+        st.warning(f"⚠️ **{dup_count} doublon(s)** seront exclus de l'upload (# de Police déjà sur le board).")
 
     # Target group display
     if '_target_group' in df.columns and len(unique_groups) > 0:
@@ -112,6 +117,10 @@ def execute_upload(df: pd.DataFrame) -> None:
     """Execute the upload to Monday.com."""
     st.session_state.upload_result = None
 
+    # Filter out duplicates before upload
+    if '_is_duplicate' in df.columns:
+        df = df[~df['_is_duplicate']].copy()
+
     pipeline = get_pipeline()
     board_id = st.session_state.selected_board_id
 
@@ -123,7 +132,7 @@ def execute_upload(df: pd.DataFrame) -> None:
         if '_target_group' in df.columns:
             unique_groups = df['_target_group'].unique().tolist()
         else:
-            unique_groups = [f"{get_months_fr()[datetime.now().month]} {datetime.now().year}"]
+            unique_groups = ["Data"]
 
         total_items = len(df)
         if total_items == 0:

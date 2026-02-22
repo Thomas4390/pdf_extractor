@@ -388,10 +388,66 @@ def _render_empty_data_error() -> None:
         st.rerun()
 
 
+def _check_duplicates_against_board(df: pd.DataFrame) -> pd.DataFrame:
+    """Check for duplicate policy numbers against the Monday.com board.
+
+    Only runs for SALES_PRODUCTION board type. Results are cached in session state.
+
+    Args:
+        df: DataFrame with '# de Police' column
+
+    Returns:
+        DataFrame with '_is_duplicate' column added
+    """
+    if st.session_state.selected_board_type != BoardType.SALES_PRODUCTION:
+        return df
+
+    if '# de Police' not in df.columns:
+        return df
+
+    board_id = st.session_state.selected_board_id
+    if not board_id:
+        return df
+
+    # Only fetch once per pipeline run
+    if not st.session_state.duplicate_check_done:
+        try:
+            with st.spinner("Vérification des doublons sur Monday.com..."):
+                pipeline = get_pipeline()
+                existing = run_async(
+                    pipeline.monday.get_existing_policy_numbers(int(board_id))
+                )
+                st.session_state.existing_policy_numbers = existing
+                st.session_state.duplicate_check_done = True
+        except Exception as e:
+            st.warning(f"Impossible de vérifier les doublons: {e}")
+            st.session_state.duplicate_check_done = True
+            st.session_state.existing_policy_numbers = set()
+
+    existing = st.session_state.existing_policy_numbers or set()
+
+    # Mark duplicates
+    df = df.copy()
+    df['_is_duplicate'] = df['# de Police'].apply(
+        lambda x: str(x).strip() in existing if pd.notna(x) else False
+    )
+    dup_count = df['_is_duplicate'].sum()
+    st.session_state.duplicate_count = int(dup_count)
+    st.session_state.combined_data = df
+
+    return df
+
+
 def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verification_cols: bool) -> None:
     """Render the data tab."""
+    # Check for duplicates against Monday.com board
+    df = _check_duplicates_against_board(df)
+
+    dup_count = st.session_state.duplicate_count
+
     # Quick stats
-    cols = st.columns(4)
+    n_stats = 5 if dup_count > 0 else 4
+    cols = st.columns(n_stats)
     cols[0].metric("Lignes", len(df))
     cols[1].metric("Colonnes", len(df.columns))
     if '# de Police' in df.columns:
@@ -400,7 +456,16 @@ def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verificati
         cols[2].metric("Contrats", df['Contrat'].notna().sum())
     else:
         cols[2].metric("Contrats", "-")
-    cols[3].metric("Doublons", df.duplicated().sum())
+    cols[3].metric("Doublons internes", df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore').duplicated().sum())
+    if dup_count > 0:
+        cols[4].metric("Doublons Monday", dup_count)
+
+    # Duplicate warning
+    if dup_count > 0:
+        st.warning(
+            f"⚠️ **{dup_count} ligne(s)** ont un # de Police déjà présent sur le board Monday.com. "
+            "Ces lignes seront exclues lors de l'upload."
+        )
 
     st.markdown("---")
 
