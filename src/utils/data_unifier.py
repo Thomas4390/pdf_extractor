@@ -669,7 +669,9 @@ class DataUnifier:
                 'Total': total,
                 'Total Reçu': None,
                 'Paie': None,
-                'Texte': f"{prop.type_regime} - {prop.couverture}",
+                'Texte': f"{prop.type_regime} - {prop.couverture} | CPA: {prop.taux_cpa}%"
+                    if prop.taux_cpa is not None
+                    else f"{prop.type_regime} - {prop.couverture}",
             }
             rows.append(row)
 
