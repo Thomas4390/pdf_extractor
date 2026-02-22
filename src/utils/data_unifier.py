@@ -614,14 +614,7 @@ class DataUnifier:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
         rows = []
-        filtered_nombre_count = 0
         for prop in report.propositions:
-            # Filtrer les lignes où nombre != 1.0
-            nombre_val = self._decimal_to_float(prop.nombre)
-            if nombre_val is not None and nombre_val != 1.0:
-                filtered_nombre_count += 1
-                continue
-
             # IDC: Utiliser le nom de la compagnie extrait du PDF, normalisé
             raw_insurer = prop.assureur or ''
             insurer_name = self._normalize_insurer_name(raw_insurer) if raw_insurer else None
@@ -672,9 +665,6 @@ class DataUnifier:
                 'Texte': f"{prop.type_regime} - {prop.couverture}",
             }
             rows.append(row)
-
-        if filtered_nombre_count > 0:
-            print(f"  ℹ️  IDC: {filtered_nombre_count} ligne(s) exclue(s) (nombre != 1)")
 
         return pd.DataFrame(rows)
 
