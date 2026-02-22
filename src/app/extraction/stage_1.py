@@ -127,11 +127,8 @@ def render_pdf_extraction_tab() -> None:
         "Ventes et Production": "Ventes/Production",
     }
 
-    # Detect board type change → set default board in session state
-    board_type_changed = new_board_type != st.session_state.selected_board_type
-    if board_type_changed:
-        st.session_state.selected_board_type = new_board_type
-        # Pre-set the board selectbox value so it updates on this render
+    # On board type change or first render, set the default board in session state
+    if new_board_type != st.session_state.selected_board_type or "pdf_board_select" not in st.session_state:
         default_name = _DEFAULT_BOARD_FOR_TYPE.get(target_type)
         if default_name:
             st.session_state.pdf_board_select = default_name
@@ -176,19 +173,9 @@ def render_pdf_extraction_tab() -> None:
             board_options = {b['name']: b['id'] for b in sorted_boards}
             board_names = list(board_options.keys())
 
-            # Find default board index (used only on first render)
-            default_board_idx = 0
-            default_name = _DEFAULT_BOARD_FOR_TYPE.get(target_type)
-            if default_name:
-                for i, name in enumerate(board_names):
-                    if name == default_name:
-                        default_board_idx = i
-                        break
-
             selected_name = st.selectbox(
                 "Board de destination",
                 options=board_names,
-                index=default_board_idx,
                 key="pdf_board_select"
             )
             st.session_state.selected_board_id = board_options[selected_name]
