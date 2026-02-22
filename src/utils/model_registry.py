@@ -164,6 +164,7 @@ def get_default_text_model() -> str:
 # Available models for selection in UI (ordered by preference)
 AVAILABLE_MODELS: dict[str, str] = {
     "google/gemini-3-flash-preview": "Gemini 3 Flash (Défaut - Rapide)",
+    "anthropic/claude-sonnet-4-6": "Claude Sonnet 4.6 (Vision avancée)",
     "qwen/qwen3.5-plus-02-15": "Qwen 3.5 Plus (1M ctx, Vision+Vidéo)",
     "qwen/qwen3.5-397b-a17b": "Qwen 3.5 397B MoE (Vision+Vidéo)",
     "moonshotai/kimi-k2.5": "Kimi K2.5 (Vision + Code)",

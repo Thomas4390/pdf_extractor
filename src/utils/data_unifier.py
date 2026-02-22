@@ -691,7 +691,14 @@ class DataUnifier:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
+        filtered_account_count = 0
         for fee in report.trailing_fees:
+            # Filtrer: ne garder que les lignes avec account_number == "Unknown"
+            acct = str(fee.account_number or "").strip()
+            if acct and acct != "Unknown":
+                filtered_account_count += 1
+                continue
+
             # Extraire les données selon le type de modèle (Raw ou Parsed)
             if hasattr(fee, 'client_full_name'):
                 # IDCTrailingFeeParsed
@@ -741,6 +748,9 @@ class DataUnifier:
                 'Texte': fee.product,
             }
             rows.append(row)
+
+        if filtered_account_count > 0:
+            print(f"  ℹ️  IDC Statement: {filtered_account_count} ligne(s) exclue(s) (numéro de compte != Unknown)")
 
         return pd.DataFrame(rows)
 
@@ -913,20 +923,38 @@ class DataUnifier:
             # Sur-Com n'est pas directement disponible dans Assomption
             on_commission = None
 
+            # Construire le texte avec tous les détails disponibles
+            texte_parts = []
+            if comm.code:
+                texte_parts.append(comm.code)
+            if comm.produit:
+                texte_parts.append(comm.produit)
+            if comm.frequence_paiement:
+                texte_parts.append(f"Freq: {comm.frequence_paiement}")
+            if comm.facturation:
+                texte_parts.append(f"Fact: {comm.facturation}")
+            taux_com = self._decimal_to_float(comm.taux_commission)
+            if taux_com is not None:
+                texte_parts.append(f"Taux Com: {taux_com}%")
+            taux_boni = self._decimal_to_float(comm.taux_boni)
+            if taux_boni is not None:
+                texte_parts.append(f"Taux Boni: {taux_boni}%")
+            texte = " | ".join(texte_parts) if texte_parts else ""
+
             row = {
                 '# de Police': str(comm.numero_police),
                 'Nom Client': comm.nom_assure,
                 'Compagnie': 'Assomption',
-                'Statut': 'Approuvé',
-                'Conseiller': report.nom_courtier,
+                'Statut': 'Payé',
+                'Conseiller': None,
                 'Verifié': None,
                 'PA': premium,
-                'Com': commission,  # Utilise la commission extraite du JSON
-                'Boni': bonus,  # Utilise le boni extrait du JSON
+                'Com': commission,
+                'Boni': bonus,
                 'Sur-Com': on_commission,
-                'Reçu': received,  # Montant total reçu (commission + boni)
+                'Reçu': received,
                 'Date': self._format_date(comm.date_emission),
-                'Texte': f"{comm.code} - {comm.produit} ({comm.frequence_paiement})",
+                'Texte': texte,
             }
             rows.append(row)
 
