@@ -116,10 +116,19 @@ def render_pdf_extraction_tab() -> None:
         key="pdf_target_type"
     )
 
-    st.session_state.selected_board_type = (
+    new_board_type = (
         BoardType.SALES_PRODUCTION if target_type == "Ventes et Production"
         else BoardType.HISTORICAL_PAYMENTS
     )
+
+    # Detect board type change → reset board selection so default kicks in
+    if new_board_type != st.session_state.selected_board_type:
+        st.session_state.selected_board_type = new_board_type
+        if "pdf_board_select" in st.session_state:
+            del st.session_state["pdf_board_select"]
+        st.rerun()
+
+    st.session_state.selected_board_type = new_board_type
 
     # Info about data processing based on board type
     if target_type == "Ventes et Production":
