@@ -121,12 +121,20 @@ def render_pdf_extraction_tab() -> None:
         else BoardType.HISTORICAL_PAYMENTS
     )
 
-    # Detect board type change → reset board selection so default kicks in
-    if new_board_type != st.session_state.selected_board_type:
+    # Default board names per type
+    _DEFAULT_BOARD_FOR_TYPE = {
+        "Paiements Historiques": "Paiement Historique",
+        "Ventes et Production": "Ventes/Production",
+    }
+
+    # Detect board type change → set default board in session state
+    board_type_changed = new_board_type != st.session_state.selected_board_type
+    if board_type_changed:
         st.session_state.selected_board_type = new_board_type
-        if "pdf_board_select" in st.session_state:
-            del st.session_state["pdf_board_select"]
-        st.rerun()
+        # Pre-set the board selectbox value so it updates on this render
+        default_name = _DEFAULT_BOARD_FOR_TYPE.get(target_type)
+        if default_name:
+            st.session_state.pdf_board_select = default_name
 
     st.session_state.selected_board_type = new_board_type
 
@@ -168,13 +176,9 @@ def render_pdf_extraction_tab() -> None:
             board_options = {b['name']: b['id'] for b in sorted_boards}
             board_names = list(board_options.keys())
 
-            # Find default board based on selected board type
+            # Find default board index (used only on first render)
             default_board_idx = 0
-            default_board_names = {
-                "Paiements Historiques": "Paiement Historique",
-                "Ventes et Production": "Ventes/Production",
-            }
-            default_name = default_board_names.get(target_type)
+            default_name = _DEFAULT_BOARD_FOR_TYPE.get(target_type)
             if default_name:
                 for i, name in enumerate(board_names):
                     if name == default_name:
