@@ -16,19 +16,31 @@ system_prompt: |
 user_prompt: |
   Extrais TOUTES les données de ce rapport UV Assurance.
 
-  ## MÉTADONNÉES (haut du rapport)
-  - date_rapport: Date génération (YYYY-MM-DD)
-  - nom_conseiller: Nom conseiller/compagnie principal (ex: "9491-1377 QUEBEC INC")
-  - numero_conseiller: Numéro conseiller (ex: "21621")
+  ## MÉTADONNÉES (PAGE 1 UNIQUEMENT, sous le titre "RAPPORT DE RÉMUNÉRATION")
+
+  ATTENTION: Ces champs se trouvent UNIQUEMENT en haut de la première page,
+  juste sous le titre "RAPPORT DE RÉMUNÉRATION DU ...".
+  NE PAS confondre avec "Montant net versé à ..." qui apparaît en page 2.
+
+  - date_rapport: Date après "RAPPORT DE RÉMUNÉRATION DU" (YYYY-MM-DD)
+  - nom_conseiller: Texte après "Nom du conseiller :" sur la première page.
+    Peut être un nom de personne (ex: "ACHRAF EL HAJJI") OU un numéro d'entreprise (ex: "9491-1377 QUEBEC INC").
+  - numero_conseiller: Texte après "Numéro du conseiller :" sur la première page (ex: "21621" ou "21622")
 
   ## ACTIVITÉS (tableau)
 
-  STRUCTURE: Le PDF peut contenir PLUSIEURS tableaux. Chaque tableau peut avoir un SOUS-CONSEILLER différent indiqué au-dessus au format "NUMÉRO - NOM" (ex: "21622 - ACHRAF EL HAJJI").
+  STRUCTURE: Le PDF peut contenir PLUSIEURS tableaux.
+
+  SOUS-CONSEILLER: Certains rapports ont une ligne "NUMÉRO - NOM" (ex: "21622 - ACHRAF EL HAJJI")
+  au-dessus du tableau d'activités. Cette ligne est le sous-conseiller.
+  - Si cette ligne existe au-dessus du tableau → sous_conseiller = "NUMÉRO - NOM"
+  - Si le tableau commence DIRECTEMENT par les en-têtes "Contrat | Assuré(s) | Protection..."
+    SANS ligne "NUMÉRO - NOM" au-dessus → sous_conseiller = null
 
   Pour CHAQUE ligne, extrais:
   | Champ | Description | Exemple |
   |-------|-------------|---------|
-  | sous_conseiller | Format "NUMÉRO - NOM" au-dessus du tableau, ou null | "21622 - ACHRAF EL HAJJI" |
+  | sous_conseiller | Format "NUMÉRO - NOM" au-dessus du tableau, ou null si absent | "21622 - ACHRAF EL HAJJI" |
   | contrat | Numéro contrat | "110970886" |
   | assure | Nom assuré | "BALDWIN RAYMOND" |
   | protection | Type protection | "Vie entière Valeurs Élevées" |
@@ -44,6 +56,7 @@ user_prompt: |
   - Extrais TOUTES les lignes de TOUS les tableaux
   - Taux = pourcentages simples: "100" → 100.0 (JAMAIS 100000)
   - Montants = nombres décimaux
+  - nom_conseiller et numero_conseiller viennent UNIQUEMENT de la page 1
 
   ## JSON OUTPUT
   ```json
