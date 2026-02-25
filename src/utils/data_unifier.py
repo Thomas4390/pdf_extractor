@@ -363,16 +363,62 @@ class DataUnifier:
         except (ValueError, AttributeError):
             return None
 
+    # Mots-clés corporatifs pour la détection UV Inc
+    _CORPORATE_KEYWORDS = {'INC', 'LTÉE', 'LTEE', 'LTD', 'CORP', 'CORPORATION', 'COMPAGNIE', 'CIE'}
+
     def _is_corporate_advisor(self, advisor_name: str) -> bool:
         """
         Détecte si le conseiller est une corporation (Inc).
 
-        Une corporation contient généralement des chiffres
-        (ex: "9491-1377 QUEBEC INC").
+        Signaux corporatifs (un seul suffit):
+        1. Le nom contient des chiffres (ex: "9491-1377 QUEBEC INC")
+        2. Le nom contient un mot-clé corporatif (INC, LTÉE, LTD, CORP, etc.)
         """
         if not advisor_name or pd.isna(advisor_name):
             return False
-        return bool(re.search(r'\d', str(advisor_name)))
+        name = str(advisor_name).strip()
+        if not name:
+            return False
+        # Signal 1: présence de chiffres
+        if re.search(r'\d', name):
+            return True
+        # Signal 2: mot-clé corporatif
+        words = set(name.upper().split())
+        if words & self._CORPORATE_KEYWORDS:
+            return True
+        return False
+
+    def _is_uv_corporate(self, report: UVReport) -> bool:
+        """
+        Détecte si un rapport UV est corporatif (Inc) ou personnel (Perso).
+
+        Stratégie multi-signaux (évalués dans l'ordre):
+        1. nom_conseiller corporatif (chiffres ou mots-clés INC/LTÉE/etc.)
+        2. Fallback: toutes les activités ont un sous_conseiller
+           → structure Inc (la compagnie a des sous-conseillers)
+        3. Fallback: aucune activité n'a de sous_conseiller
+           → structure Perso (le conseiller est lui-même titulaire)
+        """
+        # Signal 1: nom_conseiller
+        if report.nom_conseiller and not pd.isna(report.nom_conseiller):
+            name = str(report.nom_conseiller).strip()
+            if name:
+                return self._is_corporate_advisor(name)
+
+        # Fallback: analyser la structure des activités
+        if report.activites:
+            has_sous = [
+                bool(act.sous_conseiller and str(act.sous_conseiller).strip())
+                for act in report.activites
+            ]
+            # Si toutes les activités ont un sous_conseiller → Inc
+            if has_sous and all(has_sous):
+                return True
+            # Si aucune activité n'a de sous_conseiller → Perso
+            if has_sous and not any(has_sous):
+                return False
+
+        return False
 
     def _decimal_to_float(self, value) -> Optional[float]:
         """Convertit une valeur Decimal en float."""
@@ -384,35 +430,6 @@ class DataUnifier:
             return float(value)
         except (ValueError, TypeError):
             return None
-
-    def _is_uv_corporate_line(self, act, report: UVReport) -> bool:
-        """
-        Détermine si une activité UV appartient au conseiller corporatif (Inc).
-
-        Compare le sous_conseiller de l'activité avec le numéro du conseiller
-        principal du rapport. Si le sous_conseiller contient le numéro du
-        conseiller principal (ex: "21621"), c'est une ligne Inc.
-        Sinon, c'est une ligne Perso.
-        """
-        sous = str(act.sous_conseiller or "").strip()
-
-        # Si le numéro du conseiller principal est dans le sous_conseiller → Inc
-        if report.numero_conseiller:
-            numero = str(report.numero_conseiller).strip()
-            if numero and numero in sous:
-                return True
-
-        # Si le nom corporatif est dans le sous_conseiller → Inc
-        if report.nom_conseiller and self._is_corporate_advisor(report.nom_conseiller):
-            nom = str(report.nom_conseiller).strip().upper()
-            if nom and nom in sous.upper():
-                return True
-
-        # Pas de sous_conseiller: fallback sur le nom_conseiller principal
-        if not sous:
-            return self._is_corporate_advisor(report.nom_conseiller)
-
-        return False
 
     def _parse_uv_advisor_name(self, sous_conseiller: str) -> Optional[str]:
         """
@@ -473,12 +490,18 @@ class DataUnifier:
           taux_boni != 0% et != 175% (ces lignes sont des sur-com)
 
         COMPAGNIE:
-        - Déterminée par le nom_conseiller au sommet du document (niveau document):
-          Si nom_conseiller est corporatif (contient des chiffres) → UV Inc pour tout le document
-          Sinon → UV Perso pour tout le document
+        - Déterminée au niveau du document entier via _is_uv_corporate():
+          1. nom_conseiller corporatif (chiffres ou mots-clés INC/LTÉE/etc.) → UV Inc
+          2. Fallback: structure des sous_conseillers dans les activités
+          3. Défaut: UV Perso
         """
         if not report.activites:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
+
+        # Déterminer UV Inc vs UV Perso UNE SEULE FOIS au niveau document
+        is_corporate = self._is_uv_corporate(report)
+        insurer_name = 'UV Inc' if is_corporate else 'UV Perso'
+        print(f"  ℹ️  UV détecté: {insurer_name} (nom_conseiller: {report.nom_conseiller!r})")
 
         rows = []
         filtered_count = 0
@@ -487,11 +510,6 @@ class DataUnifier:
         for act in report.activites:
             sharing_rate = self._decimal_to_float(act.taux_partage)
             bonus_rate_pct = self._decimal_to_float(act.taux_boni)  # En pourcentage (ex: 175.0)
-
-            # Déterminer UV Inc vs UV Perso basé sur le nom_conseiller du DOCUMENT
-            # C'est le conseiller principal au sommet du PDF qui décide pour tout
-            is_corporate = self._is_corporate_advisor(report.nom_conseiller)
-            insurer_name = 'UV Inc' if is_corporate else 'UV Perso'
 
             # --- FILTRAGE ---
 
