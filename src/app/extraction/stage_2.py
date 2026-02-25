@@ -564,6 +564,106 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
         st.info("La vérification n'est pas disponible pour ce type de données (colonnes 'Reçu' et 'PA' requises).")
 
 
+def _render_compagnie_override(df: pd.DataFrame) -> None:
+    """Render Compagnie name override for UV and Assomption sources."""
+    source = st.session_state.get('selected_source', '')
+    if source not in ('UV', 'ASSOMPTION') or 'Compagnie' not in df.columns:
+        return
+
+    unique_compagnies = sorted(df['Compagnie'].dropna().unique().tolist())
+    if not unique_compagnies:
+        return
+
+    # Preset options per source
+    if source == 'UV':
+        presets = ['UV Inc', 'UV Perso']
+    else:
+        presets = ['Assomption']
+
+    # Build full options list: presets first, then any detected values not already in presets
+    all_options = list(presets)
+    for c in unique_compagnies:
+        if c not in all_options:
+            all_options.append(c)
+
+    st.markdown("### Nom de compagnie")
+
+    if len(unique_compagnies) == 1:
+        # Single value — simple override
+        current = unique_compagnies[0]
+        current_idx = all_options.index(current) if current in all_options else 0
+
+        col_sel, col_custom, col_btn = st.columns([2, 2, 1])
+        with col_sel:
+            selected = st.selectbox(
+                "Compagnie",
+                options=all_options,
+                index=current_idx,
+                key="compagnie_override_select",
+            )
+        with col_custom:
+            custom = st.text_input(
+                "Ou entrez un nom personnalisé",
+                placeholder="Ex: UV Perso",
+                key="compagnie_override_custom",
+            )
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            new_value = custom.strip() if custom and custom.strip() else selected
+            if new_value != current:
+                if st.button("Appliquer", key="apply_compagnie", type="primary", width="stretch"):
+                    df['Compagnie'] = new_value
+                    st.session_state.combined_data = df
+                    st.toast(f"Compagnie modifiée: {current} → {new_value}")
+                    st.rerun()
+            else:
+                st.button("Appliquer", key="apply_compagnie_disabled", disabled=True, width="stretch")
+
+    else:
+        # Multiple values — per-value override
+        st.caption(f"{len(unique_compagnies)} valeur(s) détectée(s) dans les données.")
+
+        changes = {}
+        for i, current in enumerate(unique_compagnies):
+            current_idx = all_options.index(current) if current in all_options else 0
+            count = int((df['Compagnie'] == current).sum())
+
+            col_label, col_sel, col_custom = st.columns([2, 2, 2])
+            with col_label:
+                st.markdown(f"**{current}**")
+                st.caption(f"{count} ligne(s)")
+            with col_sel:
+                selected = st.selectbox(
+                    f"Nouvelle valeur pour {current}",
+                    options=all_options,
+                    index=current_idx,
+                    key=f"compagnie_override_{i}",
+                    label_visibility="collapsed",
+                )
+            with col_custom:
+                custom = st.text_input(
+                    f"Personnalisé pour {current}",
+                    placeholder="Nom personnalisé",
+                    key=f"compagnie_custom_{i}",
+                    label_visibility="collapsed",
+                )
+
+            new_value = custom.strip() if custom and custom.strip() else selected
+            if new_value != current:
+                changes[current] = new_value
+
+        if changes:
+            if st.button("Appliquer les modifications", key="apply_compagnie_multi", type="primary"):
+                for old_val, new_val in changes.items():
+                    df.loc[df['Compagnie'] == old_val, 'Compagnie'] = new_val
+                st.session_state.combined_data = df
+                summary = ", ".join(f"{k} → {v}" for k, v in changes.items())
+                st.toast(f"Compagnie modifiée: {summary}")
+                st.rerun()
+
+    st.markdown("---")
+
+
 def _render_configuration_tab(df: pd.DataFrame, model_name: str, cost_display: str) -> None:
     """Render the configuration tab."""
     st.markdown("### Résumé de la Configuration")
@@ -585,6 +685,11 @@ def _render_configuration_tab(df: pd.DataFrame, model_name: str, cost_display: s
         st.info("Ventes" if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION else "Paiements")
 
     st.markdown("---")
+
+    # ===========================================
+    # COMPAGNIE OVERRIDE (UV & Assomption only)
+    # ===========================================
+    _render_compagnie_override(df)
 
     # ===========================================
     # MODEL SELECTION & RE-EXTRACTION
