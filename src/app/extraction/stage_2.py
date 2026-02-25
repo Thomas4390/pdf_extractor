@@ -564,6 +564,45 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
         st.info("La vérification n'est pas disponible pour ce type de données (colonnes 'Reçu' et 'PA' requises).")
 
 
+def _render_sort_options(df: pd.DataFrame) -> None:
+    """Render sort options for the extracted data."""
+    # Build available sort choices based on columns present
+    sort_choices: dict[str, str | None] = {"Ordre original": None}
+    if 'Nom Client' in df.columns:
+        sort_choices["Nom Client (A → Z)"] = "Nom Client"
+    if '# de Police' in df.columns:
+        sort_choices["# de Police (croissant)"] = "# de Police"
+    if 'Conseiller' in df.columns:
+        sort_choices["Conseiller (A → Z)"] = "Conseiller"
+
+    if len(sort_choices) <= 1:
+        return
+
+    st.markdown("### Tri du tableau")
+
+    col_sort, col_btn = st.columns([3, 1])
+    with col_sort:
+        selected_label = st.selectbox(
+            "Trier par",
+            options=list(sort_choices.keys()),
+            index=0,
+            key="sort_select",
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        sort_col = sort_choices[selected_label]
+        if sort_col is not None:
+            if st.button("Trier", key="apply_sort", type="primary", width="stretch"):
+                df_sorted = df.sort_values(by=sort_col, key=lambda s: s.str.lower() if s.dtype == object else s, na_position='last').reset_index(drop=True)
+                st.session_state.combined_data = df_sorted
+                st.toast(f"Tableau trié par {sort_col}")
+                st.rerun()
+        else:
+            st.button("Trier", key="apply_sort_disabled", disabled=True, width="stretch")
+
+    st.markdown("---")
+
+
 def _render_compagnie_override(df: pd.DataFrame) -> None:
     """Render Compagnie name override for UV and Assomption sources."""
     source = st.session_state.get('selected_source', '')
@@ -690,6 +729,11 @@ def _render_configuration_tab(df: pd.DataFrame, model_name: str, cost_display: s
     # COMPAGNIE OVERRIDE (UV & Assomption only)
     # ===========================================
     _render_compagnie_override(df)
+
+    # ===========================================
+    # SORT ORDER
+    # ===========================================
+    _render_sort_options(df)
 
     # ===========================================
     # MODEL SELECTION & RE-EXTRACTION
