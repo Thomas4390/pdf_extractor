@@ -192,7 +192,7 @@ def get_pipeline() -> Pipeline:
     if st.session_state.pipeline is None:
         st.session_state.pipeline = Pipeline(
             monday_api_key=st.session_state.monday_api_key,
-            max_parallel=3,
+            max_parallel=6,
             use_advisor_matcher=True
         )
     return st.session_state.pipeline

@@ -37,7 +37,7 @@ from .utils.advisor_matcher import get_advisor_matcher
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_MAX_PARALLEL = 3
+DEFAULT_MAX_PARALLEL = 6
 
 
 class SourceType(str, Enum):

@@ -186,7 +186,8 @@ class DataUnifier:
         df = self._apply_final_schema(df, board_type)
 
         # Agrégation par numéro de police pour Ventes et Production
-        if board_type == BoardType.SALES_PRODUCTION and not df.empty:
+        # Exclure Assomption de l'agrégation (chaque ligne reste individuelle)
+        if board_type == BoardType.SALES_PRODUCTION and not df.empty and source != 'ASSOMPTION':
             df = self._aggregate_by_policy(df)
 
         # Stocker le board_type dans les attributs du DataFrame
