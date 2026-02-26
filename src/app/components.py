@@ -255,7 +255,14 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
     # If Taux Boni != 0: multiply by Taux Boni
     base = pa * taux_partage * 0.5
     boni_multiplier = taux_boni.where(taux_boni != 0, 1.0) if isinstance(taux_boni, pd.Series) else (taux_boni if taux_boni != 0 else 1.0)
-    com_calculee = (base * boni_multiplier).round(2)
+    com_calculee = (base * boni_multiplier)
+
+    # If _police_count is present (Assomption aggregated rows), multiply by count
+    if '_police_count' in result_df.columns:
+        police_count = pd.to_numeric(result_df['_police_count'], errors='coerce').fillna(1.0)
+        com_calculee = com_calculee * police_count
+
+    com_calculee = com_calculee.round(2)
 
     # Add calculated commission column
     result_df['Com Calculée'] = com_calculee

@@ -981,6 +981,7 @@ class DataUnifier:
                 'Reçu': total_commission or None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
+                '_police_count': len(comms),
             })
 
         # --- Boni: agrégation par numéro de police ---
