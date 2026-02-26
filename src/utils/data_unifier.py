@@ -923,61 +923,104 @@ class DataUnifier:
 
         Assomption Vie → Board HISTORICAL_PAYMENTS
 
-        Mapping JSON → DataFrame:
-        - comm.commission → 'Com' (commission extraite du PDF)
-        - comm.boni → 'Boni' (boni extrait du PDF)
-        - comm.prime → 'PA' (prime)
+        Produit des lignes SÉPARÉES pour commissions et boni:
+        - Lignes commission: Com = somme par police, Boni = None, Reçu = Com
+        - Lignes boni: Com = None, Boni = somme par police, Reçu = Boni
         """
-        if not report.commissions:
+        if not report.commissions and not report.bonis:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
+
+        # --- Commissions: agrégation par numéro de police ---
+        comm_groups: dict[str, list] = {}
         for comm in report.commissions:
-            # Convertir les valeurs Decimal - utiliser les valeurs EXTRAITES du PDF
-            premium = self._decimal_to_float(comm.prime)
-            commission = self._decimal_to_float(comm.commission)  # Commission extraite du PDF
-            bonus = self._decimal_to_float(comm.boni)  # Boni extrait du PDF
+            key = str(comm.numero_police) if comm.numero_police else "UNKNOWN"
+            comm_groups.setdefault(key, []).append(comm)
 
-            # Montant reçu = commission + bonus
-            received = sum(filter(None, [commission, bonus])) or None
+        for police, comms in comm_groups.items():
+            # Sommer prime et commission
+            total_prime = sum(
+                self._decimal_to_float(c.prime) or 0 for c in comms
+            )
+            total_commission = sum(
+                self._decimal_to_float(c.commission) or 0 for c in comms
+            )
 
-            # Sur-Com n'est pas directement disponible dans Assomption
-            on_commission = None
+            # Prendre les métadonnées du premier record
+            first = comms[0]
 
-            # Construire le texte avec tous les détails disponibles
+            # Construire le texte
             texte_parts = []
-            if comm.code:
-                texte_parts.append(comm.code)
-            if comm.produit:
-                texte_parts.append(comm.produit)
-            if comm.frequence_paiement:
-                texte_parts.append(f"Freq: {comm.frequence_paiement}")
-            if comm.facturation:
-                texte_parts.append(f"Fact: {comm.facturation}")
-            taux_com = self._decimal_to_float(comm.taux_commission)
+            if first.code:
+                texte_parts.append(first.code)
+            if first.produit:
+                texte_parts.append(first.produit)
+            if first.frequence_paiement:
+                texte_parts.append(f"Freq: {first.frequence_paiement}")
+            if first.facturation:
+                texte_parts.append(f"Fact: {first.facturation}")
+            taux_com = self._decimal_to_float(first.taux_commission)
             if taux_com is not None:
                 texte_parts.append(f"Taux Com: {taux_com}%")
-            taux_boni = self._decimal_to_float(comm.taux_boni)
-            if taux_boni is not None:
-                texte_parts.append(f"Taux Boni: {taux_boni}%")
+            if len(comms) > 1:
+                texte_parts.append(f"({len(comms)} lignes agrégées)")
             texte = " | ".join(texte_parts) if texte_parts else ""
 
-            row = {
-                '# de Police': str(comm.numero_police),
-                'Nom Client': comm.nom_assure,
+            rows.append({
+                '# de Police': police,
+                'Nom Client': first.nom_assure,
                 'Compagnie': 'Assomption',
                 'Statut': 'Payé',
                 'Conseiller': None,
                 'Verifié': None,
-                'PA': premium,
-                'Com': commission,
-                'Boni': bonus,
-                'Sur-Com': on_commission,
-                'Reçu': received,
-                'Date': self._format_date(comm.date_emission),
+                'PA': total_prime or None,
+                'Com': total_commission or None,
+                'Boni': None,
+                'Sur-Com': None,
+                'Reçu': total_commission or None,
+                'Date': self._format_date(first.date_emission),
                 'Texte': texte,
-            }
-            rows.append(row)
+            })
+
+        # --- Boni: agrégation par numéro de police ---
+        boni_groups: dict[str, list] = {}
+        for b in report.bonis:
+            key = str(b.numero_police) if b.numero_police else "UNKNOWN"
+            boni_groups.setdefault(key, []).append(b)
+
+        for police, bonis in boni_groups.items():
+            total_boni = sum(
+                self._decimal_to_float(b.boni) or 0 for b in bonis
+            )
+
+            first = bonis[0]
+
+            texte_parts = []
+            if first.produit:
+                texte_parts.append(first.produit)
+            taux_boni = self._decimal_to_float(first.taux_boni)
+            if taux_boni is not None:
+                texte_parts.append(f"Taux Boni: {taux_boni}%")
+            if len(bonis) > 1:
+                texte_parts.append(f"({len(bonis)} lignes agrégées)")
+            texte = " | ".join(texte_parts) if texte_parts else ""
+
+            rows.append({
+                '# de Police': police,
+                'Nom Client': first.nom_assure,
+                'Compagnie': 'Assomption',
+                'Statut': 'Payé',
+                'Conseiller': None,
+                'Verifié': None,
+                'PA': None,
+                'Com': None,
+                'Boni': total_boni or None,
+                'Sur-Com': None,
+                'Reçu': total_boni or None,
+                'Date': self._format_date(first.date_emission),
+                'Texte': texte,
+            })
 
         return pd.DataFrame(rows)
 

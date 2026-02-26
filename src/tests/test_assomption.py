@@ -209,7 +209,7 @@ async def test_extraction(
 
         # Show commissions
         print(f"\n{'='*60}")
-        print("COMMISSIONS")
+        print(f"COMMISSIONS ({len(report.commissions)})")
         print(f"{'='*60}")
         for i, comm in enumerate(report.commissions, 1):
             print(f"\n{i}. Police: {comm.numero_police}")
@@ -222,9 +222,18 @@ async def test_extraction(
             print(f"   Prime: {comm.prime:,.2f} $")
             print(f"   Taux commission: {comm.taux_commission}%")
             print(f"   Commission: {comm.commission:,.2f} $")
-            if comm.taux_boni or comm.boni:
-                print(f"   Taux boni: {comm.taux_boni or 0}%")
-                print(f"   Boni: {comm.boni or 0:,.2f} $")
+
+        # Show bonis
+        print(f"\n{'='*60}")
+        print(f"BONI ({len(report.bonis)})")
+        print(f"{'='*60}")
+        for i, boni in enumerate(report.bonis, 1):
+            print(f"\n{i}. Police: {boni.numero_police}")
+            print(f"   Assuré: {boni.nom_assure}")
+            print(f"   Produit: {boni.produit}")
+            print(f"   Date émission: {boni.date_emission}")
+            print(f"   Taux boni: {boni.taux_boni or 0}%")
+            print(f"   Boni: {boni.boni or 0:,.2f} $")
 
         print(f"\n{'='*60}")
         print("TEST SUCCESSFUL")

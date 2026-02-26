@@ -17,6 +17,9 @@ system_prompt: |
   - Page 3: Tableau commissions
   - Page 5: Tableau surcommissions/boni
 
+  IMPORTANT: Les commissions et les boni sont dans deux listes SÉPARÉES.
+  Ne PAS fusionner les boni dans les commissions.
+
   Retourne un JSON valide.
 
 user_prompt: |
@@ -33,7 +36,7 @@ user_prompt: |
 
   ## COMMISSIONS (page "Rapport de commissions")
 
-  Pour CHAQUE ligne du tableau:
+  Pour CHAQUE ligne du tableau, créer un objet dans la liste "commissions":
   | Champ | Description | Exemple |
   |-------|-------------|---------|
   | code | Code transaction | "AOH1", "BOH1" |
@@ -49,14 +52,19 @@ user_prompt: |
 
   ## SURCOMMISSIONS/BONI (page "Rapport de surcommission")
 
-  Pour CHAQUE ligne, associe au numéro de police:
+  Pour CHAQUE ligne du tableau, créer un objet SÉPARÉ dans la liste "bonis":
   | Champ | Description | Exemple |
   |-------|-------------|---------|
+  | numero_police | Numéro police (7+ chiffres) | "1234567" |
+  | nom_assure | Nom assuré (MAJUSCULES) | "DUPONT JEAN" |
+  | produit | Code produit | "4T20 B" |
+  | date_emission | Date émission | YYYY/MM/DD |
   | taux_boni | Taux boni % | 175.0 |
-  | boni | Montant boni | 86.42 |
+  | boni | Montant boni (peut être négatif) | 86.42 |
 
   ## IMPORTANT
-  - Associe les boni aux commissions par numéro de police
+  - Les commissions et les boni sont dans des listes SÉPARÉES
+  - Ne PAS fusionner les boni dans les commissions
   - Les montants peuvent être NÉGATIFS (ajustements)
   - Extrais TOUTES les lignes des tableaux
 
@@ -80,7 +88,15 @@ user_prompt: |
         "facturation": "COM/PAC",
         "prime": 123.45,
         "taux_commission": 40.993,
-        "commission": 49.38,
+        "commission": 49.38
+      }
+    ],
+    "bonis": [
+      {
+        "numero_police": "1234567",
+        "nom_assure": "DUPONT JEAN",
+        "produit": "4T20 B",
+        "date_emission": "YYYY/MM/DD",
         "taux_boni": 175.0,
         "boni": 86.42
       }

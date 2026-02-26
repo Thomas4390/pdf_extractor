@@ -8,7 +8,7 @@ PDF reports, combining commission and bonus data into unified records.
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -139,15 +139,51 @@ class AssomptionCommission(BaseModel):
         description="Commission amount (can be negative)",
         examples=[-58.44, 224.58],
     )
-    # Bonus fields (merged from surcommission page)
+
+    @field_validator("nom_assure", mode="after")
+    @classmethod
+    def normalize_nom(cls, v: Optional[str]) -> Optional[str]:
+        """Clean and normalize insured name."""
+        if v:
+            return " ".join(v.upper().split())
+        return v
+
+
+class AssomptionBoni(BaseModel):
+    """
+    A bonus record from Assomption Vie report.
+
+    Found on the "Rapport de surcommission" page (usually page 5).
+    """
+
+    numero_police: FlexibleString = Field(
+        default=None,
+        description="Policy number (7 digits)",
+        examples=["1011221", "1011452"],
+    )
+    nom_assure: FlexibleString = Field(
+        default=None,
+        description="Insured person's name",
+        examples=["MUADI MUNYA TSHIMANGA", "DAOUYA TARABET"],
+    )
+    produit: FlexibleString = Field(
+        default=None,
+        description="Product code",
+        examples=["4T20 B", "5L A"],
+    )
+    date_emission: FlexibleString = Field(
+        default=None,
+        description="Issue date (YYYY/MM/DD format)",
+        examples=["2025/09/26", "2025/10/01"],
+    )
     taux_boni: FlexibleDecimal = Field(
         default=None,
-        description="Bonus rate as percentage (from surcommission page)",
+        description="Bonus rate as percentage",
         examples=[175.0],
     )
     boni: FlexibleDecimal = Field(
         default=None,
-        description="Bonus amount (from surcommission page)",
+        description="Bonus amount (can be negative)",
         examples=[-134.24, 393.02],
     )
 
@@ -204,13 +240,49 @@ class AssomptionReport(BaseModel):
     # Records
     commissions: list[AssomptionCommission] = Field(
         default_factory=list,
-        description="List of commission records with merged bonus data",
+        description="List of commission records",
     )
+    bonis: list[AssomptionBoni] = Field(
+        default_factory=list,
+        description="List of bonus records (separate from commissions)",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_cache(cls, data: Any) -> Any:
+        """Migrate old cache format where boni fields were inside commissions."""
+        if not isinstance(data, dict):
+            return data
+        # If bonis list already present, nothing to migrate
+        if "bonis" in data and data["bonis"]:
+            return data
+        commissions = data.get("commissions", [])
+        if not commissions:
+            return data
+        # Check if any commission has taux_boni or boni fields (old format)
+        migrated_bonis = []
+        for comm in commissions:
+            if not isinstance(comm, dict):
+                continue
+            taux_boni = comm.pop("taux_boni", None)
+            boni = comm.pop("boni", None)
+            if taux_boni is not None or boni is not None:
+                migrated_bonis.append({
+                    "numero_police": comm.get("numero_police"),
+                    "nom_assure": comm.get("nom_assure"),
+                    "produit": comm.get("produit"),
+                    "date_emission": comm.get("date_emission"),
+                    "taux_boni": taux_boni,
+                    "boni": boni,
+                })
+        if migrated_bonis:
+            data["bonis"] = migrated_bonis
+        return data
 
     @property
     def nombre_transactions(self) -> int:
         """Number of transactions in the report."""
-        return len(self.commissions)
+        return len(self.commissions) + len(self.bonis)
 
     def calculer_total_commissions(self) -> Decimal:
         """Calculate total commissions from records."""
@@ -221,5 +293,5 @@ class AssomptionReport(BaseModel):
     def calculer_total_boni(self) -> Decimal:
         """Calculate total bonus from records."""
         return sum(
-            (c.boni or Decimal(0)) for c in self.commissions
+            (b.boni or Decimal(0)) for b in self.bonis
         )
