@@ -419,10 +419,13 @@ class MetricsConfig:
     rewards_column: str = "Récompenses"
 
 
+# Monday.com "Data" board ID — used as both metrics source and default aggregation target
+DATA_BOARD_ID = 9142121714
+
 # Default metrics board configuration
 # The metrics board "Data" has groups named by month (e.g., "Janvier 2026")
 METRICS_BOARD_CONFIG = MetricsConfig(
-    board_id=9142121714,  # Monday.com "Data" board
+    board_id=DATA_BOARD_ID,
 )
 
 

@@ -151,7 +151,7 @@ def _render_add_advisor_form(matcher) -> None:
             new_status = st.selectbox(
                 "Statut",
                 options=ADVISOR_STATUSES,
-                index=0,  # Default to "Active"
+                index=ADVISOR_STATUSES.index("New"),  # Default to "New"
                 key="new_advisor_status"
             )
 

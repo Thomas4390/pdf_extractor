@@ -8,6 +8,7 @@ proper column type mapping.
 
 import asyncio
 import json
+import logging
 import os
 import random
 import time
@@ -20,6 +21,7 @@ import pandas as pd
 
 from ..utils.data_unifier import BoardType
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # CONFIGURATION
@@ -32,6 +34,10 @@ API_URL = "https://api.monday.com/v2"
 DEFAULT_BATCH_SIZE = 50
 DEFAULT_MAX_CONCURRENT = 5
 RATE_LIMIT_DELAY = 0.5  # seconds between requests (increased for stability)
+
+# Retry configuration for transient server errors (5xx)
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0  # seconds
 
 
 # =============================================================================
@@ -175,62 +181,143 @@ class MondayClient:
         query: str,
         variables: Optional[dict] = None
     ) -> dict:
-        """Execute a GraphQL query asynchronously."""
+        """Execute a GraphQL query asynchronously with retry on server errors."""
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                self.api_url,
-                headers=self.headers,
-                json=payload
-            )
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        self.api_url,
+                        headers=self.headers,
+                        json=payload
+                    )
 
-            if response.status_code != 200:
-                raise MondayError(
-                    message=f"HTTP {response.status_code}: {response.text}",
-                    status_code=response.status_code
+                    if response.status_code >= 500:
+                        raise MondayError(
+                            message=f"HTTP {response.status_code}: {response.text}",
+                            status_code=response.status_code
+                        )
+
+                    if response.status_code != 200:
+                        raise MondayError(
+                            message=f"HTTP {response.status_code}: {response.text}",
+                            status_code=response.status_code
+                        )
+
+                    result = response.json()
+
+                    if "errors" in result:
+                        errors = result["errors"]
+                        # Check if this is a server-side error (retryable)
+                        is_server_error = any(
+                            err.get("extensions", {}).get("status_code") == 500
+                            or "internal server error" in err.get("message", "").lower()
+                            for err in (errors if isinstance(errors, list) else [])
+                        )
+                        if is_server_error and attempt < MAX_RETRIES - 1:
+                            raise MondayError(
+                                message=str(errors),
+                                errors=errors
+                            )
+                        raise MondayError(
+                            message=str(errors),
+                            errors=errors
+                        )
+
+                    return result
+
+            except MondayError as e:
+                last_error = e
+                is_retryable = (
+                    e.status_code and e.status_code >= 500
+                ) or (
+                    e.errors and any(
+                        err.get("extensions", {}).get("status_code") == 500
+                        or "internal server error" in err.get("message", "").lower()
+                        for err in (e.errors if isinstance(e.errors, list) else [])
+                    )
                 )
+                if is_retryable and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Monday.com server error (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {delay}s... Error: {e.message[:200]}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
-            result = response.json()
-
-            if "errors" in result:
-                raise MondayError(
-                    message=str(result["errors"]),
-                    errors=result["errors"]
-                )
-
-            return result
+        raise last_error
 
     def _execute_query_sync(self, query: str, variables: Optional[dict] = None) -> dict:
-        """Execute a GraphQL query synchronously."""
+        """Execute a GraphQL query synchronously with retry on server errors."""
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        response = httpx.post(
-            self.api_url,
-            headers=self.headers,
-            json=payload,
-            timeout=self.timeout
-        )
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = httpx.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=self.timeout
+                )
 
-        if response.status_code != 200:
-            raise MondayError(
-                message=f"HTTP {response.status_code}: {response.text}",
-                status_code=response.status_code
-            )
+                if response.status_code >= 500:
+                    raise MondayError(
+                        message=f"HTTP {response.status_code}: {response.text}",
+                        status_code=response.status_code
+                    )
 
-        result = response.json()
+                if response.status_code != 200:
+                    raise MondayError(
+                        message=f"HTTP {response.status_code}: {response.text}",
+                        status_code=response.status_code
+                    )
 
-        if "errors" in result:
-            raise MondayError(
-                message=str(result["errors"]),
-                errors=result["errors"]
-            )
+                result = response.json()
 
-        return result
+                if "errors" in result:
+                    errors = result["errors"]
+                    is_server_error = any(
+                        err.get("extensions", {}).get("status_code") == 500
+                        or "internal server error" in err.get("message", "").lower()
+                        for err in (errors if isinstance(errors, list) else [])
+                    )
+                    if is_server_error and attempt < MAX_RETRIES - 1:
+                        raise MondayError(message=str(errors), errors=errors)
+                    raise MondayError(message=str(errors), errors=errors)
+
+                return result
+
+            except MondayError as e:
+                last_error = e
+                is_retryable = (
+                    e.status_code and e.status_code >= 500
+                ) or (
+                    e.errors and any(
+                        err.get("extensions", {}).get("status_code") == 500
+                        or "internal server error" in err.get("message", "").lower()
+                        for err in (e.errors if isinstance(e.errors, list) else [])
+                    )
+                )
+                if is_retryable and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Monday.com server error (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {delay}s... Error: {e.message[:200]}"
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+
+        raise last_error
 
     # -------------------------------------------------------------------------
     # Board operations
@@ -1045,6 +1132,9 @@ class MondayClient:
                 name=item_data["name"]
             )
         except MondayError as e:
+            logger.error(
+                f"create_item failed for '{escaped_name}': {e}"
+            )
             return CreateResult(success=False, error=str(e))
 
     # -------------------------------------------------------------------------

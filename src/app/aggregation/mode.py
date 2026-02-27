@@ -16,6 +16,7 @@ from src.utils.aggregator import (
     PeriodType,
     FlexiblePeriod,
     SOURCE_BOARDS,
+    DATA_BOARD_ID,
     get_group_name_for_period,
     get_period_date_range,
 )
@@ -119,17 +120,26 @@ def render_aggregation_mode() -> None:
 
 
 def render_agg_step_1_config() -> None:
-    """Step 1: Configuration - Target board selection + auto-load data."""
+    """Step 1: Configuration - Auto-load data from configured sources to Data board."""
     boards = st.session_state.monday_boards
 
-    # Show which sources are configured
-    st.subheader("📋 Sources configurées")
+    # Ensure target board is set to Data board
+    st.session_state.agg_target_board_id = DATA_BOARD_ID
 
+    # Show target board
+    target_board_name = f"ID: {DATA_BOARD_ID}"
+    for b in boards:
+        if int(b["id"]) == DATA_BOARD_ID:
+            target_board_name = b["name"]
+            break
+    st.subheader(f"🎯 Board cible : {target_board_name}")
+
+    # Show which sources are configured
+    st.markdown("##### 📋 Sources")
     source_info = []
     for source_key, board_id in st.session_state.agg_selected_sources.items():
         config = SOURCE_BOARDS.get(source_key)
         if config:
-            # Find board name
             board_name = f"ID: {board_id}"
             for b in boards:
                 if int(b["id"]) == board_id:
@@ -153,33 +163,20 @@ def render_agg_step_1_config() -> None:
 
     st.markdown("---")
 
-    # Target board selection
-    target_board_id = render_target_board_selection(
-        boards=boards,
-        current_selection=st.session_state.agg_target_board_id,
-    )
-    st.session_state.agg_target_board_id = target_board_id
-
-    st.markdown("---")
-
-    # Data loading status and controls
+    # Data loading status
     st.subheader("📥 Chargement des données")
 
-    # Check session state first - data persistence takes priority
     data_loaded = st.session_state.get("agg_data_loaded", False)
     source_data = st.session_state.get("agg_source_data", {})
 
-    # Verify data is actually present (not just flag)
     has_valid_data = data_loaded and source_data and any(
         not df.empty for df in source_data.values() if isinstance(df, pd.DataFrame)
     )
 
     if has_valid_data:
-        # Data already loaded - show summary and don't reload
         total_rows = sum(len(df) for df in source_data.values())
-        st.success(f"✅ Données chargées: {total_rows} lignes au total (en cache)")
+        st.success(f"✅ Données chargées : {total_rows} lignes au total")
 
-        # Show per-source counts
         cols = st.columns(len(source_data))
         for idx, (source_key, df) in enumerate(source_data.items()):
             config = SOURCE_BOARDS.get(source_key)
@@ -187,7 +184,6 @@ def render_agg_step_1_config() -> None:
                 with cols[idx]:
                     st.metric(config.display_name, f"{len(df)} lignes")
 
-        # Button to force reload (optional)
         if st.button("🔄 Recharger les données", type="secondary"):
             st.session_state.agg_data_loaded = False
             st.session_state.agg_source_data = {}
@@ -196,16 +192,13 @@ def render_agg_step_1_config() -> None:
             st.rerun()
 
     else:
-        # Data not loaded - check background loading status
         bg_status = get_background_aggregation_status()
 
-        # Try to apply background data if available
         if not bg_status["loading"] and bg_status["data"]:
             if apply_background_aggregation_data():
                 st.rerun()
 
         if bg_status["loading"]:
-            # Show background loading progress
             progress = bg_status["progress"]
             current = progress.get("current", 0)
             total = progress.get("total", 1)
@@ -213,39 +206,33 @@ def render_agg_step_1_config() -> None:
 
             st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
             if current_source:
-                st.caption(f"Source actuelle: {current_source}")
+                st.caption(f"Source actuelle : {current_source}")
 
             if total > 0:
                 st.progress(current / total)
 
-            # Auto-refresh to check progress
             import time
             time.sleep(0.5)
             st.rerun()
 
         elif bg_status["error"]:
-            st.error(f"Erreur lors du chargement: {bg_status['error']}")
+            st.error(f"Erreur lors du chargement : {bg_status['error']}")
             if st.button("🔄 Réessayer", type="primary"):
                 reset_background_aggregation_data()
                 start_background_aggregation_load()
                 st.rerun()
 
         else:
-            st.info("Les données seront chargées automatiquement.")
-            # Start background loading if not started yet
+            st.info("Chargement automatique des données...")
             if st.session_state.agg_selected_sources:
                 if start_background_aggregation_load():
                     st.rerun()
                 else:
-                    # Fallback to synchronous load
                     load_source_data()
                     st.rerun()
 
     # Navigation
-    can_proceed = (
-        target_board_id is not None
-        and st.session_state.get("agg_data_loaded", False)
-    )
+    can_proceed = st.session_state.get("agg_data_loaded", False)
 
     go_back, go_next = render_navigation_buttons(
         current_step=1,
@@ -254,10 +241,8 @@ def render_agg_step_1_config() -> None:
     )
 
     if go_next:
-        # Set default period if not set (MONTH_1 = last month)
         if st.session_state.agg_period is None:
             st.session_state.agg_period = DatePeriod.MONTH_1
-        # Filter and aggregate with the period
         filter_and_aggregate_data()
         st.session_state.agg_step = 2
         st.rerun()

@@ -13,7 +13,7 @@ from typing import Optional
 import streamlit as st
 
 from src.pipeline import Pipeline
-from src.utils.aggregator import SOURCE_BOARDS
+from src.utils.aggregator import SOURCE_BOARDS, DATA_BOARD_ID
 from src.utils.data_unifier import BoardType
 
 
@@ -161,7 +161,7 @@ def init_session_state() -> None:
         "agg_step": 1,  # 1-4 for aggregation wizard
         "agg_selected_sources": get_default_selected_sources(),  # {source_key: board_id}
         "agg_period": None,  # DatePeriod enum
-        "agg_target_board_id": None,
+        "agg_target_board_id": DATA_BOARD_ID,  # Default to "Data" board
         "agg_source_data": {},  # {source_key: DataFrame} - raw data from Monday.com
         "agg_data_loaded": False,  # True when raw data has been loaded
         "agg_filtered_data": {},  # {source_key: DataFrame}
@@ -249,7 +249,7 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_step = 1
     st.session_state.agg_selected_sources = get_default_selected_sources()
     st.session_state.agg_period = None
-    st.session_state.agg_target_board_id = None
+    st.session_state.agg_target_board_id = DATA_BOARD_ID
     st.session_state.agg_source_data = {}
     st.session_state.agg_data_loaded = False
     st.session_state.agg_filtered_data = {}
