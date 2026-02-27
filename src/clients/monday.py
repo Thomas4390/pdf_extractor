@@ -2024,9 +2024,7 @@ class MondayClient:
                 board_id: {board_id},
                 board_attribute: name,
                 new_value: "{new_name}"
-            ) {{
-                id
-            }}
+            )
         }}
         """
         result = await self._execute_query(mutation)
