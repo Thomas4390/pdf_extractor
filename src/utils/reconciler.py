@@ -5,10 +5,16 @@ Reconciliation Engine
 Cross-board reconciliation between Paiement Historique and Ventes/Production.
 
 Matches payment records by `# de Police`, classifies each into the correct
-Reçu field (1, 2, or 3), compares amounts against a dynamic threshold,
+Reçu field (1, 2, or 3), compares summed amounts against a dynamic threshold,
 and prepares updates for both Monday.com boards.
+
+Key behavior:
+- Multiple historical lines with the same (# de Police, classification)
+  are aggregated: their Reçu amounts are summed before comparison.
+- Each aggregated group produces one ReconciliationMatch.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -34,12 +40,12 @@ class RecuClassification:
 
 @dataclass
 class ReconciliationMatch:
-    """Result for a single historical payment line."""
-    hist_index: int                          # Index in the historical DataFrame
+    """Result for an aggregated group of historical payment lines."""
+    hist_indices: list[int]                  # All DF indices in this group
     police_number: str                       # # de Police
     compagnie: str                           # Compagnie
-    texte: str                               # Texte from historical
-    recu_amount: Optional[float]             # Reçu from historical
+    texte: str                               # Representative texte
+    recu_amount: Optional[float]             # SUMMED Reçu from historical
     classification: Optional[RecuClassification]  # Reçu 1/2/3
     reference_amount: Optional[float]        # Com/Boni/Sur-Com from sales
     threshold_pct: Optional[float]           # Threshold percentage used
@@ -48,17 +54,19 @@ class ReconciliationMatch:
     sales_item_id: Optional[str] = None      # Monday.com item_id in sales board
     conseiller: Optional[str] = None         # Advisor from sales board
     pa_amount: Optional[float] = None        # PA from sales board
+    line_count: int = 1                      # Number of lines aggregated
 
 
 @dataclass
 class ReconciliationResult:
     """Global reconciliation result with metrics and helper methods."""
     matches: list[ReconciliationMatch] = field(default_factory=list)
+    total_hist_lines: int = 0  # Total Payé lines before aggregation
 
     # --- Metrics ---
 
     @property
-    def total_paye(self) -> int:
+    def total_groups(self) -> int:
         return len(self.matches)
 
     @property
@@ -107,24 +115,27 @@ class ReconciliationResult:
         """Get historical indices and advisors for lines that passed.
 
         Returns:
-            List of (hist_index, conseiller) tuples.
+            List of (hist_index, conseiller) tuples — one per original row.
         """
-        return [
-            (m.hist_index, m.conseiller)
-            for m in self.matches
-            if m.status == ReconciliationStatus.PASSED
-        ]
+        results = []
+        for m in self.matches:
+            if m.status == ReconciliationStatus.PASSED:
+                for idx in m.hist_indices:
+                    results.append((idx, m.conseiller))
+        return results
 
     def to_display_dataframe(self) -> pd.DataFrame:
         """Convert matches to a DataFrame for UI display."""
         rows = []
         for m in self.matches:
+            lines_label = f" ({m.line_count})" if m.line_count > 1 else ""
             rows.append({
                 "# Police": m.police_number,
                 "Compagnie": m.compagnie,
-                "Texte": m.texte,
+                "Type": m.classification.label if m.classification else "—",
                 "Reçu →": m.classification.recu_field if m.classification else "—",
                 "Montant": m.recu_amount,
+                "Lignes": m.line_count,
                 "Référence": m.reference_amount,
                 "Seuil": f"{m.threshold_pct:.0f}%" if m.threshold_pct is not None else "—",
                 "Écart": f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "—",
@@ -204,11 +215,13 @@ class Reconciler:
     ) -> ReconciliationResult:
         """Run reconciliation between historical payments and sales/production.
 
+        Lines with the same (# de Police, classification) are aggregated:
+        their Reçu amounts are summed before comparing against the sales
+        reference value.
+
         Args:
-            hist_df: Historical payments DataFrame (with Statut, # de Police,
-                     Compagnie, Texte, Reçu columns).
-            sales_df: Sales/production DataFrame (with # de Police, Com, Boni,
-                      Sur-Com, PA, item_id, Conseiller columns).
+            hist_df: Historical payments DataFrame.
+            sales_df: Sales/production DataFrame.
 
         Returns:
             ReconciliationResult with all matches and metrics.
@@ -222,6 +235,8 @@ class Reconciler:
         if hist_paye.empty:
             return result
 
+        result.total_hist_lines = len(hist_paye)
+
         # Build sales lookup by # de Police
         sales_lookup: dict[str, pd.Series] = {}
         if "# de Police" in sales_df.columns:
@@ -230,71 +245,104 @@ class Reconciler:
                 if police:
                     sales_lookup[police] = row
 
-        # Process each Payé line
+        # --- Phase 1: Classify each row and group by (police, classification) ---
+        # Key: (police_number, recu_field or "NOT_FOUND" or "UNCLASSIFIED")
+        GroupKey = tuple[str, str]
+        groups: dict[GroupKey, list[tuple[int, float, str, str]]] = defaultdict(list)
+        # Each entry: (df_index, recu_amount, compagnie, texte)
+        classification_map: dict[GroupKey, Optional[RecuClassification]] = {}
+
         for idx, hist_row in hist_paye.iterrows():
             police = str(hist_row.get("# de Police", "")).strip()
             compagnie = str(hist_row.get("Compagnie", ""))
             texte = str(hist_row.get("Texte", ""))
-            recu_amount = self._to_float(hist_row.get("Reçu"))
+            recu_amount = self._to_float(hist_row.get("Reçu")) or 0.0
 
-            # Try to find in sales
             sales_row = sales_lookup.get(police)
 
             if sales_row is None:
+                key = (police, "_NOT_FOUND")
+                groups[key].append((idx, recu_amount, compagnie, texte))
+                classification_map[key] = None
+                continue
+
+            classification = self.classify_row(texte)
+            if classification is None:
+                key = (police, "_UNCLASSIFIED")
+                groups[key].append((idx, recu_amount, compagnie, texte))
+                classification_map[key] = None
+                continue
+
+            key = (police, classification.recu_field)
+            groups[key].append((idx, recu_amount, compagnie, texte))
+            classification_map[key] = classification
+
+        # --- Phase 2: For each group, sum amounts and compare ---
+        for group_key, entries in groups.items():
+            police, recu_field_or_status = group_key
+            indices = [e[0] for e in entries]
+            total_recu = sum(e[1] for e in entries)
+            compagnie = entries[0][2]
+            # Use first texte as representative
+            texte = entries[0][3]
+            classification = classification_map[group_key]
+
+            sales_row = sales_lookup.get(police)
+
+            if recu_field_or_status == "_NOT_FOUND":
                 result.matches.append(ReconciliationMatch(
-                    hist_index=idx,
+                    hist_indices=indices,
                     police_number=police,
                     compagnie=compagnie,
                     texte=texte,
-                    recu_amount=recu_amount,
+                    recu_amount=total_recu if total_recu else None,
                     classification=None,
                     reference_amount=None,
                     threshold_pct=None,
                     ecart_pct=None,
                     status=ReconciliationStatus.NOT_FOUND,
+                    line_count=len(entries),
                 ))
                 continue
 
-            # Classify
-            classification = self.classify_row(texte)
-            if classification is None:
+            if recu_field_or_status == "_UNCLASSIFIED":
                 result.matches.append(ReconciliationMatch(
-                    hist_index=idx,
+                    hist_indices=indices,
                     police_number=police,
                     compagnie=compagnie,
                     texte=texte,
-                    recu_amount=recu_amount,
+                    recu_amount=total_recu if total_recu else None,
                     classification=None,
                     reference_amount=None,
                     threshold_pct=None,
                     ecart_pct=None,
                     status=ReconciliationStatus.UNCLASSIFIED,
-                    sales_item_id=str(sales_row.get("item_id", "")),
-                    conseiller=self._get_conseiller(sales_row),
-                    pa_amount=self._to_float(sales_row.get("PA")),
+                    sales_item_id=str(sales_row.get("item_id", "")) if sales_row is not None else None,
+                    conseiller=self._get_conseiller(sales_row) if sales_row is not None else None,
+                    pa_amount=self._to_float(sales_row.get("PA")) if sales_row is not None else None,
+                    line_count=len(entries),
                 ))
                 continue
 
-            # Get reference amount and PA
+            # Normal classified group — compare summed amount against reference
             reference = self._to_float(sales_row.get(classification.compare_column))
             pa = self._to_float(sales_row.get("PA"))
             threshold = self.determine_threshold(pa)
             conseiller = self._get_conseiller(sales_row)
             sales_item_id = str(sales_row.get("item_id", ""))
 
-            # Compare
-            ecart_pct = self._compute_ecart(recu_amount, reference)
+            ecart_pct = self._compute_ecart(total_recu, reference)
             if ecart_pct is not None and ecart_pct <= threshold:
                 status = ReconciliationStatus.PASSED
             else:
                 status = ReconciliationStatus.FLAGGED
 
             result.matches.append(ReconciliationMatch(
-                hist_index=idx,
+                hist_indices=indices,
                 police_number=police,
                 compagnie=compagnie,
                 texte=texte,
-                recu_amount=recu_amount,
+                recu_amount=round(total_recu, 2),
                 classification=classification,
                 reference_amount=reference,
                 threshold_pct=threshold,
@@ -303,6 +351,7 @@ class Reconciler:
                 sales_item_id=sales_item_id,
                 conseiller=conseiller,
                 pa_amount=pa,
+                line_count=len(entries),
             ))
 
         return result

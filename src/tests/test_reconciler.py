@@ -30,7 +30,7 @@ def test_classify_commission():
     assert c.recu_field == "Reçu 1"
     assert c.compare_column == "Com"
 
-    # Assomption-style commission (after modification)
+    # Assomption-style commission
     c = r.classify_row("Commission | ABC123 | Produit X | Freq: Mensuel")
     assert c is not None
     assert c.recu_field == "Reçu 1"
@@ -143,17 +143,125 @@ def test_reconcile_basic():
 
     result = r.reconcile(hist_df, sales_df)
 
-    assert result.total_paye == 2
+    assert result.total_hist_lines == 2
+    assert result.total_groups == 2  # Com group + Boni group
     assert result.found == 2
     assert result.passed == 2
     assert result.flagged == 0
-    assert result.not_found == 0
 
     # Check sales updates group by item_id
     updates = result.get_sales_updates()
     assert "12345" in updates
     assert updates["12345"]["Reçu 1"] == 100.0
     assert updates["12345"]["Reçu 2"] == 50.0
+
+
+def test_reconcile_aggregation():
+    """Test that multiple lines with same police+classification are summed."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection A | Commission 1ère année",
+            "Reçu": 60.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection B | Commission 1ère année",
+            "Reçu": 40.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection A | Boni 1ère année vie",
+            "Reçu": 20.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection B | Boni 1ère année vie",
+            "Reçu": 30.0,
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": 50.0,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "12345",
+            "Conseiller": "Jean Dupont",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    # 4 Payé lines → aggregated into 2 groups (Commission, Boni)
+    assert result.total_hist_lines == 4
+    assert result.total_groups == 2
+    assert result.passed == 2
+    assert result.flagged == 0
+
+    # Commission group: 60 + 40 = 100 → matches Com=100
+    # Boni group: 20 + 30 = 50 → matches Boni=50
+    updates = result.get_sales_updates()
+    assert updates["12345"]["Reçu 1"] == 100.0
+    assert updates["12345"]["Reçu 2"] == 50.0
+
+    # hist_indices should contain all original indices
+    com_match = [m for m in result.matches if m.classification and m.classification.recu_field == "Reçu 1"][0]
+    assert len(com_match.hist_indices) == 2
+    assert com_match.line_count == 2
+
+
+def test_reconcile_surcom_aggregation():
+    """Test aggregation works for Sur-Com lines too."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection A | Commission (Partage: 100%, Com: 50%) [Sur-Com]",
+            "Reçu": 30.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection B | Commission (Partage: 100%, Com: 50%) [Sur-Com]",
+            "Reçu": 20.0,
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 200.0,
+            "Boni": None,
+            "Sur-Com": 50.0,
+            "PA": 1000.0,
+            "item_id": "99",
+            "Conseiller": "Marie",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    assert result.total_groups == 1
+    assert result.passed == 1
+    assert result.matches[0].recu_amount == 50.0  # 30 + 20
+    assert result.matches[0].classification.recu_field == "Reçu 3"
 
 
 def test_reconcile_not_found():
@@ -252,19 +360,26 @@ def test_reconcile_filters_paye_only():
     ])
 
     result = r.reconcile(hist_df, sales_df)
-    assert result.total_paye == 1  # Only the Payé row
+    assert result.total_hist_lines == 1  # Only the Payé row
 
 
-def test_reconcile_hist_updates():
-    """Test get_passed_hist_updates returns correct indices and advisors."""
+def test_reconcile_hist_updates_with_aggregation():
+    """Test get_passed_hist_updates returns all indices from aggregated groups."""
     r = Reconciler()
 
     hist_df = pd.DataFrame([
         {
             "# de Police": "POL001",
             "Compagnie": "UV Inc",
-            "Texte": "Commission test",
-            "Reçu": 100.0,
+            "Texte": "Commission A",
+            "Reçu": 60.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission B",
+            "Reçu": 40.0,
             "Statut": "Payé",
         },
     ])
@@ -283,8 +398,10 @@ def test_reconcile_hist_updates():
 
     result = r.reconcile(hist_df, sales_df)
     hist_updates = result.get_passed_hist_updates()
-    assert len(hist_updates) == 1
+    # Both indices should be returned, each with the same conseiller
+    assert len(hist_updates) == 2
     assert hist_updates[0] == (0, "Marie Tremblay")
+    assert hist_updates[1] == (1, "Marie Tremblay")
 
 
 def test_reconcile_to_display_dataframe():
@@ -319,6 +436,7 @@ def test_reconcile_to_display_dataframe():
     assert len(display) == 1
     assert "# Police" in display.columns
     assert "Statut" in display.columns
+    assert "Lignes" in display.columns
     assert display.iloc[0]["Statut"] == "Vérifié"
 
 
@@ -339,7 +457,7 @@ def test_reconcile_empty_hist():
     sales_df = pd.DataFrame(columns=["# de Police", "Com", "Boni", "Sur-Com", "PA", "item_id", "Conseiller"])
 
     result = r.reconcile(hist_df, sales_df)
-    assert result.total_paye == 0
+    assert result.total_hist_lines == 0
     assert result.matches == []
 
 
@@ -375,6 +493,33 @@ def test_reconcile_within_threshold():
     assert result.flagged == 0
 
 
+def test_reconcile_mixed_police_aggregation():
+    """Test aggregation with multiple police numbers."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV", "Texte": "Commission A", "Reçu": 50.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV", "Texte": "Commission B", "Reçu": 50.0, "Statut": "Payé"},
+        {"# de Police": "POL002", "Compagnie": "UV", "Texte": "Boni X", "Reçu": 25.0, "Statut": "Payé"},
+        {"# de Police": "POL002", "Compagnie": "UV", "Texte": "Boni Y", "Reçu": 25.0, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 100.0, "Boni": None, "Sur-Com": None, "PA": 800.0, "item_id": "A1", "Conseiller": "Alice"},
+        {"# de Police": "POL002", "Com": None, "Boni": 50.0, "Sur-Com": None, "PA": 300.0, "item_id": "B2", "Conseiller": "Bob"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    assert result.total_hist_lines == 4
+    assert result.total_groups == 2
+    assert result.passed == 2
+
+    updates = result.get_sales_updates()
+    assert updates["A1"] == {"Reçu 1": 100.0}
+    assert updates["B2"] == {"Reçu 2": 50.0}
+
+
 def main():
     """Run all tests."""
     tests = [
@@ -386,13 +531,16 @@ def main():
         test_threshold_high_pa,
         test_threshold_low_pa,
         test_reconcile_basic,
+        test_reconcile_aggregation,
+        test_reconcile_surcom_aggregation,
         test_reconcile_not_found,
         test_reconcile_flagged,
         test_reconcile_filters_paye_only,
-        test_reconcile_hist_updates,
+        test_reconcile_hist_updates_with_aggregation,
         test_reconcile_to_display_dataframe,
         test_reconcile_empty_hist,
         test_reconcile_within_threshold,
+        test_reconcile_mixed_police_aggregation,
     ]
 
     passed = 0

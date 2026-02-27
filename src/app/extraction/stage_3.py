@@ -391,17 +391,14 @@ def _execute_reconciliation_writeback(
                     hist_item_id = index_to_item_id.get(hist_index)
 
                     if not hist_item_id:
-                        # Fallback: skip if we can't map
                         ops_done += 1
                         continue
 
                     column_values = {}
 
-                    # Set Vérifié to checked
                     if verifie_col_id:
                         column_values[verifie_col_id] = {"checked": "true"}
 
-                    # Set Conseiller if available
                     if conseiller and conseiller_col_id:
                         col_type = col_type_map.get("Conseiller", "")
                         if col_type == "dropdown":
