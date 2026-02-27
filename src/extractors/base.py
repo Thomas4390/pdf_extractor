@@ -227,6 +227,7 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=self.user_prompt,
                 model_class=self.model_class,
+                max_tokens=model_config.max_tokens,
             )
 
         elif mode == ExtractionMode.TEXT:
@@ -236,6 +237,7 @@ class BaseExtractor(ABC, Generic[T]):
             raw_result = await self.client.extract_with_text(
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt_with_text,
+                max_tokens=model_config.max_tokens,
             )
             result = self.model_class(**raw_result)
 
@@ -246,6 +248,7 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=self.user_prompt,
                 ocr_engine=model_config.ocr_engine.value,
+                max_tokens=model_config.max_tokens,
             )
             result = self.model_class(**raw_result)
 
@@ -275,6 +278,7 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt_with_text,
                 model=analysis_model,
+                max_tokens=model_config.max_tokens,
             )
             result = self.model_class(**raw_result)
 

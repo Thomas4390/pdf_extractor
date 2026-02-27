@@ -109,6 +109,7 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
         secondary_fallback_model_id=SECONDARY_FALLBACK_MODEL,
         secondary_fallback_mode=ExtractionMode.VISION,
         page_config=PageConfig(skip_first=2),  # Skip cover and summary pages
+        max_tokens=32768,  # Large PDFs with many trailing fees need more output tokens
     ),
 }
 
