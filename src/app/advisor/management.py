@@ -89,6 +89,12 @@ def render_advisor_management_tab() -> None:
 
     # Statistics
     advisors = matcher.get_all_advisors()
+
+    # Show notification if advisors were auto-promoted from New → Active
+    if hasattr(matcher, 'recently_promoted') and matcher.recently_promoted:
+        names = matcher.recently_promoted
+        st.info(f"🔄 **Promotion automatique:** {', '.join(names)} → statut **Active** (plus d'un mois depuis la création)")
+
     total_variations = sum(len(a.variations) for a in advisors)
 
     # Count by status

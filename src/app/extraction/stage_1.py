@@ -11,6 +11,8 @@ from src.pipeline import SourceType
 from src.utils.data_unifier import BoardType
 from src.utils.model_registry import get_available_models, get_default_vision_model
 
+MAX_PDF_SIZE_MB = 500
+
 from src.app.state import get_pipeline
 from src.app.utils.navigation import render_stepper, render_breadcrumb
 from src.app.utils.board_utils import sort_and_filter_boards, load_boards_async
@@ -63,6 +65,25 @@ def render_pdf_extraction_tab() -> None:
         )
 
         if uploaded_files:
+            # Check file sizes
+            oversized = [
+                (f.name, f.size / (1024 * 1024))
+                for f in uploaded_files
+                if f.size > MAX_PDF_SIZE_MB * 1024 * 1024
+            ]
+            if oversized:
+                for name, size_mb in oversized:
+                    st.error(
+                        f"⚠️ Le fichier **{name}** ({size_mb:.1f} Mo) dépasse la taille maximale "
+                        f"autorisée de {MAX_PDF_SIZE_MB} Mo. Veuillez réduire la taille du fichier."
+                    )
+                uploaded_files = [
+                    f for f in uploaded_files
+                    if f.size <= MAX_PDF_SIZE_MB * 1024 * 1024
+                ]
+                if not uploaded_files:
+                    return
+
             is_batch = len(uploaded_files) > 1
             if is_batch:
                 st.success(f"✅ {len(uploaded_files)} fichiers chargés")

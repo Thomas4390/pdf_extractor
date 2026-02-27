@@ -19,6 +19,7 @@ import json
 import os
 import re
 import unicodedata
+from datetime import datetime, date
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
@@ -116,6 +117,7 @@ class Advisor:
     last_name: str   # Nom de famille
     variations: List[str] = field(default_factory=list)  # Variations connues
     status: str = "Active"  # Statut: Active, New, Inactive
+    created_at: Optional[str] = None  # Date de création (YYYY-MM-DD)
 
     @property
     def display_name(self) -> str:
@@ -159,7 +161,8 @@ class Advisor:
             'first_name': self.first_name,
             'last_name': self.last_name,
             'variations': self.variations,
-            'status': self.status
+            'status': self.status,
+            'created_at': self.created_at,
         }
 
     @classmethod
@@ -169,7 +172,8 @@ class Advisor:
             first_name=data['first_name'],
             last_name=data['last_name'],
             variations=data.get('variations', []),
-            status=data.get('status', 'Active')
+            status=data.get('status', 'Active'),
+            created_at=data.get('created_at'),
         )
 
 
@@ -223,6 +227,7 @@ class AdvisorMatcher:
         self.advisors: List[Advisor] = []
         self._compiled_patterns: List[Tuple[re.Pattern, Advisor]] = []
         self._gsheets_error: Optional[str] = None
+        self.recently_promoted: List[str] = []  # Names auto-promoted from New → Active
 
         # Initialize Google Sheets client
         self._gsheets_client: Optional[Any] = None
@@ -271,24 +276,27 @@ class AdvisorMatcher:
             # Get or create the Advisors worksheet
             try:
                 self._worksheet = spreadsheet.worksheet(self.GSHEETS_WORKSHEET_NAME)
-                # Check if status column exists, add it if not (non-critical)
+                # Ensure all expected columns exist (non-critical)
                 try:
                     headers = self._worksheet.row_values(1)
                     if 'status' not in headers:
-                        # Add status column header
                         self._worksheet.update_cell(1, 5, 'status')
                         self._worksheet.format('E1', {'textFormat': {'bold': True}})
+                        headers = self._worksheet.row_values(1)
+                    if 'created_at' not in headers:
+                        col_idx = len(headers) + 1
+                        self._worksheet.update_cell(1, col_idx, 'created_at')
+                        self._worksheet.format(f'{chr(64 + col_idx)}1', {'textFormat': {'bold': True}})
                 except Exception:
-                    # Status column update is non-critical, continue without it
                     pass
             except gspread.WorksheetNotFound:
-                # Create the worksheet with headers (including status)
+                # Create the worksheet with headers
                 self._worksheet = spreadsheet.add_worksheet(
                     title=self.GSHEETS_WORKSHEET_NAME,
-                    rows=100, cols=5
+                    rows=100, cols=6
                 )
-                self._worksheet.update('A1:E1', [['id', 'first_name', 'last_name', 'variations', 'status']])
-                self._worksheet.format('A1:E1', {'textFormat': {'bold': True}})
+                self._worksheet.update('A1:F1', [['id', 'first_name', 'last_name', 'variations', 'status', 'created_at']])
+                self._worksheet.format('A1:F1', {'textFormat': {'bold': True}})
 
             self._use_gsheets = True
             self._gsheets_error = None  # Clear any previous error
@@ -439,10 +447,12 @@ class AdvisorMatcher:
         self._load_from_gsheets()
 
     def _load_from_gsheets(self):
-        """Load advisors from Google Sheets."""
+        """Load advisors from Google Sheets and auto-promote New → Active after 1 month."""
         try:
             records = self._worksheet.get_all_records()
             self.advisors = []
+            advisors_to_promote = []
+
             for row in records:
                 variations_str = row.get('variations', '')
                 if isinstance(variations_str, str) and variations_str.strip():
@@ -455,17 +465,72 @@ class AdvisorMatcher:
                 if status not in ADVISOR_STATUSES:
                     status = 'Active'
 
+                created_at = str(row.get('created_at', '')).strip() or None
+
                 advisor = Advisor(
                     first_name=str(row.get('first_name', '')),
                     last_name=str(row.get('last_name', '')),
                     variations=variations,
-                    status=status
+                    status=status,
+                    created_at=created_at,
                 )
                 advisor._row_id = row.get('id')
+
+                # Auto-promote New → Active after 1 month
+                if advisor.status == "New" and advisor.created_at:
+                    if self._should_promote_to_active(advisor.created_at):
+                        advisor.status = "Active"
+                        advisors_to_promote.append(advisor)
+
                 self.advisors.append(advisor)
+
+            # Batch-update promoted advisors in Google Sheets
+            self.recently_promoted = [f"{a.first_name} {a.last_name}" for a in advisors_to_promote]
+            if advisors_to_promote:
+                self._promote_advisors_in_sheet(advisors_to_promote)
+
             self._build_patterns()
         except Exception as e:
             raise RuntimeError(f"Could not load advisors from Google Sheets: {e}")
+
+    @staticmethod
+    def _should_promote_to_active(created_at_str: str) -> bool:
+        """Check if a New advisor should be promoted to Active (created > 1 month ago)."""
+        try:
+            created = datetime.strptime(created_at_str, "%Y-%m-%d").date()
+            today = date.today()
+            # Compare year/month: promote if we're at least 1 full month later
+            months_diff = (today.year - created.year) * 12 + (today.month - created.month)
+            return months_diff >= 1
+        except (ValueError, TypeError):
+            return False
+
+    def _promote_advisors_in_sheet(self, advisors: List['Advisor']) -> None:
+        """Update promoted advisors' status to Active in Google Sheets."""
+        try:
+            all_values = self._worksheet.get_all_values()
+            updates = []
+            # Find the status column index
+            headers = all_values[0] if all_values else []
+            status_col_idx = headers.index('status') if 'status' in headers else 4
+
+            for advisor in advisors:
+                for idx, row in enumerate(all_values):
+                    if idx == 0:
+                        continue
+                    if row and str(row[0]) == str(advisor._row_id):
+                        cell_ref = f'{chr(65 + status_col_idx)}{idx + 1}'
+                        updates.append({'range': cell_ref, 'values': [['Active']]})
+                        break
+
+            if updates:
+                self._worksheet.batch_update(updates)
+                import logging
+                names = [f"{a.first_name} {a.last_name}" for a in advisors]
+                logging.info(f"Auto-promoted {len(advisors)} advisor(s) from New to Active: {names}")
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to promote advisors in Google Sheets: {e}")
 
     def _save(self):
         """Rebuild patterns after changes (data is already saved to Google Sheets)."""
@@ -485,11 +550,13 @@ class AdvisorMatcher:
         if status not in ADVISOR_STATUSES:
             status = "Active"
 
+        created_at = date.today().strftime("%Y-%m-%d")
         advisor = Advisor(
             first_name=first_name.strip(),
             last_name=last_name.strip(),
             variations=variations or [],
-            status=status
+            status=status,
+            created_at=created_at,
         )
 
         try:
@@ -498,7 +565,7 @@ class AdvisorMatcher:
             new_id = max(ids) + 1 if ids else 1
             variations_str = ', '.join(advisor.variations)
             self._worksheet.append_row([
-                new_id, advisor.first_name, advisor.last_name, variations_str, advisor.status
+                new_id, advisor.first_name, advisor.last_name, variations_str, advisor.status, created_at
             ])
             advisor._row_id = new_id
         except Exception as e:
@@ -556,10 +623,10 @@ class AdvisorMatcher:
             if row_index is None:
                 raise ValueError(f"Advisor with id {advisor._row_id} not found in sheet")
 
-            # Update the row (now includes status column E)
+            # Update the row (includes status and created_at columns)
             variations_str = ', '.join(advisor.variations)
-            self._worksheet.update(f'A{row_index}:E{row_index}', [[
-                advisor._row_id, advisor.first_name, advisor.last_name, variations_str, advisor.status
+            self._worksheet.update(f'A{row_index}:F{row_index}', [[
+                advisor._row_id, advisor.first_name, advisor.last_name, variations_str, advisor.status, advisor.created_at or ''
             ]])
 
         except Exception as e:
