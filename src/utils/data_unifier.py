@@ -951,7 +951,7 @@ class DataUnifier:
             first = comms[0]
 
             # Construire le texte
-            texte_parts = []
+            texte_parts = ["Commission"]
             if first.code:
                 texte_parts.append(first.code)
             if first.produit:
@@ -1011,7 +1011,7 @@ class DataUnifier:
 
             first = bonis[0]
 
-            texte_parts = []
+            texte_parts = ["Boni"]
             if first.produit:
                 texte_parts.append(first.produit)
             # Collect distinct taux de boni

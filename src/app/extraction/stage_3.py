@@ -5,6 +5,9 @@ Provides the interface for confirming and executing the upload
 of extracted data to Monday.com boards.
 """
 
+import asyncio
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -142,6 +145,7 @@ def execute_upload(df: pd.DataFrame) -> None:
         items_uploaded = 0
         items_failed = 0
         all_errors = []
+        all_item_ids = []
 
         # Track items processed so far for progress display
         items_processed_before_group = 0
@@ -191,6 +195,7 @@ def execute_upload(df: pd.DataFrame) -> None:
                 items_uploaded += result.success
                 items_failed += result.failed
                 all_errors.extend(result.errors)
+                all_item_ids.extend(result.item_ids)
 
                 # Update items processed before next group
                 items_processed_before_group += len(export_df)
@@ -210,12 +215,21 @@ def execute_upload(df: pd.DataFrame) -> None:
             "failed": items_failed,
             "errors": all_errors,
             "groups": len(unique_groups),
+            "item_ids": all_item_ids,
         }
 
         if items_failed == 0:
             st.success(f"{items_uploaded} éléments uploadés dans {len(unique_groups)} groupe(s)!")
         else:
             st.warning(f"{items_uploaded}/{total_items} uploadés. {items_failed} en erreur.")
+
+        # --- Reconciliation writeback ---
+        recon_result = st.session_state.get("reconciliation_result")
+        if recon_result and (recon_result.passed > 0):
+            _execute_reconciliation_writeback(
+                pipeline, board_id, recon_result, all_item_ids, df,
+                progress_bar, status_text,
+            )
 
     except Exception as e:
         st.error(f"Échec de l'upload: {e}")
@@ -253,3 +267,182 @@ def render_upload_result(result: dict) -> None:
         with st.expander("Voir les erreurs"):
             for error in errors[:10]:
                 st.error(error)
+
+    # Show reconciliation writeback results if present
+    recon_wb = result.get("reconciliation_writeback")
+    if recon_wb:
+        with st.expander("Rapprochement — Résultat du writeback", expanded=True):
+            wb_cols = st.columns(3)
+            wb_cols[0].metric("Sales mises à jour", recon_wb.get("sales_updated", 0))
+            wb_cols[1].metric("Hist. vérifiées", recon_wb.get("hist_updated", 0))
+            wb_cols[2].metric("Erreurs", recon_wb.get("wb_errors", 0))
+            if recon_wb.get("wb_error_details"):
+                for err in recon_wb["wb_error_details"][:5]:
+                    st.error(err)
+
+
+def _execute_reconciliation_writeback(
+    pipeline,
+    hist_board_id: int,
+    recon_result,
+    hist_item_ids: list[str],
+    hist_df: pd.DataFrame,
+    progress_bar,
+    status_text,
+) -> None:
+    """Execute cross-board writeback after successful upload.
+
+    Part A: Update Reçu 1/2/3 on Ventes/Production board.
+    Part B: Update Conseiller + Vérifié on Paiement Historique board.
+    """
+    sales_board_id = st.session_state.get("reconciliation_board_id")
+    if not sales_board_id:
+        return
+
+    sales_updates = recon_result.get_sales_updates()
+    hist_updates = recon_result.get_passed_hist_updates()
+
+    if not sales_updates and not hist_updates:
+        return
+
+    status_text.markdown("**Rapprochement — Writeback en cours...**")
+    progress_bar.progress(0, text="Writeback: préparation...")
+
+    wb_sales_ok = 0
+    wb_hist_ok = 0
+    wb_errors = []
+
+    total_ops = len(sales_updates) + len(hist_updates)
+    ops_done = 0
+
+    # --- Part A: Update Ventes/Production (Reçu 1/2/3) ---
+    if sales_updates:
+        try:
+            # Get column IDs for Reçu 1, Reçu 2, Reçu 3
+            col_id_map, _ = run_async(
+                pipeline.monday.get_or_create_columns(
+                    int(sales_board_id), ["Reçu 1", "Reçu 2", "Reçu 3"]
+                )
+            )
+
+            for item_id, fields in sales_updates.items():
+                try:
+                    column_values = {}
+                    for field_name, value in fields.items():
+                        col_id = col_id_map.get(field_name)
+                        if col_id:
+                            column_values[col_id] = str(value)
+
+                    if column_values:
+                        run_async(
+                            pipeline.monday.update_item_column_values(
+                                item_id=str(item_id),
+                                board_id=int(sales_board_id),
+                                column_values=column_values,
+                            )
+                        )
+                        wb_sales_ok += 1
+
+                    ops_done += 1
+                    progress_bar.progress(
+                        min(ops_done / total_ops, 0.99),
+                        text=f"Writeback Sales: {ops_done}/{total_ops}"
+                    )
+
+                    # Rate limiting
+                    import time
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    wb_errors.append(f"Sales item {item_id}: {e}")
+                    ops_done += 1
+
+        except Exception as e:
+            wb_errors.append(f"Sales columns: {e}")
+
+    # --- Part B: Update Paiement Historique (Conseiller + Vérifié) ---
+    if hist_updates and hist_item_ids:
+        try:
+            # Get column IDs for Conseiller and Vérifié
+            col_id_map, col_type_map = run_async(
+                pipeline.monday.get_or_create_columns(
+                    int(hist_board_id), ["Conseiller", "Verifié"]
+                )
+            )
+
+            conseiller_col_id = col_id_map.get("Conseiller")
+            verifie_col_id = col_id_map.get("Verifié")
+
+            # Build index → item_id mapping
+            # hist_df may have been filtered (_is_duplicate), so build
+            # mapping from the filtered df indices to item_ids
+            filtered_df = hist_df
+            if '_is_duplicate' in hist_df.columns:
+                filtered_df = hist_df[~hist_df['_is_duplicate']]
+
+            filtered_indices = list(filtered_df.index)
+            index_to_item_id = {}
+            for i, idx in enumerate(filtered_indices):
+                if i < len(hist_item_ids):
+                    index_to_item_id[idx] = hist_item_ids[i]
+
+            for hist_index, conseiller in hist_updates:
+                try:
+                    hist_item_id = index_to_item_id.get(hist_index)
+
+                    if not hist_item_id:
+                        # Fallback: skip if we can't map
+                        ops_done += 1
+                        continue
+
+                    column_values = {}
+
+                    # Set Vérifié to checked
+                    if verifie_col_id:
+                        column_values[verifie_col_id] = {"checked": "true"}
+
+                    # Set Conseiller if available
+                    if conseiller and conseiller_col_id:
+                        col_type = col_type_map.get("Conseiller", "")
+                        if col_type == "dropdown":
+                            column_values[conseiller_col_id] = {"labels": [conseiller]}
+                        else:
+                            column_values[conseiller_col_id] = conseiller
+
+                    if column_values:
+                        run_async(
+                            pipeline.monday.update_item_column_values(
+                                item_id=str(hist_item_id),
+                                board_id=int(hist_board_id),
+                                column_values=column_values,
+                            )
+                        )
+                        wb_hist_ok += 1
+
+                    ops_done += 1
+                    progress_bar.progress(
+                        min(ops_done / total_ops, 0.99),
+                        text=f"Writeback Hist: {ops_done}/{total_ops}"
+                    )
+
+                    import time
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    wb_errors.append(f"Hist item {hist_index}: {e}")
+                    ops_done += 1
+
+        except Exception as e:
+            wb_errors.append(f"Hist columns: {e}")
+
+    progress_bar.progress(1.0, text="Writeback terminé!")
+
+    # Store writeback results in upload_result
+    upload_result = st.session_state.upload_result or {}
+    upload_result["reconciliation_writeback"] = {
+        "sales_updated": wb_sales_ok,
+        "hist_updated": wb_hist_ok,
+        "wb_errors": len(wb_errors),
+        "wb_error_details": wb_errors,
+    }
+    st.session_state.upload_result = upload_result

@@ -184,6 +184,16 @@ def init_session_state() -> None:
         # Advisor provisioning
         "provisioning_in_progress": False,
         "last_provisioning_result": None,
+
+        # Reconciliation (cross-board Paiement Historique ↔ Ventes/Production)
+        "reconciliation_result": None,
+        "reconciliation_sales_df": None,
+        "reconciliation_sales_loaded": False,
+        "reconciliation_board_id": None,
+        "reconciliation_enabled": False,
+
+        # Next-month group provisioning (per-session flag)
+        "_next_month_groups_checked": False,
     }
 
     for key, default in defaults.items():
@@ -212,6 +222,9 @@ def reset_pipeline() -> None:
         'show_columns', '_current_board_name', 'selected_model', 'file_group_overrides',
         'extraction_error', 'extraction_traceback',
         'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
+        'reconciliation_result', 'reconciliation_sales_df',
+        'reconciliation_sales_loaded', 'reconciliation_board_id',
+        'reconciliation_enabled',
     ]
     for key in keys_to_reset:
         if key == 'stage':
@@ -220,7 +233,7 @@ def reset_pipeline() -> None:
             st.session_state[key] = []
         elif key in ['extraction_results', 'file_group_overrides']:
             st.session_state[key] = {}
-        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns', 'duplicate_check_done']:
+        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns', 'duplicate_check_done', 'reconciliation_sales_loaded', 'reconciliation_enabled']:
             st.session_state[key] = False
         elif key in ['processing_progress', 'duplicate_count']:
             st.session_state[key] = 0

@@ -312,12 +312,23 @@ def render_stage_2() -> None:
     # ===========================================
     # TABBED INTERFACE (Replaces Expanders)
     # ===========================================
-    tab_data, tab_verify, tab_config, tab_actions = st.tabs([
-        "Données",
-        "Vérification",
-        "Configuration",
-        "Actions"
-    ])
+    is_historical = st.session_state.selected_board_type == BoardType.HISTORICAL_PAYMENTS
+
+    if is_historical:
+        tab_data, tab_verify, tab_recon, tab_config, tab_actions = st.tabs([
+            "Données",
+            "Vérification",
+            "Rapprochement",
+            "Configuration",
+            "Actions"
+        ])
+    else:
+        tab_data, tab_verify, tab_config, tab_actions = st.tabs([
+            "Données",
+            "Vérification",
+            "Configuration",
+            "Actions"
+        ])
 
     # ----- TAB 1: DONNÉES -----
     with tab_data:
@@ -327,11 +338,16 @@ def render_stage_2() -> None:
     with tab_verify:
         _render_verification_tab(df, has_verification_cols)
 
-    # ----- TAB 3: CONFIGURATION -----
+    # ----- TAB 3: RAPPROCHEMENT (Historical only) -----
+    if is_historical:
+        with tab_recon:
+            _render_reconciliation_tab(df)
+
+    # ----- TAB: CONFIGURATION -----
     with tab_config:
         _render_configuration_tab(df, model_name, cost_display)
 
-    # ----- TAB 4: ACTIONS -----
+    # ----- TAB: ACTIONS -----
     with tab_actions:
         _render_actions_tab(df)
 
@@ -1036,6 +1052,185 @@ def _render_group_assignment(df: pd.DataFrame) -> None:
         'Null': df.isna().sum().values
     })
     st.dataframe(col_info, width="stretch", height=200)
+
+
+def _render_reconciliation_tab(df: pd.DataFrame) -> None:
+    """Render the reconciliation tab for cross-board matching.
+
+    Compares Paiement Historique data against Ventes/Production to:
+    - Match by # de Police
+    - Classify into Reçu 1/2/3
+    - Flag deviations above threshold
+    """
+    from src.utils.reconciler import Reconciler, ReconciliationStatus
+    from src.utils.aggregator import SOURCE_BOARDS
+
+    st.markdown("### Rapprochement Paiement Historique ↔ Ventes/Production")
+    st.caption(
+        "Compare les montants reçus avec les commissions attendues "
+        "dans la table Ventes/Production."
+    )
+
+    # Toggle
+    enabled = st.toggle(
+        "Activer le rapprochement",
+        value=st.session_state.get("reconciliation_enabled", False),
+        key="recon_toggle",
+    )
+    st.session_state.reconciliation_enabled = enabled
+
+    if not enabled:
+        st.info("Activez le rapprochement pour comparer avec les données Ventes/Production.")
+        return
+
+    # Get default board ID from SOURCE_BOARDS
+    vp_config = SOURCE_BOARDS.get("vente_production")
+    default_board_id = vp_config.board_id if vp_config else None
+
+    if st.session_state.reconciliation_board_id is None:
+        st.session_state.reconciliation_board_id = default_board_id
+
+    board_id = st.session_state.reconciliation_board_id
+
+    # Load sales data
+    if not st.session_state.reconciliation_sales_loaded:
+        st.markdown("---")
+        col_id, col_btn = st.columns([3, 1])
+        with col_id:
+            board_id_input = st.number_input(
+                "Board ID Ventes/Production",
+                value=board_id or 0,
+                min_value=0,
+                step=1,
+                key="recon_board_id_input",
+            )
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            load_clicked = st.button(
+                "Charger",
+                type="primary",
+                width="stretch",
+                key="recon_load_btn",
+            )
+
+        if load_clicked and board_id_input:
+            st.session_state.reconciliation_board_id = int(board_id_input)
+            with st.spinner("Chargement des données Ventes/Production..."):
+                try:
+                    pipeline = get_pipeline()
+                    items = run_async(
+                        pipeline.monday.extract_board_data(int(board_id_input))
+                    )
+                    sales_df = pipeline.monday.board_items_to_dataframe(
+                        items, include_item_id=True
+                    )
+                    st.session_state.reconciliation_sales_df = sales_df
+                    st.session_state.reconciliation_sales_loaded = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erreur lors du chargement: {e}")
+        return
+
+    # Sales data loaded — run reconciliation
+    sales_df = st.session_state.reconciliation_sales_df
+
+    st.success(f"Données Ventes/Production chargées: {len(sales_df)} lignes")
+
+    # Reset button
+    if st.button("Recharger les données", key="recon_reload_btn"):
+        st.session_state.reconciliation_sales_loaded = False
+        st.session_state.reconciliation_sales_df = None
+        st.session_state.reconciliation_result = None
+        st.rerun()
+
+    st.markdown("---")
+
+    # Run reconciliation
+    reconciler = Reconciler()
+    result = reconciler.reconcile(df, sales_df)
+    st.session_state.reconciliation_result = result
+
+    if result.total_paye == 0:
+        st.warning("Aucune ligne avec Statut 'Payé' trouvée dans les données historiques.")
+        return
+
+    # Metrics
+    m_cols = st.columns(5)
+    m_cols[0].metric("Lignes Payé", result.total_paye)
+    m_cols[1].metric("Correspondances", result.found)
+    m_cols[2].metric("Non trouvées", result.not_found)
+    m_cols[3].metric("Vérifiées", result.passed)
+    m_cols[4].metric("Écarts", result.flagged)
+
+    st.markdown("---")
+
+    # Display table
+    display_df = result.to_display_dataframe()
+
+    if not display_df.empty:
+        # Color-code by status
+        def _highlight_status(row):
+            status = row.get("Statut", "")
+            if status == ReconciliationStatus.PASSED.value:
+                return ["background-color: rgba(0, 200, 83, 0.1)"] * len(row)
+            elif status == ReconciliationStatus.FLAGGED.value:
+                return ["background-color: rgba(255, 152, 0, 0.1)"] * len(row)
+            elif status == ReconciliationStatus.NOT_FOUND.value:
+                return ["background-color: rgba(244, 67, 54, 0.1)"] * len(row)
+            return [""] * len(row)
+
+        styled_df = display_df.style.apply(_highlight_status, axis=1)
+        st.dataframe(styled_df, width="stretch", height=400, hide_index=True)
+
+    # Not found details
+    if result.not_found > 0:
+        with st.expander(f"Polices non trouvées ({result.not_found})", expanded=False):
+            not_found_matches = [
+                m for m in result.matches
+                if m.status == ReconciliationStatus.NOT_FOUND
+            ]
+            for m in not_found_matches:
+                st.markdown(f"- `{m.police_number}` — {m.compagnie}")
+
+    # Flagged details
+    if result.flagged > 0:
+        with st.expander(f"Écarts flaggés ({result.flagged})", expanded=False):
+            flagged_matches = [
+                m for m in result.matches
+                if m.status == ReconciliationStatus.FLAGGED
+            ]
+            for m in flagged_matches:
+                ecart_str = f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "N/A"
+                st.markdown(
+                    f"- `{m.police_number}` — {m.classification.label if m.classification else '?'}: "
+                    f"Reçu={m.recu_amount}, Réf={m.reference_amount}, "
+                    f"Écart={ecart_str} (seuil {m.threshold_pct:.0f}%)"
+                )
+
+    # Existing overwrite warning
+    if result.passed > 0:
+        sales_updates = result.get_sales_updates()
+        overwrite_warnings = []
+        for item_id, fields in sales_updates.items():
+            for field_name, _ in fields.items():
+                # Check if field already has a value in sales_df
+                item_rows = sales_df[sales_df["item_id"].astype(str) == str(item_id)]
+                if not item_rows.empty and field_name in item_rows.columns:
+                    existing = item_rows.iloc[0].get(field_name)
+                    if existing is not None and str(existing).strip() not in ("", "0", "0.0", "None"):
+                        overwrite_warnings.append(
+                            f"`{field_name}` de l'item {item_id} "
+                            f"contient déjà `{existing}`"
+                        )
+
+        if overwrite_warnings:
+            with st.expander(f"Valeurs existantes ({len(overwrite_warnings)})", expanded=True):
+                st.warning(
+                    "Les champs suivants ont déjà une valeur dans Ventes/Production "
+                    "et seront écrasés lors du writeback:"
+                )
+                for w in overwrite_warnings:
+                    st.markdown(f"- {w}")
 
 
 def _render_actions_tab(df: pd.DataFrame) -> None:
