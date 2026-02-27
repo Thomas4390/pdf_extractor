@@ -20,9 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from src.utils.advisor_provisioning import (
     rename_board_for_advisor,
     get_current_month_group_name,
+    get_next_month_group_name,
     load_provisioning_config,
+    ensure_next_month_groups,
     ProvisioningConfig,
     AdvisorBoardProvisioner,
+    NextMonthGroupsResult,
 )
 from src.utils.aggregator import MONTHS_FR
 
@@ -269,6 +272,157 @@ class TestProvisionerWithMocks(unittest.TestCase):
         client.list_boards_in_folder_sync.assert_not_called()
 
 
+class TestGetNextMonthGroupName(unittest.TestCase):
+    """Test next month group name generation."""
+
+    @patch("src.utils.advisor_provisioning.date")
+    def test_march_returns_april(self, mock_date):
+        mock_date.today.return_value = date(2026, 3, 15)
+        result = get_next_month_group_name()
+        self.assertEqual(result, "Avril 2026")
+
+    @patch("src.utils.advisor_provisioning.date")
+    def test_december_returns_january_next_year(self, mock_date):
+        mock_date.today.return_value = date(2026, 12, 1)
+        result = get_next_month_group_name()
+        self.assertEqual(result, "Janvier 2027")
+
+    @patch("src.utils.advisor_provisioning.date")
+    def test_january_returns_february(self, mock_date):
+        mock_date.today.return_value = date(2026, 1, 20)
+        result = get_next_month_group_name()
+        self.assertEqual(result, "Février 2026")
+
+    @patch("src.utils.advisor_provisioning.date")
+    def test_february_returns_march(self, mock_date):
+        mock_date.today.return_value = date(2026, 2, 27)
+        result = get_next_month_group_name()
+        self.assertEqual(result, "Mars 2026")
+
+
+class TestEnsureNextMonthGroups(unittest.TestCase):
+    """Test the ensure_next_month_groups logic."""
+
+    @patch("src.utils.advisor_provisioning.set_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.get_last_group_update_month")
+    def test_skips_same_month(self, mock_get, mock_set):
+        """If last update month matches current month, skip entirely."""
+        mock_get.return_value = date.today().strftime("%Y-%m")
+
+        result = ensure_next_month_groups()
+
+        self.assertTrue(result.skipped_same_month)
+        self.assertEqual(result.groups_created, 0)
+        mock_set.assert_not_called()
+
+    @patch("src.utils.advisor_provisioning.set_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.get_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.load_provisioning_config")
+    def test_skips_when_no_config(self, mock_config, mock_get, mock_set):
+        """If provisioning config is missing, return with error."""
+        mock_get.return_value = "2025-01"  # Old month
+        mock_config.return_value = None
+
+        result = ensure_next_month_groups()
+
+        self.assertFalse(result.skipped_same_month)
+        self.assertTrue(len(result.errors) > 0)
+        mock_set.assert_not_called()
+
+    @patch("src.utils.advisor_provisioning.time.sleep")
+    @patch("src.utils.advisor_provisioning.set_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.get_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.load_provisioning_config")
+    @patch("src.utils.advisor_provisioning.MondayClient")
+    @patch("src.app.state.get_secret")
+    def test_creates_groups_new_month(
+        self, mock_secret, mock_monday_cls, mock_config, mock_get, mock_set, mock_sleep
+    ):
+        """When last update is a previous month, create groups on all boards."""
+        mock_get.return_value = "2025-01"  # Old month
+        mock_secret.return_value = "test-api-key"
+        mock_config.return_value = ProvisioningConfig(
+            workspace_id=100,
+            conseillers_folder_id=200,
+            template_folder_id=300,
+        )
+
+        client = MagicMock()
+        mock_monday_cls.return_value = client
+
+        # 2 advisor folders under conseillers
+        client.list_all_folders_in_workspace_sync.return_value = [
+            {"id": "201", "name": "Jean Dupont", "parent": {"id": "200", "name": "Conseillers"}},
+            {"id": "202", "name": "Marie Martin", "parent": {"id": "200", "name": "Conseillers"}},
+            {"id": "300", "name": "Templates", "parent": None},
+        ]
+
+        # Jean has 2 boards, Marie has 1
+        client.list_boards_in_folder_sync.side_effect = [
+            [{"id": "1001", "name": "Jean - Ventes"}, {"id": "1002", "name": "Jean - Paiement"}],
+            [{"id": "1003", "name": "Marie - Ventes"}],
+        ]
+
+        # No existing groups match next month
+        client.list_groups_sync.return_value = [
+            {"id": "g1", "title": "Février 2026"},
+        ]
+        client.get_or_create_group_sync.return_value = MagicMock(success=True)
+
+        result = ensure_next_month_groups()
+
+        self.assertFalse(result.skipped_same_month)
+        self.assertEqual(result.total_boards, 3)
+        self.assertEqual(result.groups_created, 3)
+        self.assertEqual(result.skipped, 0)
+        self.assertEqual(len(result.errors), 0)
+
+        # Should have marked month as done
+        current_month = date.today().strftime("%Y-%m")
+        mock_set.assert_called_once_with(current_month)
+
+    @patch("src.utils.advisor_provisioning.time.sleep")
+    @patch("src.utils.advisor_provisioning.set_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.get_last_group_update_month")
+    @patch("src.utils.advisor_provisioning.load_provisioning_config")
+    @patch("src.utils.advisor_provisioning.MondayClient")
+    @patch("src.app.state.get_secret")
+    def test_skips_existing_groups(
+        self, mock_secret, mock_monday_cls, mock_config, mock_get, mock_set, mock_sleep
+    ):
+        """Groups that already exist are skipped, not re-created."""
+        mock_get.return_value = "2025-01"
+        mock_secret.return_value = "test-api-key"
+        mock_config.return_value = ProvisioningConfig(
+            workspace_id=100,
+            conseillers_folder_id=200,
+            template_folder_id=300,
+        )
+
+        client = MagicMock()
+        mock_monday_cls.return_value = client
+
+        client.list_all_folders_in_workspace_sync.return_value = [
+            {"id": "201", "name": "Jean", "parent": {"id": "200", "name": "Conseillers"}},
+        ]
+        client.list_boards_in_folder_sync.return_value = [
+            {"id": "1001", "name": "Jean - Ventes"},
+        ]
+
+        # Group already exists for next month
+        next_month = get_next_month_group_name()
+        client.list_groups_sync.return_value = [
+            {"id": "g1", "title": next_month},
+        ]
+
+        result = ensure_next_month_groups()
+
+        self.assertEqual(result.total_boards, 1)
+        self.assertEqual(result.groups_created, 0)
+        self.assertEqual(result.skipped, 1)
+        client.get_or_create_group_sync.assert_not_called()
+
+
 # =============================================================================
 # INTEGRATION TESTS (requires MONDAY_API_KEY)
 # =============================================================================
@@ -322,8 +476,10 @@ def run_unit_tests():
 
     suite.addTests(loader.loadTestsFromTestCase(TestRenameBoardForAdvisor))
     suite.addTests(loader.loadTestsFromTestCase(TestGetCurrentMonthGroupName))
+    suite.addTests(loader.loadTestsFromTestCase(TestGetNextMonthGroupName))
     suite.addTests(loader.loadTestsFromTestCase(TestProvisioningConfigLoading))
     suite.addTests(loader.loadTestsFromTestCase(TestProvisionerWithMocks))
+    suite.addTests(loader.loadTestsFromTestCase(TestEnsureNextMonthGroups))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

@@ -1873,6 +1873,37 @@ class MondayClient:
         """Synchronous wrapper for list_folders."""
         return asyncio.run(self.list_folders(workspace_id))
 
+    async def list_all_folders_in_workspace(self, workspace_id: int) -> list[dict]:
+        """List all folders in a workspace with parent information.
+
+        Uses workspace_ids filter and returns parent info for each folder,
+        allowing client-side filtering by parent folder.
+
+        Args:
+            workspace_id: Workspace ID to list folders from
+
+        Returns:
+            List of folder dicts with id, name, and parent {id, name}
+        """
+        query = f"""
+        {{
+            folders(workspace_ids: [{workspace_id}], limit: 100) {{
+                id
+                name
+                parent {{
+                    id
+                    name
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(query)
+        return result["data"]["folders"]
+
+    def list_all_folders_in_workspace_sync(self, workspace_id: int) -> list[dict]:
+        """Synchronous wrapper for list_all_folders_in_workspace."""
+        return asyncio.run(self.list_all_folders_in_workspace(workspace_id))
+
     async def create_folder(
         self,
         name: str,

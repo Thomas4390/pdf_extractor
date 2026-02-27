@@ -17,6 +17,7 @@ Features:
 Run with: streamlit run src/app/main.py
 """
 
+import logging
 import sys
 from pathlib import Path
 
@@ -39,6 +40,8 @@ from src.app.extraction import render_stage_1, render_stage_2, render_stage_3
 # Import aggregation mode
 from src.app.aggregation import render_aggregation_mode
 
+logger = logging.getLogger(__name__)
+
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -60,6 +63,45 @@ apply_custom_styles()
 
 
 # =============================================================================
+# STARTUP CHECKS
+# =============================================================================
+
+def _check_next_month_groups() -> None:
+    """Check and create next month's groups on all advisor boards if needed.
+
+    Runs once per session. Uses Google Sheets to avoid re-running in the same month.
+    Never blocks the app on failure.
+    """
+    try:
+        from src.utils.advisor_provisioning import (
+            load_provisioning_config,
+            ensure_next_month_groups,
+            get_next_month_group_name,
+        )
+
+        # Skip if no API key or provisioning config
+        if not st.session_state.monday_api_key:
+            return
+        if not load_provisioning_config():
+            return
+
+        result = ensure_next_month_groups()
+
+        if result.skipped_same_month:
+            return
+
+        if result.groups_created > 0:
+            month_name = get_next_month_group_name()
+            st.toast(f"{result.groups_created} groupe(s) créé(s) pour {month_name}")
+
+        if result.errors:
+            logger.warning(f"Next-month group errors: {result.errors}")
+
+    except Exception as e:
+        logger.warning(f"Next-month group check failed (non-blocking): {e}")
+
+
+# =============================================================================
 # MAIN APPLICATION
 # =============================================================================
 
@@ -76,6 +118,11 @@ def main() -> None:
         st.session_state._prompt_cache_cleared = True
 
     init_session_state()
+
+    # Auto-provision next month's groups (once per session)
+    if not st.session_state.get("_next_month_groups_checked"):
+        st.session_state._next_month_groups_checked = True
+        _check_next_month_groups()
 
     # Auto-load boards at startup if API key is available
     if (st.session_state.monday_api_key and
