@@ -960,9 +960,15 @@ class DataUnifier:
                 texte_parts.append(f"Freq: {first.frequence_paiement}")
             if first.facturation:
                 texte_parts.append(f"Fact: {first.facturation}")
-            taux_com = self._decimal_to_float(first.taux_commission)
-            if taux_com is not None:
-                texte_parts.append(f"Taux Com: {taux_com}%")
+            # Collect distinct taux de commission
+            taux_set = sorted({
+                self._decimal_to_float(c.taux_commission)
+                for c in comms
+                if self._decimal_to_float(c.taux_commission) is not None
+            })
+            if taux_set:
+                taux_str = "/".join(f"{t}%" for t in taux_set)
+                texte_parts.append(f"Taux Com: {taux_str}")
             if len(comms) > 1:
                 texte_parts.append(f"({len(comms)} lignes agrégées)")
             texte = " | ".join(texte_parts) if texte_parts else ""
@@ -1008,9 +1014,15 @@ class DataUnifier:
             texte_parts = []
             if first.produit:
                 texte_parts.append(first.produit)
-            taux_boni = self._decimal_to_float(first.taux_boni)
-            if taux_boni is not None:
-                texte_parts.append(f"Taux Boni: {taux_boni}%")
+            # Collect distinct taux de boni
+            taux_set = sorted({
+                self._decimal_to_float(b.taux_boni)
+                for b in bonis
+                if self._decimal_to_float(b.taux_boni) is not None
+            })
+            if taux_set:
+                taux_str = "/".join(f"{t}%" for t in taux_set)
+                texte_parts.append(f"Taux Boni: {taux_str}")
             if len(bonis) > 1:
                 texte_parts.append(f"({len(bonis)} lignes agrégées)")
             texte = " | ".join(texte_parts) if texte_parts else ""
