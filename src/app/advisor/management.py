@@ -162,6 +162,12 @@ def _render_add_advisor_form(matcher) -> None:
             key="new_advisor_variations"
         )
 
+        new_email = st.text_input(
+            "Adresse email",
+            placeholder="Ex: thomas@example.com",
+            key="new_advisor_email"
+        )
+
         submitted = st.form_submit_button("➕ Ajouter le conseiller", type="primary")
 
         if submitted:
@@ -176,7 +182,7 @@ def _render_add_advisor_form(matcher) -> None:
                     st.error(f"❌ Ce conseiller existe déjà")
                 else:
                     try:
-                        advisor = matcher.add_advisor(new_first_name, new_last_name, variations, new_status)
+                        advisor = matcher.add_advisor(new_first_name, new_last_name, variations, new_status, email=new_email or None)
                         # Reset matcher to get fresh data
                         from src.utils import advisor_matcher as am_module
                         am_module._matcher_instance = None
@@ -219,6 +225,7 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                 "Statut": f"{icon} {advisor.status}",
                 "Nom": f"{advisor.first_name} {advisor.last_name}",
                 "Format compact": advisor.display_name_compact,
+                "Email": advisor.email or "",
                 "Variations": len(advisor.variations),
             })
         df = pd.DataFrame(table_data)
@@ -241,6 +248,11 @@ def _render_advisors_list(advisors: list, matcher) -> None:
             status_badge = _get_status_badge(advisor.status)
             with st.expander(f"{icon} **{advisor.first_name} {advisor.last_name}** — {advisor.display_name_compact} · {advisor.status}", expanded=False):
                 st.markdown(f"**Format compact:** {advisor.display_name_compact} &nbsp; {status_badge}", unsafe_allow_html=True)
+
+                if advisor.email:
+                    st.markdown(f"**Email:** {advisor.email}")
+                else:
+                    st.caption("Aucun email défini")
 
                 st.markdown("**Variations:**")
                 if advisor.variations:
@@ -308,6 +320,13 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                                 key=f"edit_status_{advisor_id}"
                             )
 
+                        new_email = st.text_input(
+                            "Adresse email",
+                            value=advisor.email or "",
+                            placeholder="Ex: thomas@example.com",
+                            key=f"edit_email_{advisor_id}"
+                        )
+
                         col_save, col_cancel = st.columns(2)
                         with col_save:
                             submitted = st.form_submit_button("💾 Enregistrer", type="primary")
@@ -322,7 +341,8 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                                     first_name=new_first,
                                     last_name=new_last,
                                     variations=variations,
-                                    status=new_status
+                                    status=new_status,
+                                    email=new_email
                                 )
                                 # Reset singleton and session state
                                 from src.utils import advisor_matcher as am_module
