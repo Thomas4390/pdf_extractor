@@ -967,11 +967,19 @@ class DataUnifier:
                 texte_parts.append(f"({len(comms)} lignes agrégées)")
             texte = " | ".join(texte_parts) if texte_parts else ""
 
+            # Déterminer le statut basé sur la commission
+            if total_commission > 0:
+                status = 'Payé'
+            elif total_commission < 0:
+                status = 'Charge back'
+            else:
+                status = None
+
             rows.append({
                 '# de Police': police,
                 'Nom Client': first.nom_assure,
                 'Compagnie': 'Assomption',
-                'Statut': 'Payé',
+                'Statut': status,
                 'Conseiller': None,
                 'Verifié': None,
                 'PA': total_prime or None,
@@ -1007,11 +1015,19 @@ class DataUnifier:
                 texte_parts.append(f"({len(bonis)} lignes agrégées)")
             texte = " | ".join(texte_parts) if texte_parts else ""
 
+            # Déterminer le statut basé sur le boni
+            if total_boni > 0:
+                status = 'Payé'
+            elif total_boni < 0:
+                status = 'Charge back'
+            else:
+                status = None
+
             rows.append({
                 '# de Police': police,
                 'Nom Client': first.nom_assure,
                 'Compagnie': 'Assomption',
-                'Statut': 'Payé',
+                'Statut': status,
                 'Conseiller': None,
                 'Verifié': None,
                 'PA': None,
