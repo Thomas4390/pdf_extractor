@@ -1842,6 +1842,300 @@ class MondayClient:
         return policy_numbers
 
     # -------------------------------------------------------------------------
+    # Folder operations
+    # -------------------------------------------------------------------------
+
+    async def list_folders(self, workspace_id: int) -> list[dict]:
+        """List all folders in a workspace.
+
+        Args:
+            workspace_id: Workspace ID to list folders from
+
+        Returns:
+            List of folder dicts with id, name, and children
+        """
+        query = f"""
+        {{
+            folders(workspace_ids: [{workspace_id}]) {{
+                id
+                name
+                children {{
+                    id
+                    name
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(query)
+        return result["data"]["folders"]
+
+    def list_folders_sync(self, workspace_id: int) -> list[dict]:
+        """Synchronous wrapper for list_folders."""
+        return asyncio.run(self.list_folders(workspace_id))
+
+    async def create_folder(
+        self,
+        name: str,
+        workspace_id: int,
+        parent_folder_id: Optional[int] = None,
+    ) -> dict:
+        """Create a folder in a workspace.
+
+        Args:
+            name: Folder name
+            workspace_id: Workspace ID
+            parent_folder_id: Optional parent folder ID for nesting
+
+        Returns:
+            Dict with folder id
+        """
+        parent_arg = f", parent_folder_id: {parent_folder_id}" if parent_folder_id else ""
+        mutation = f"""
+        mutation {{
+            create_folder(
+                name: "{name}",
+                workspace_id: {workspace_id}{parent_arg}
+            ) {{
+                id
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["create_folder"]
+
+    def create_folder_sync(
+        self,
+        name: str,
+        workspace_id: int,
+        parent_folder_id: Optional[int] = None,
+    ) -> dict:
+        """Synchronous wrapper for create_folder."""
+        return asyncio.run(self.create_folder(name, workspace_id, parent_folder_id))
+
+    async def list_boards_in_folder(self, folder_id: int) -> list[dict]:
+        """List boards in a specific folder.
+
+        Fetches all boards and filters by board_folder_id.
+
+        Args:
+            folder_id: Folder ID to list boards from
+
+        Returns:
+            List of board dicts with id and name
+        """
+        all_boards = []
+        page = 1
+
+        while True:
+            query = f"""
+            {{
+                boards(limit: 200, page: {page}) {{
+                    id
+                    name
+                    board_folder_id
+                }}
+            }}
+            """
+            result = await self._execute_query(query)
+            boards = result["data"]["boards"]
+
+            if not boards:
+                break
+
+            for board in boards:
+                if str(board.get("board_folder_id", "")) == str(folder_id):
+                    all_boards.append({"id": board["id"], "name": board["name"]})
+
+            if len(boards) < 200:
+                break
+
+            page += 1
+
+        return all_boards
+
+    def list_boards_in_folder_sync(self, folder_id: int) -> list[dict]:
+        """Synchronous wrapper for list_boards_in_folder."""
+        return asyncio.run(self.list_boards_in_folder(folder_id))
+
+    async def duplicate_board(
+        self,
+        board_id: int,
+        board_name: str,
+        folder_id: Optional[int] = None,
+        workspace_id: Optional[int] = None,
+    ) -> dict:
+        """Duplicate a board with its structure (columns, settings, groups).
+
+        Args:
+            board_id: Source board ID to duplicate
+            board_name: Name for the duplicated board
+            folder_id: Optional folder ID to place the new board in
+            workspace_id: Optional workspace ID
+
+        Returns:
+            Dict with board id and name
+        """
+        optional_args = ""
+        if folder_id:
+            optional_args += f", folder_id: {folder_id}"
+        if workspace_id:
+            optional_args += f", workspace_id: {workspace_id}"
+
+        mutation = f"""
+        mutation {{
+            duplicate_board(
+                board_id: {board_id},
+                duplicate_type: duplicate_board_with_structure,
+                board_name: "{board_name}"{optional_args}
+            ) {{
+                board {{
+                    id
+                    name
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["duplicate_board"]["board"]
+
+    def duplicate_board_sync(
+        self,
+        board_id: int,
+        board_name: str,
+        folder_id: Optional[int] = None,
+        workspace_id: Optional[int] = None,
+    ) -> dict:
+        """Synchronous wrapper for duplicate_board."""
+        return asyncio.run(self.duplicate_board(board_id, board_name, folder_id, workspace_id))
+
+    async def update_board_name(self, board_id: int, new_name: str) -> dict:
+        """Rename a board.
+
+        Args:
+            board_id: Board ID to rename
+            new_name: New board name
+
+        Returns:
+            Dict with board id
+        """
+        mutation = f"""
+        mutation {{
+            update_board(
+                board_id: {board_id},
+                board_attribute: name,
+                new_value: "{new_name}"
+            ) {{
+                id
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["update_board"]
+
+    def update_board_name_sync(self, board_id: int, new_name: str) -> dict:
+        """Synchronous wrapper for update_board_name."""
+        return asyncio.run(self.update_board_name(board_id, new_name))
+
+    async def delete_group(self, board_id: int, group_id: str) -> dict:
+        """Delete a group from a board.
+
+        Args:
+            board_id: Board ID containing the group
+            group_id: Group ID to delete
+
+        Returns:
+            Dict with group id and deleted status
+        """
+        mutation = f"""
+        mutation {{
+            delete_group(
+                board_id: {board_id},
+                group_id: "{group_id}"
+            ) {{
+                id
+                deleted
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["delete_group"]
+
+    def delete_group_sync(self, board_id: int, group_id: str) -> dict:
+        """Synchronous wrapper for delete_group."""
+        return asyncio.run(self.delete_group(board_id, group_id))
+
+    async def invite_users(self, emails: list[str]) -> dict:
+        """Invite users to Monday.com by email.
+
+        Args:
+            emails: List of email addresses to invite
+
+        Returns:
+            Dict with invited_users list and errors list
+        """
+        emails_str = json.dumps(emails)
+        mutation = f"""
+        mutation {{
+            invite_users(emails: {emails_str}) {{
+                invited_users {{
+                    id
+                    email
+                }}
+                errors {{
+                    message
+                    email
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["invite_users"]
+
+    def invite_users_sync(self, emails: list[str]) -> dict:
+        """Synchronous wrapper for invite_users."""
+        return asyncio.run(self.invite_users(emails))
+
+    async def add_users_to_board(
+        self,
+        board_id: int,
+        user_ids: list[int],
+        kind: str = "subscriber",
+    ) -> dict:
+        """Add users to a board as subscribers or owners.
+
+        Args:
+            board_id: Board ID to add users to
+            user_ids: List of user IDs to add
+            kind: "subscriber" (standard access) or "owner"
+
+        Returns:
+            Dict with board id
+        """
+        user_ids_str = json.dumps(user_ids)
+        mutation = f"""
+        mutation {{
+            add_users_to_board(
+                board_id: {board_id},
+                user_ids: {user_ids_str},
+                kind: {kind}
+            ) {{
+                id
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["add_users_to_board"]
+
+    def add_users_to_board_sync(
+        self,
+        board_id: int,
+        user_ids: list[int],
+        kind: str = "subscriber",
+    ) -> dict:
+        """Synchronous wrapper for add_users_to_board."""
+        return asyncio.run(self.add_users_to_board(board_id, user_ids, kind))
+
+    # -------------------------------------------------------------------------
     # Synchronous wrappers
     # -------------------------------------------------------------------------
 

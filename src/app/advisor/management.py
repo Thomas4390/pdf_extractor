@@ -188,6 +188,11 @@ def _render_add_advisor_form(matcher) -> None:
                         am_module._matcher_instance = None
                         st.session_state.advisor_matcher = None
                         st.session_state._advisor_toast_message = f"✅ Conseiller ajouté: {advisor.display_name_compact}"
+
+                        # Auto-provision Monday.com boards for "New" advisors
+                        if new_status == "New":
+                            _try_provision_advisor(advisor)
+
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Erreur: {e}")
@@ -375,3 +380,49 @@ def _render_matching_test(matcher) -> None:
             st.success(f"✅ Correspondance trouvée: **{result}**")
         else:
             st.warning(f"⚠️ Aucune correspondance pour: \"{test_name}\"")
+
+
+def _try_provision_advisor(advisor) -> None:
+    """Attempt to provision Monday.com boards for a new advisor.
+
+    Silently skips if provisioning config is not available.
+    Shows inline results via st.spinner/st.success/st.error.
+    """
+    try:
+        from src.utils.advisor_provisioning import (
+            load_provisioning_config,
+            AdvisorBoardProvisioner,
+        )
+        from src.clients.monday import MondayClient
+
+        config = load_provisioning_config()
+        if config is None:
+            # Config not set up — skip silently
+            return
+
+        api_key = st.session_state.get("monday_api_key")
+        if not api_key:
+            return
+
+        client = MondayClient(api_key=api_key)
+        provisioner = AdvisorBoardProvisioner(client, config)
+
+        with st.spinner(f"Provisionnement Monday.com pour {advisor.first_name} {advisor.last_name}..."):
+            result = provisioner.provision(advisor)
+
+        st.session_state.last_provisioning_result = result
+
+        if result.success:
+            boards_count = len(result.created_board_ids)
+            st.session_state._advisor_toast_message += (
+                f" | Monday.com: {boards_count} board(s) créé(s)"
+            )
+        else:
+            error_summary = "; ".join(result.errors[:3])
+            st.warning(f"⚠️ Provisionnement partiel: {error_summary}")
+
+    except Exception as e:
+        # Never block advisor creation because of provisioning failure
+        import logging
+        logging.warning(f"Advisor provisioning failed (non-blocking): {e}")
+        st.warning(f"⚠️ Provisionnement Monday.com échoué: {e}")

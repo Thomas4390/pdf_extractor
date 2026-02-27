@@ -180,6 +180,10 @@ def init_session_state() -> None:
         "agg_metrics_loaded": False,  # True when metrics have been imported
         "agg_metrics_group": "",  # Group name from which metrics were loaded
         "agg_validation_passed": True,  # Validation status for pre-upload check
+
+        # Advisor provisioning
+        "provisioning_in_progress": False,
+        "last_provisioning_result": None,
     }
 
     for key, default in defaults.items():
