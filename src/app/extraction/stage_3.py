@@ -2,11 +2,11 @@
 Stage 3: Upload - Upload data to Monday.com.
 
 Provides the interface for confirming and executing the upload
-of extracted data to Monday.com boards.
+of extracted data to Monday.com boards. When reconciliation is active,
+both the Paiement Historique and Ventes/Production boards are updated.
 """
 
-import asyncio
-import json
+import time
 
 import pandas as pd
 import streamlit as st
@@ -18,6 +18,12 @@ from src.app.components import (
     render_upload_dashboard,
     render_success_box,
 )
+
+
+def _has_reconciliation() -> bool:
+    """Check if reconciliation is active with passed results."""
+    recon = st.session_state.get("reconciliation_result")
+    return recon is not None and recon.passed > 0
 
 
 def render_stage_3() -> None:
@@ -68,8 +74,42 @@ def render_stage_3() -> None:
                     group_count = len(df[df['_target_group'] == group])
                     st.markdown(f"**{group}**: {group_count} items")
 
+    # ===================================================
+    # RECONCILIATION SUMMARY (before upload)
+    # ===================================================
+    has_recon = _has_reconciliation()
+    recon_result = st.session_state.get("reconciliation_result") if has_recon else None
+
+    if has_recon:
+        from src.utils.aggregator import SOURCE_BOARDS
+        vp_config = SOURCE_BOARDS.get("vente_production")
+        sales_board_name = vp_config.display_name if vp_config else "Ventes/Production"
+
+        st.markdown("---")
+        st.markdown("### Rapprochement — Upload vers 2 boards")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown(f"**Board 1 — {board_name}**")
+            st.markdown(f"- {upload_count} nouvelles lignes")
+            hist_updates = recon_result.get_passed_hist_updates()
+            if hist_updates:
+                st.markdown(f"- {len(hist_updates)} lignes → Conseiller + Vérifié")
+
+        with col2:
+            st.markdown(f"**Board 2 — {sales_board_name}**")
+            sales_updates = recon_result.get_sales_updates()
+            recu_fields = set()
+            for fields in sales_updates.values():
+                recu_fields.update(fields.keys())
+            st.markdown(f"- {len(sales_updates)} polices → {', '.join(sorted(recu_fields)) or 'Reçu'}")
+            st.markdown(f"- {recon_result.passed} correspondances vérifiées")
+            if recon_result.flagged > 0:
+                st.markdown(f"- {recon_result.flagged} écarts (non écrits)")
+
     # Data preview before upload
-    with st.expander("📋 Aperçu des données à envoyer", expanded=True):
+    with st.expander("📋 Aperçu des données à envoyer", expanded=not has_recon):
         # Remove internal columns for display
         display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
         st.dataframe(display_df, width="stretch", height=300)
@@ -84,7 +124,8 @@ def render_stage_3() -> None:
             # Execute the upload (after rerun from button click)
             execute_upload(df)
         else:
-            st.info("Les données vont être uploadées vers Monday.com.")
+            if not has_recon:
+                st.info("Les données vont être uploadées vers Monday.com.")
 
             footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
 
@@ -94,12 +135,12 @@ def render_stage_3() -> None:
                     st.rerun()
 
             with footer_col3:
+                button_label = "🚀 Uploader les 2 boards" if has_recon else "🚀 Confirmer l'upload"
                 if st.button(
-                    "🚀 Confirmer l'upload",
+                    button_label,
                     type="primary",
                     width="stretch"
                 ):
-                    # Set uploading state and rerun to hide the button
                     st.session_state.is_uploading = True
                     st.rerun()
     else:
@@ -127,7 +168,11 @@ def execute_upload(df: pd.DataFrame) -> None:
     pipeline = get_pipeline()
     board_id = st.session_state.selected_board_id
 
-    progress_bar = st.progress(0, text="Démarrage de l'upload...")
+    has_recon = _has_reconciliation()
+
+    # Progress label
+    progress_label = "Board 1/2 — Paiement Historique" if has_recon else "Upload"
+    progress_bar = st.progress(0, text=f"{progress_label}: démarrage...")
     status_text = st.empty()
 
     try:
@@ -174,12 +219,11 @@ def execute_upload(df: pd.DataFrame) -> None:
 
                 # Progress callback - show overall progress
                 def on_progress(current: int, total: int) -> None:
-                    # Calculate overall progress across all groups
                     overall_current = items_processed_before_group + current
                     overall_progress = overall_current / total_items
                     progress_bar.progress(
                         min(overall_progress, 0.99),
-                        text=f"Upload: {group_name} ({overall_current}/{total_items})"
+                        text=f"{progress_label}: {group_name} ({overall_current}/{total_items})"
                     )
 
                 # Upload
@@ -197,7 +241,6 @@ def execute_upload(df: pd.DataFrame) -> None:
                 all_errors.extend(result.errors)
                 all_item_ids.extend(result.item_ids)
 
-                # Update items processed before next group
                 items_processed_before_group += len(export_df)
 
             except Exception as e:
@@ -205,7 +248,7 @@ def execute_upload(df: pd.DataFrame) -> None:
                 items_processed_before_group += len(export_df)
                 all_errors.append(f"Groupe {group_name}: {str(e)}")
 
-        progress_bar.progress(1.0, text=f"Upload terminé! ({total_items}/{total_items})")
+        progress_bar.progress(1.0, text=f"{progress_label}: terminé! ({total_items}/{total_items})")
         status_text.empty()
 
         # Store result
@@ -218,12 +261,7 @@ def execute_upload(df: pd.DataFrame) -> None:
             "item_ids": all_item_ids,
         }
 
-        if items_failed == 0:
-            st.success(f"{items_uploaded} éléments uploadés dans {len(unique_groups)} groupe(s)!")
-        else:
-            st.warning(f"{items_uploaded}/{total_items} uploadés. {items_failed} en erreur.")
-
-        # --- Reconciliation writeback ---
+        # --- Board 2: Reconciliation writeback ---
         recon_result = st.session_state.get("reconciliation_result")
         if recon_result and (recon_result.passed > 0):
             _execute_reconciliation_writeback(
@@ -253,32 +291,63 @@ def render_upload_result(result: dict) -> None:
     success = result.get("success", 0)
     failed = result.get("failed", 0)
     groups = result.get("groups", 1)
-
-    if failed == 0:
-        render_success_box(
-            title="Upload réussi!",
-            message=f"{success}/{total} éléments uploadés dans {groups} groupe(s)."
-        )
-    else:
-        st.warning(f"{success}/{total} éléments uploadés. {failed} en erreur.")
-
-    errors = result.get("errors", [])
-    if errors:
-        with st.expander("Voir les erreurs"):
-            for error in errors[:10]:
-                st.error(error)
-
-    # Show reconciliation writeback results if present
     recon_wb = result.get("reconciliation_writeback")
+
     if recon_wb:
-        with st.expander("Rapprochement — Résultat du writeback", expanded=True):
-            wb_cols = st.columns(3)
-            wb_cols[0].metric("Sales mises à jour", recon_wb.get("sales_updated", 0))
-            wb_cols[1].metric("Hist. vérifiées", recon_wb.get("hist_updated", 0))
-            wb_cols[2].metric("Erreurs", recon_wb.get("wb_errors", 0))
-            if recon_wb.get("wb_error_details"):
-                for err in recon_wb["wb_error_details"][:5]:
-                    st.error(err)
+        # --- Dual-board result ---
+        st.markdown("### Résultat de l'upload")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            board_name = st.session_state._current_board_name or "Paiement Historique"
+            st.markdown(f"**Board 1 — {board_name}**")
+            if failed == 0:
+                st.success(f"{success}/{total} lignes uploadées dans {groups} groupe(s)")
+            else:
+                st.warning(f"{success}/{total} uploadées. {failed} en erreur.")
+
+            hist_updated = recon_wb.get("hist_updated", 0)
+            if hist_updated > 0:
+                st.success(f"{hist_updated} lignes → Conseiller + Vérifié")
+
+        with col2:
+            from src.utils.aggregator import SOURCE_BOARDS
+            vp_config = SOURCE_BOARDS.get("vente_production")
+            sales_name = vp_config.display_name if vp_config else "Ventes/Production"
+
+            st.markdown(f"**Board 2 — {sales_name}**")
+            sales_updated = recon_wb.get("sales_updated", 0)
+            if sales_updated > 0:
+                st.success(f"{sales_updated} polices → Reçu mis à jour")
+            else:
+                st.info("Aucune mise à jour")
+
+        # Errors
+        all_errors = result.get("errors", [])
+        wb_errors = recon_wb.get("wb_error_details", [])
+        total_errors = all_errors + wb_errors
+
+        if total_errors:
+            with st.expander(f"Erreurs ({len(total_errors)})"):
+                for error in total_errors[:10]:
+                    st.error(error)
+
+    else:
+        # --- Single-board result ---
+        if failed == 0:
+            render_success_box(
+                title="Upload réussi!",
+                message=f"{success}/{total} éléments uploadés dans {groups} groupe(s)."
+            )
+        else:
+            st.warning(f"{success}/{total} éléments uploadés. {failed} en erreur.")
+
+        errors = result.get("errors", [])
+        if errors:
+            with st.expander("Voir les erreurs"):
+                for error in errors[:10]:
+                    st.error(error)
 
 
 def _execute_reconciliation_writeback(
@@ -305,8 +374,8 @@ def _execute_reconciliation_writeback(
     if not sales_updates and not hist_updates:
         return
 
-    status_text.markdown("**Rapprochement — Writeback en cours...**")
-    progress_bar.progress(0, text="Writeback: préparation...")
+    status_text.markdown("**Board 2/2 — Ventes/Production**")
+    progress_bar.progress(0, text="Board 2/2: préparation...")
 
     wb_sales_ok = 0
     wb_hist_ok = 0
@@ -318,7 +387,6 @@ def _execute_reconciliation_writeback(
     # --- Part A: Update Ventes/Production (Reçu 1/2/3) ---
     if sales_updates:
         try:
-            # Get column IDs for Reçu 1, Reçu 2, Reçu 3
             col_id_map, _ = run_async(
                 pipeline.monday.get_or_create_columns(
                     int(sales_board_id), ["Reçu 1", "Reçu 2", "Reçu 3"]
@@ -346,11 +414,9 @@ def _execute_reconciliation_writeback(
                     ops_done += 1
                     progress_bar.progress(
                         min(ops_done / total_ops, 0.99),
-                        text=f"Writeback Sales: {ops_done}/{total_ops}"
+                        text=f"Board 2/2 — Reçu: {ops_done}/{total_ops}"
                     )
 
-                    # Rate limiting
-                    import time
                     time.sleep(0.5)
 
                 except Exception as e:
@@ -363,7 +429,6 @@ def _execute_reconciliation_writeback(
     # --- Part B: Update Paiement Historique (Conseiller + Vérifié) ---
     if hist_updates and hist_item_ids:
         try:
-            # Get column IDs for Conseiller and Vérifié
             col_id_map, col_type_map = run_async(
                 pipeline.monday.get_or_create_columns(
                     int(hist_board_id), ["Conseiller", "Verifié"]
@@ -374,8 +439,6 @@ def _execute_reconciliation_writeback(
             verifie_col_id = col_id_map.get("Verifié")
 
             # Build index → item_id mapping
-            # hist_df may have been filtered (_is_duplicate), so build
-            # mapping from the filtered df indices to item_ids
             filtered_df = hist_df
             if '_is_duplicate' in hist_df.columns:
                 filtered_df = hist_df[~hist_df['_is_duplicate']]
@@ -419,10 +482,9 @@ def _execute_reconciliation_writeback(
                     ops_done += 1
                     progress_bar.progress(
                         min(ops_done / total_ops, 0.99),
-                        text=f"Writeback Hist: {ops_done}/{total_ops}"
+                        text=f"Board 1 — Conseiller: {ops_done}/{total_ops}"
                     )
 
-                    import time
                     time.sleep(0.5)
 
                 except Exception as e:
@@ -432,7 +494,7 @@ def _execute_reconciliation_writeback(
         except Exception as e:
             wb_errors.append(f"Hist columns: {e}")
 
-    progress_bar.progress(1.0, text="Writeback terminé!")
+    progress_bar.progress(1.0, text="Upload des 2 boards terminé!")
 
     # Store writeback results in upload_result
     upload_result = st.session_state.upload_result or {}
