@@ -15,11 +15,11 @@ This module handles:
 """
 
 import os
+import re
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Any
-import re
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -45,10 +45,10 @@ try:
 except ImportError:
     STREAMLIT_AVAILABLE = False
 
-from ..models.uv import UVReport
+from ..models.assomption import AssomptionReport
 from ..models.idc import IDCReport
 from ..models.idc_statement import IDCStatementReport, IDCStatementReportParsed
-from ..models.assomption import AssomptionReport
+from ..models.uv import UVReport
 
 
 class BoardType(Enum):
@@ -144,7 +144,7 @@ class DataUnifier:
 
     def unify(
         self,
-        report: Union[UVReport, IDCReport, IDCStatementReport, IDCStatementReportParsed, AssomptionReport],
+        report: UVReport | IDCReport | IDCStatementReport | IDCStatementReportParsed | AssomptionReport,
         source: str
     ) -> tuple[pd.DataFrame, BoardType]:
         """
@@ -649,9 +649,6 @@ class DataUnifier:
             premium = self._clean_currency(prop.prime_police)
             commission = self._clean_currency(prop.commission)  # Commission extraite directement du PDF
 
-            # Taux pour calculs dérivés
-            commission_rate = self._clean_percentage(str(prop.taux_cpa) + '%') if prop.taux_cpa else None
-
             # Statut mapping
             statut_lower = str(prop.statut).strip().lower()
             if statut_lower in ['approved', 'inforce', 'issued']:
@@ -701,7 +698,7 @@ class DataUnifier:
 
     def _convert_idc_statement(
         self,
-        report: Union[IDCStatementReport, IDCStatementReportParsed]
+        report: IDCStatementReport | IDCStatementReportParsed
     ) -> pd.DataFrame:
         """
         Convertit un relevé IDC Statement en DataFrame standardisé.
@@ -1307,7 +1304,7 @@ class DataUnifier:
         worksheet_name: Optional[str] = None,
         column_name: str = 'Conseiller',
         dry_run: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Normalize advisor names in a Google Sheet using the AdvisorMatcher.
 
@@ -1372,7 +1369,7 @@ class DataUnifier:
             try:
                 worksheets = [spreadsheet.worksheet(worksheet_name)]
             except gspread.WorksheetNotFound:
-                raise ValueError(f"Worksheet '{worksheet_name}' not found in spreadsheet")
+                raise ValueError(f"Worksheet '{worksheet_name}' not found in spreadsheet") from None
         else:
             worksheets = spreadsheet.worksheets()
 
@@ -1462,7 +1459,7 @@ class DataUnifier:
                 print(f"  ... and {len(results['changes']) - 20} more")
 
         if results['not_found']:
-            print(f"\n--- Not found in advisor database ---")
+            print("\n--- Not found in advisor database ---")
             unique_not_found = set(nf[2] for nf in results['not_found'])
             for name in sorted(unique_not_found)[:20]:
                 count = sum(1 for nf in results['not_found'] if nf[2] == name)

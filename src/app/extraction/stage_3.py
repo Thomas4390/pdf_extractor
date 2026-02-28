@@ -11,13 +11,13 @@ import time
 import pandas as pd
 import streamlit as st
 
+from src.app.components import (
+    render_success_box,
+    render_upload_dashboard,
+)
 from src.app.state import get_pipeline, reset_pipeline
 from src.app.utils.async_helpers import run_async
-from src.app.utils.navigation import render_stepper, render_breadcrumb
-from src.app.components import (
-    render_upload_dashboard,
-    render_success_box,
-)
+from src.app.utils.navigation import render_breadcrumb, render_stepper
 
 
 def _has_reconciliation() -> bool:
@@ -218,12 +218,14 @@ def execute_upload(df: pd.DataFrame) -> None:
                     raise Exception(f"Impossible de créer le groupe: {group_result.error}")
 
                 # Progress callback - show overall progress
-                def on_progress(current: int, total: int) -> None:
-                    overall_current = items_processed_before_group + current
+                def on_progress(current: int, total: int,
+                                _offset=items_processed_before_group,
+                                _label=group_name) -> None:
+                    overall_current = _offset + current
                     overall_progress = overall_current / total_items
                     progress_bar.progress(
                         min(overall_progress, 0.99),
-                        text=f"{progress_label}: {group_name} ({overall_current}/{total_items})"
+                        text=f"{progress_label}: {_label} ({overall_current}/{total_items})"
                     )
 
                 # Upload

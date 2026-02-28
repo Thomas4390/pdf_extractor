@@ -13,19 +13,18 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from src.app.components import (
+    get_verification_stats,
+    render_metrics_dashboard,
+    reorder_columns_for_display,
+    verify_recu_vs_com,
+)
+from src.app.state import cleanup_temp_files, get_pipeline, reset_pipeline, sanitize_filename
+from src.app.utils.async_helpers import run_async
+from src.app.utils.date_utils import analyze_groups_in_data, detect_groups_from_data, get_months_fr
+from src.app.utils.navigation import render_breadcrumb, render_stepper
 from src.utils.data_unifier import BoardType
 from src.utils.model_registry import get_available_models, get_model_config
-
-from src.app.state import get_pipeline, reset_pipeline, sanitize_filename, cleanup_temp_files
-from src.app.utils.async_helpers import run_async
-from src.app.utils.navigation import render_stepper, render_breadcrumb
-from src.app.utils.date_utils import get_months_fr, detect_groups_from_data, analyze_groups_in_data
-from src.app.components import (
-    render_metrics_dashboard,
-    verify_recu_vs_com,
-    get_verification_stats,
-    reorder_columns_for_display,
-)
 
 
 def run_extraction() -> None:
@@ -46,7 +45,7 @@ def run_extraction() -> None:
     selected_model = st.session_state.get('selected_model')
     if selected_model:
         # Temporarily update the model registry for this extraction
-        from src.utils.model_registry import register_model, ModelConfig, ExtractionMode
+        from src.utils.model_registry import ModelConfig, register_model
         if source:
             original_config = model_config
             new_config = ModelConfig(
@@ -768,7 +767,7 @@ def _render_configuration_tab(df: pd.DataFrame, model_name: str, cost_display: s
     model_labels = [f"{v}" for v in available_models.values()]
 
     # Create a mapping for display
-    model_display_map = dict(zip(model_labels, model_options))
+    model_display_map = dict(zip(model_labels, model_options, strict=False))
 
     col_model, col_btn = st.columns([3, 1])
     with col_model:
@@ -1061,8 +1060,8 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     reconciliation automatically.  Lines with the same police number
     and classification (Com/Boni/Sur-Com) are aggregated before comparison.
     """
-    from src.utils.reconciler import Reconciler, ReconciliationStatus
     from src.utils.aggregator import SOURCE_BOARDS
+    from src.utils.reconciler import Reconciler, ReconciliationStatus
 
     # Resolve board ID (always use vente_production)
     vp_config = SOURCE_BOARDS.get("vente_production")

@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 from src.utils.advisor_matcher import get_advisor_matcher

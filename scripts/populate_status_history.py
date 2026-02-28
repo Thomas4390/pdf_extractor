@@ -18,18 +18,18 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 from src.clients.monday import MondayClient
 from src.utils.advisor_status import (
     AdvisorStatusCalculator,
     AdvisorStatusHistoryStore,
-    load_advisor_history,
-    get_advisor_status,
     clear_advisor_status_cache,
+    get_advisor_status,
+    load_advisor_history,
 )
 from src.utils.aggregator import METRICS_BOARD_CONFIG
-
 
 # French month names in order
 MONTHS_FR = [

@@ -10,7 +10,6 @@ from typing import Annotated, Any, Optional
 
 from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 
-
 # =============================================================================
 # FLEXIBLE TYPE COERCION
 # =============================================================================

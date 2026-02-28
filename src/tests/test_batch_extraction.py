@@ -54,7 +54,7 @@ async def test_batch_extraction(pdf_dir: str | None = None, max_concurrent: int 
     print(f"Mode: {model_config.mode.value.upper()}")
 
     # List files
-    print(f"\nFiles to process:")
+    print("\nFiles to process:")
     for i, pdf in enumerate(pdf_files, 1):
         print(f"  {i}. {pdf.name}")
 
@@ -105,7 +105,7 @@ async def test_batch_extraction(pdf_dir: str | None = None, max_concurrent: int 
                     advisors[adv] = advisors.get(adv, 0) + 1
 
             if advisors:
-                print(f"   By advisor:")
+                print("   By advisor:")
                 for adv, count in sorted(advisors.items()):
                     print(f"      {adv}: {count}")
         elif res.error:

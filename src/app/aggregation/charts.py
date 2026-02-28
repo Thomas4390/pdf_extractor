@@ -5,11 +5,9 @@ Provides interactive Plotly charts for visualizing aggregated data by advisor.
 """
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
-
+from plotly.subplots import make_subplots
 
 # =============================================================================
 # COLOR PALETTE - Professional gradient palette
@@ -641,8 +639,6 @@ def render_performance_heatmap(
     annotations = []
     for i, row in enumerate(z_data):
         for j, val in enumerate(row):
-            # Determine text color based on normalized value
-            norm_val = z_data_normalized[i][j]
             annotations.append(dict(
                 x=x_labels[j],
                 y=y_labels[i],
@@ -799,7 +795,6 @@ def render_advisor_radar_chart(
     normalized_values = []
     actual_values = []
     ranks = []
-    total_advisors = len(df)
     for col in existing_cols:
         max_val = df[col].max()
         val = advisor_data[col].iloc[0]
@@ -809,7 +804,7 @@ def render_advisor_radar_chart(
         ranks.append(rank)
 
     # Build labels with rank info
-    labels = [f"{col} (#{r})" for col, r in zip(existing_cols, ranks)]
+    labels = [f"{col} (#{r})" for col, r in zip(existing_cols, ranks, strict=False)]
 
     # Create radar chart
     fig = go.Figure()
@@ -820,7 +815,7 @@ def render_advisor_radar_chart(
         fill="toself",
         name=advisor_name,
         line_color=CHART_COLORS["primary"],
-        fillcolor=f"rgba(99, 102, 241, 0.3)",
+        fillcolor="rgba(99, 102, 241, 0.3)",
         hovertemplate="<b>%{theta}</b><br>Valeur: %{text:,.0f}<br>Score: %{r:.0f}%<extra></extra>",
         text=actual_values + [actual_values[0]],
     ))

@@ -8,7 +8,7 @@ Supports both vision (images) and text extraction modes.
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Generic, TypeVar, Union
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -19,9 +19,9 @@ from ..clients.openrouter import OpenRouterClient
 from ..utils.config import get_cache_dir, settings
 from ..utils.model_registry import (
     ExtractionMode,
+    get_default_text_model,
     get_model_config,
     get_pages_for_extraction,
-    get_default_text_model,
 )
 from ..utils.pdf import get_pdf_hash, get_pdf_page_count, pdf_to_images, pdf_to_text
 
@@ -51,7 +51,7 @@ class BaseExtractor(ABC, Generic[T]):
 
     def __init__(
         self,
-        cache_dir: Union[str, Path, None] = None,
+        cache_dir: str | Path | None = None,
         client: OpenRouterClient | None = None,
     ):
         """
@@ -121,7 +121,7 @@ class BaseExtractor(ABC, Generic[T]):
         """
         return get_model_config(self.document_type).mode
 
-    def get_images(self, pdf_path: Union[str, Path]) -> list[bytes]:
+    def get_images(self, pdf_path: str | Path) -> list[bytes]:
         """
         Convert PDF to images for VLM processing.
 
@@ -153,7 +153,7 @@ class BaseExtractor(ABC, Generic[T]):
         logger.info(f"[{self.document_type}] Converted {len(images)} page(s) to images")
         return images
 
-    def get_text(self, pdf_path: Union[str, Path]) -> str:
+    def get_text(self, pdf_path: str | Path) -> str:
         """
         Extract text from PDF for LLM processing.
 
@@ -187,7 +187,7 @@ class BaseExtractor(ABC, Generic[T]):
 
     async def extract(
         self,
-        pdf_path: Union[str, Path],
+        pdf_path: str | Path,
         force_refresh: bool = False,
     ) -> T:
         """
@@ -301,7 +301,7 @@ class BaseExtractor(ABC, Generic[T]):
 
     async def extract_raw(
         self,
-        pdf_path: Union[str, Path],
+        pdf_path: str | Path,
     ) -> dict[str, Any]:
         """
         Extract data without Pydantic validation.
@@ -372,12 +372,12 @@ class BaseExtractor(ABC, Generic[T]):
         else:
             raise ValueError(f"Unsupported extraction mode: {mode}")
 
-    def is_cached(self, pdf_path: Union[str, Path]) -> bool:
+    def is_cached(self, pdf_path: str | Path) -> bool:
         """Check if a PDF's extraction is cached."""
         pdf_hash = get_pdf_hash(pdf_path)
         return self.cache.exists(pdf_hash)
 
-    def invalidate_cache(self, pdf_path: Union[str, Path]) -> bool:
+    def invalidate_cache(self, pdf_path: str | Path) -> bool:
         """Remove a PDF's cached extraction."""
         pdf_hash = get_pdf_hash(pdf_path)
         return self.cache.invalidate(pdf_hash)

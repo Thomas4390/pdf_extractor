@@ -44,13 +44,11 @@ def render_stepper() -> None:
     ]
 
     cols = st.columns(3)
-    for i, (num, name, icon) in enumerate(stages):
+    for i, (_num, name, icon) in enumerate(stages):
         stage_num = i + 1
         with cols[i]:
             is_current = stage_num == st.session_state.stage
             is_completed = stage_num < st.session_state.stage
-            is_future = stage_num > st.session_state.stage
-
             # Determine CSS class
             if is_current:
                 css_class = "current"
@@ -70,7 +68,7 @@ def render_stepper() -> None:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button(f"← Retour", key=f"stepper_nav_{stage_num}", width="stretch"):
+                if st.button("← Retour", key=f"stepper_nav_{stage_num}", width="stretch"):
                     # Reset extraction state when going back to stage 1
                     if stage_num == 1:
                         st.session_state.combined_data = None

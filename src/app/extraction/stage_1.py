@@ -13,12 +13,11 @@ from src.utils.model_registry import get_available_models, get_default_vision_mo
 
 MAX_PDF_SIZE_MB = 500
 
-from src.app.state import get_pipeline
-from src.app.utils.navigation import render_stepper, render_breadcrumb
-from src.app.utils.board_utils import sort_and_filter_boards, load_boards_async
-from src.app.utils.date_utils import detect_date_from_filename
 from src.app.advisor.management import render_advisor_management_tab
 from src.app.column_conversion.mode import render_column_conversion_mode
+from src.app.utils.board_utils import load_boards_async, sort_and_filter_boards
+from src.app.utils.date_utils import detect_date_from_filename
+from src.app.utils.navigation import render_breadcrumb, render_stepper
 
 
 def render_stage_1() -> None:

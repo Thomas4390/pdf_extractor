@@ -12,10 +12,11 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
-from src.clients.monday import MondayClient
 from src.app.utils.async_helpers import run_async
+from src.clients.monday import MondayClient
 
 
 def find_data_board():

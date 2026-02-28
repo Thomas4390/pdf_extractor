@@ -4,7 +4,6 @@ Test script to trace column duplication in the aggregation flow.
 This traces each step to find where duplicate columns appear.
 """
 
-import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -15,22 +14,23 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 import pandas as pd
 
-from src.clients.monday import MondayClient
 from src.app.utils.async_helpers import run_async
+from src.clients.monday import MondayClient
 from src.utils.aggregator import (
-    SOURCE_BOARDS,
     METRICS_BOARD_CONFIG,
+    SOURCE_BOARDS,
     FlexiblePeriod,
     PeriodType,
-    filter_by_flexible_period,
     aggregate_by_advisor,
-    combine_aggregations,
-    merge_metrics_with_aggregation,
     calculate_derived_metrics,
+    combine_aggregations,
+    filter_by_flexible_period,
+    merge_metrics_with_aggregation,
 )
 
 
@@ -185,7 +185,7 @@ def test_aggregation_flow():
         print(f"  ⚠️ OVERLAPPING COLUMNS: {overlapping}")
         print("     These will cause _x/_y suffixes!")
     else:
-        print(f"  ✅ No overlapping columns")
+        print("  ✅ No overlapping columns")
 
     merged_df = merge_metrics_with_aggregation(
         combined_df,
@@ -209,7 +209,7 @@ def test_aggregation_flow():
     print("STEP 6: Simulate second merge (re-render scenario)")
     print("-" * 40)
 
-    print(f"  Merging again with final_df that already has metrics...")
+    print("  Merging again with final_df that already has metrics...")
     print(f"  final_df columns: {list(final_df.columns)}")
 
     second_merge = merge_metrics_with_aggregation(

@@ -7,7 +7,7 @@ Stores extraction results as JSON files indexed by PDF hash.
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 
 class ExtractionCache:
@@ -18,7 +18,7 @@ class ExtractionCache:
     Includes metadata about when the result was cached and source information.
     """
 
-    def __init__(self, cache_dir: Union[str, Path] = "cache"):
+    def __init__(self, cache_dir: str | Path = "cache"):
         """
         Initialize the cache.
 
@@ -48,7 +48,7 @@ class ExtractionCache:
             return None
 
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8") as f:
                 cached = json.load(f)
                 return cached.get("data")
         except (json.JSONDecodeError, KeyError):
@@ -131,7 +131,7 @@ class ExtractionCache:
             return None
 
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8") as f:
                 cached = json.load(f)
                 return {
                     "cached_at": cached.get("cached_at"),

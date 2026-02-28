@@ -151,7 +151,7 @@ async def run_comparison(pdf_path: str | None = None):
         return None
 
     # Step 4: Compare results
-    print(f"\n[4/4] Comparing results...")
+    print("\n[4/4] Comparing results...")
 
     # Show warning if partial data
     if not raw_extraction_ok:

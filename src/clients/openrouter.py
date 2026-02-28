@@ -17,10 +17,10 @@ from pydantic import ValidationError
 
 from ..utils.config import settings
 from .json_repair import (
-    repair_json,
     extract_json_from_response,
-    save_debug_json,
     recover_partial_json,
+    repair_json,
+    save_debug_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -333,7 +333,7 @@ class OpenRouterClient:
                 truncated += ']' * open_brackets + '}' * open_braces
                 result = json.loads(truncated)
                 logger.warning(f"JSON parsed by truncating to {end_pos} chars")
-                print(f"🔧 JSON parsed by truncating (lost some data)")
+                print("🔧 JSON parsed by truncating (lost some data)")
                 return result
             except (json.JSONDecodeError, Exception):
                 continue
@@ -786,7 +786,7 @@ class OpenRouterClient:
 
             except ValidationError as fallback_error:
                 logger.warning(f"Fallback model validation failed: {fallback_error}")
-                print(f"❌ Fallback model validation failed")
+                print("❌ Fallback model validation failed")
 
                 # Save debug
                 try:

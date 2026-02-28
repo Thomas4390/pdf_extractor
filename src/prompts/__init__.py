@@ -49,7 +49,7 @@ def load_prompts(document_type: str) -> dict:
         )
 
     # Load and cache
-    with open(yaml_path, "r", encoding="utf-8") as f:
+    with open(yaml_path, encoding="utf-8") as f:
         prompts = yaml.safe_load(f)
 
     _prompts_cache[doc_type_lower] = prompts

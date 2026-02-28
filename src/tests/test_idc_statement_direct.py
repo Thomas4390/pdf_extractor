@@ -59,7 +59,7 @@ async def test_direct_extraction(pdf_path: str | None = None):
         print(f"Secondary: {model_config.secondary_fallback_model_id} ({sec_mode})")
 
     # Test PDF utilities
-    print(f"\n[1/4] Testing PDF utilities...")
+    print("\n[1/4] Testing PDF utilities...")
     pdf_hash = get_pdf_hash(pdf_path)
     print(f"  Hash: {pdf_hash[:16]}...")
 
@@ -68,27 +68,27 @@ async def test_direct_extraction(pdf_path: str | None = None):
     print(f"  Image sizes: {[len(img)//1024 for img in images]} KB")
 
     # Test extractor initialization
-    print(f"\n[2/4] Initializing extractor...")
+    print("\n[2/4] Initializing extractor...")
     extractor = IDCStatementExtractor()
     print(f"  Source: {extractor.source_name}")
-    print(f"  Mode: DIRECT")
+    print("  Mode: DIRECT")
 
     # Verify prompts are loaded from YAML
-    print(f"\n[2.5/4] Verifying prompts from YAML...")
+    print("\n[2.5/4] Verifying prompts from YAML...")
     print(f"  system_prompt_direct: {len(extractor.system_prompt_direct)} chars")
     print(f"  user_prompt_direct: {len(extractor.user_prompt_direct)} chars")
     print(f"  Has direct prompts: {extractor._prompt_config.has_direct_prompts()}")
 
     # Invalidate cache to test with fresh prompts
-    print(f"\n[3/4] Cache management...")
+    print("\n[3/4] Cache management...")
     was_cached = extractor.is_direct_cached(pdf_path)
     if was_cached:
-        print(f"  Invalidating cache to use fresh prompts...")
+        print("  Invalidating cache to use fresh prompts...")
         extractor.invalidate_direct_cache(pdf_path)
     print(f"  Was cached: {was_cached} → Now forcing fresh extraction")
 
     # Run extraction
-    print(f"\n[4/4] Running VLM DIRECT extraction...")
+    print("\n[4/4] Running VLM DIRECT extraction...")
     print("  -> Calling VLM API (this may take 10-30 seconds...)")
 
     start = time.time()
@@ -112,7 +112,7 @@ async def test_direct_extraction(pdf_path: str | None = None):
         for f in trailing_fees:
             c = f.get('company') or 'Unknown'
             companies[c] = companies.get(c, 0) + 1
-        print(f"\nPar compagnie:")
+        print("\nPar compagnie:")
         for c, count in sorted(companies.items()):
             print(f"  {c}: {count}")
 
@@ -121,7 +121,7 @@ async def test_direct_extraction(pdf_path: str | None = None):
         for f in trailing_fees:
             a = f.get('advisor_name') or 'Unknown'
             advisors[a] = advisors.get(a, 0) + 1
-        print(f"\nPar conseiller (parsé):")
+        print("\nPar conseiller (parsé):")
         for a, count in sorted(advisors.items()):
             print(f"  {a}: {count}")
 
@@ -138,7 +138,7 @@ async def test_direct_extraction(pdf_path: str | None = None):
                 raw_display = raw_data.replace('\n', ' | ')
 
             print(f"\n{i}. Raw: {raw_display}")
-            print(f"   --- Champs parsés ---")
+            print("   --- Champs parsés ---")
             print(f"   Company Code: {fee.get('company_code') or 'N/A'}")
             print(f"   Company Number: {fee.get('company_number') or 'N/A'}")
             print(f"   Policy Date: {fee.get('policy_date') or 'N/A'}")
@@ -149,7 +149,7 @@ async def test_direct_extraction(pdf_path: str | None = None):
             client_last = fee.get('client_last_name') or ''
             client_name = f"{client_first} {client_last}".strip() or 'N/A'
             print(f"   Client: {client_name}")
-            print(f"   --- Colonnes directes ---")
+            print("   --- Colonnes directes ---")
             print(f"   Compte: {fee.get('account_number') or 'N/A'}")
             print(f"   Compagnie: {fee.get('company') or 'N/A'}")
             print(f"   Produit: {fee.get('product') or 'N/A'}")
@@ -197,7 +197,7 @@ async def test_prompt_loading():
 
     # Test direct loading
     config = load_prompts("idc_statement")
-    print(f"\nDirect load from YAML:")
+    print("\nDirect load from YAML:")
     print(f"  document_type: {config.document_type}")
     print(f"  system_prompt: {len(config.system_prompt)} chars")
     print(f"  user_prompt: {len(config.user_prompt)} chars")
@@ -207,7 +207,7 @@ async def test_prompt_loading():
 
     # Test via extractor
     extractor = IDCStatementExtractor()
-    print(f"\nVia extractor:")
+    print("\nVia extractor:")
     print(f"  system_prompt: {len(extractor.system_prompt)} chars")
     print(f"  user_prompt: {len(extractor.user_prompt)} chars")
     print(f"  system_prompt_direct: {len(extractor.system_prompt_direct)} chars")
@@ -219,7 +219,7 @@ async def test_prompt_loading():
     assert config.system_prompt_direct == extractor.system_prompt_direct, "system_prompt_direct mismatch!"
     assert config.user_prompt_direct == extractor.user_prompt_direct, "user_prompt_direct mismatch!"
 
-    print(f"\n  All prompts match YAML source!")
+    print("\n  All prompts match YAML source!")
     print(f"\n{'='*60}")
     print("PROMPT TEST SUCCESSFUL")
     print(f"{'='*60}\n")

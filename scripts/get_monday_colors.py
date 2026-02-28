@@ -2,10 +2,10 @@
 Script to retrieve label colors from Monday.com for the Profitable column.
 """
 
+import asyncio
+import json
 import os
 import sys
-import json
-import asyncio
 from pathlib import Path
 
 # Add project root to path
@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 # Import only what we need from monday.py without triggering other imports
@@ -94,7 +95,7 @@ def main():
                 labels = settings.get("labels", {})
                 labels_colors = settings.get("labels_colors", {})
 
-                print(f"\nLabels:")
+                print("\nLabels:")
                 for label_id, label_name in labels.items():
                     color = labels_colors.get(label_id, {})
                     color_hex = color.get("color", "N/A") if isinstance(color, dict) else color

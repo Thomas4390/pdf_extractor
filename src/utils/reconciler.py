@@ -16,13 +16,13 @@ Key behavior:
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Optional
 
 import pandas as pd
 
 
-class ReconciliationStatus(str, Enum):
+class ReconciliationStatus(StrEnum):
     """Status of a reconciliation match."""
     PASSED = "Vérifié"
     FLAGGED = "Écart"
@@ -128,7 +128,6 @@ class ReconciliationResult:
         """Convert matches to a DataFrame for UI display."""
         rows = []
         for m in self.matches:
-            lines_label = f" ({m.line_count})" if m.line_count > 1 else ""
             rows.append({
                 "# Police": m.police_number,
                 "Compagnie": m.compagnie,

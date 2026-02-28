@@ -56,22 +56,22 @@ async def test_unifier_with_real_data(
     use_deepseek: bool = False,
 ):
     """Test DataUnifier with real extracted data from cache or VLM extraction."""
-    from src.utils.data_unifier import DataUnifier
     from src.extractors import (
-        UVExtractor,
+        AssomptionExtractor,
         IDCExtractor,
         IDCStatementExtractor,
-        AssomptionExtractor,
+        UVExtractor,
     )
     from src.models.idc_statement import IDCStatementReportParsed
+    from src.utils.data_unifier import DataUnifier
 
     # If using DeepSeek for UV, configure the model registry
     if use_deepseek:
         from src.utils.model_registry import (
-            register_model,
-            ModelConfig,
-            ExtractionMode,
             DEFAULT_TEXT_MODEL,
+            ExtractionMode,
+            ModelConfig,
+            register_model,
         )
         # Override UV config to use DeepSeek (text mode)
         register_model("UV", ModelConfig(
@@ -131,9 +131,9 @@ async def test_unifier_with_real_data(
                 # Check if direct extraction is cached
                 is_cached = extractor.is_direct_cached(pdf_path)
                 if not is_cached:
-                    print(f"  Status: Not cached - running DIRECT VLM extraction (may take 30-60s)...")
+                    print("  Status: Not cached - running DIRECT VLM extraction (may take 30-60s)...")
                 else:
-                    print(f"  Status: Using cached DIRECT result")
+                    print("  Status: Using cached DIRECT result")
 
                 # Extract with direct mode (parses client_full_name, advisor_name, etc.)
                 result_dict = await extractor.extract_direct(pdf_path)
@@ -145,20 +145,20 @@ async def test_unifier_with_real_data(
 
                 # Create validated model from dict
                 report = IDCStatementReportParsed(**result_dict)
-                print(f"  Mode: DIRECT (parsed fields: client_full_name, advisor_name, policy_number)")
+                print("  Mode: DIRECT (parsed fields: client_full_name, advisor_name, policy_number)")
             else:
                 # Standard extraction
                 is_cached = extractor.is_cached(pdf_path)
                 if not is_cached:
-                    print(f"  Status: Not cached - running VLM extraction (may take 10-30s)...")
+                    print("  Status: Not cached - running VLM extraction (may take 10-30s)...")
                 else:
-                    print(f"  Status: Using cached result")
+                    print("  Status: Using cached result")
 
                 report = await extractor.extract(pdf_path)
                 if src == "IDC_STATEMENT":
-                    print(f"  Mode: RAW (raw_client_data as-is)")
+                    print("  Mode: RAW (raw_client_data as-is)")
                 elif src == "UV" and use_deepseek:
-                    print(f"  Mode: TEXT (DeepSeek - deepseek/deepseek-chat)")
+                    print("  Mode: TEXT (DeepSeek - deepseek/deepseek-chat)")
 
             # Convert to DataFrame
             df, board_type = unifier.unify(report, src)
@@ -197,9 +197,9 @@ async def main():
     if source not in valid_sources:
         print(f"Invalid source: {source}")
         print(f"Valid sources: {', '.join(valid_sources)}")
-        print(f"Options:")
-        print(f"  --raw       Use raw extraction for IDC_STATEMENT instead of direct")
-        print(f"  --deepseek  Use DeepSeek (text mode) for UV extraction")
+        print("Options:")
+        print("  --raw       Use raw extraction for IDC_STATEMENT instead of direct")
+        print("  --deepseek  Use DeepSeek (text mode) for UV extraction")
         sys.exit(1)
 
     await test_unifier_with_real_data(source, use_direct=use_raw, use_deepseek=use_deepseek)

@@ -15,15 +15,14 @@ Features:
 Adapted from scripts/advisor_matcher.py for use in src/
 """
 
-import json
 import os
 import re
 import unicodedata
-from datetime import datetime, date
-from pathlib import Path
-from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any, Optional
 
 # Try to import Google Sheets client
 try:
@@ -115,7 +114,7 @@ class Advisor:
     """Represents an advisor with their name variations."""
     first_name: str  # Prénom principal
     last_name: str   # Nom de famille
-    variations: List[str] = field(default_factory=list)  # Variations connues
+    variations: list[str] = field(default_factory=list)  # Variations connues
     status: str = "Active"  # Statut: Active, New, Inactive
     created_at: Optional[str] = None  # Date de création (YYYY-MM-DD)
     email: Optional[str] = None  # Adresse email du conseiller
@@ -144,7 +143,7 @@ class Advisor:
         """Return full name for matching."""
         return f"{self.first_name} {self.last_name}"
 
-    def get_all_searchable_terms(self) -> List[str]:
+    def get_all_searchable_terms(self) -> list[str]:
         """Get all terms that can be used to match this advisor."""
         terms = [
             self.first_name.lower(),
@@ -156,7 +155,7 @@ class Advisor:
         terms.extend([v.lower() for v in self.variations])
         return terms
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
             'first_name': self.first_name,
@@ -168,7 +167,7 @@ class Advisor:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Advisor':
+    def from_dict(cls, data: dict) -> 'Advisor':
         """Create from dictionary."""
         return cls(
             first_name=data['first_name'],
@@ -227,10 +226,10 @@ class AdvisorMatcher:
                             If False (default), work without advisors if not configured.
         """
         self.fuzzy_threshold = fuzzy_threshold
-        self.advisors: List[Advisor] = []
-        self._compiled_patterns: List[Tuple[re.Pattern, Advisor]] = []
+        self.advisors: list[Advisor] = []
+        self._compiled_patterns: list[tuple[re.Pattern, Advisor]] = []
         self._gsheets_error: Optional[str] = None
-        self.recently_promoted: List[str] = []  # Names auto-promoted from New → Active
+        self.recently_promoted: list[str] = []  # Names auto-promoted from New → Active
 
         # Initialize Google Sheets client
         self._gsheets_client: Optional[Any] = None
@@ -501,7 +500,7 @@ class AdvisorMatcher:
 
             self._build_patterns()
         except Exception as e:
-            raise RuntimeError(f"Could not load advisors from Google Sheets: {e}")
+            raise RuntimeError(f"Could not load advisors from Google Sheets: {e}") from e
 
     @staticmethod
     def _should_promote_to_active(created_at_str: str) -> bool:
@@ -515,7 +514,7 @@ class AdvisorMatcher:
         except (ValueError, TypeError):
             return False
 
-    def _promote_advisors_in_sheet(self, advisors: List['Advisor']) -> None:
+    def _promote_advisors_in_sheet(self, advisors: list['Advisor']) -> None:
         """Update promoted advisors' status to Active in Google Sheets."""
         try:
             all_values = self._worksheet.get_all_values()
@@ -547,7 +546,7 @@ class AdvisorMatcher:
         self._build_patterns()
 
     def add_advisor(self, first_name: str, last_name: str,
-                    variations: Optional[List[str]] = None,
+                    variations: Optional[list[str]] = None,
                     status: str = "Active",
                     email: Optional[str] = None) -> Advisor:
         """Add a new advisor to Google Sheets."""
@@ -581,14 +580,14 @@ class AdvisorMatcher:
             ])
             advisor._row_id = new_id
         except Exception as e:
-            raise RuntimeError(f"Could not save advisor to Google Sheets: {e}")
+            raise RuntimeError(f"Could not save advisor to Google Sheets: {e}") from e
 
         self.advisors.append(advisor)
         self._save()
         return advisor
 
     def update_advisor(self, advisor: Advisor, first_name: str = None,
-                       last_name: str = None, variations: List[str] = None,
+                       last_name: str = None, variations: list[str] = None,
                        status: str = None, email: str = None) -> Advisor:
         """
         Update an existing advisor in Google Sheets.
@@ -645,7 +644,7 @@ class AdvisorMatcher:
             ]])
 
         except Exception as e:
-            raise RuntimeError(f"Could not update advisor in Google Sheets: {e}")
+            raise RuntimeError(f"Could not update advisor in Google Sheets: {e}") from e
 
         self._save()
         return advisor
@@ -690,7 +689,7 @@ class AdvisorMatcher:
                            if not (hasattr(a, '_row_id') and a._row_id == advisor._row_id)]
 
         except Exception as e:
-            raise RuntimeError(f"Could not delete advisor from Google Sheets: {e}")
+            raise RuntimeError(f"Could not delete advisor from Google Sheets: {e}") from e
 
         self._save()
         return True
@@ -845,7 +844,7 @@ class AdvisorMatcher:
         result = self.match(name, use_fuzzy)
         return result if result else name
 
-    def get_all_advisors(self) -> List[Advisor]:
+    def get_all_advisors(self) -> list[Advisor]:
         """Get all advisors."""
         return self.advisors.copy()
 

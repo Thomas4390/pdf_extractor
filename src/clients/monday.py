@@ -13,7 +13,7 @@ import os
 import random
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Optional
 
 import httpx
@@ -44,7 +44,7 @@ RETRY_BASE_DELAY = 2.0  # seconds
 # DATA STRUCTURES
 # =============================================================================
 
-class ColumnType(str, Enum):
+class ColumnType(StrEnum):
     """Monday.com column types."""
     TEXT = "text"
     LONG_TEXT = "long_text"

@@ -15,21 +15,21 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
-import pandas as pd
 
 from src.clients.monday import MondayClient
 from src.utils.aggregator import (
-    SOURCE_BOARDS,
     METRICS_BOARD_CONFIG,
+    SOURCE_BOARDS,
     FlexiblePeriod,
     PeriodType,
-    filter_by_flexible_period,
     aggregate_by_advisor,
-    combine_aggregations,
-    merge_metrics_with_aggregation,
     calculate_derived_metrics,
+    combine_aggregations,
+    filter_by_flexible_period,
+    merge_metrics_with_aggregation,
 )
 
 
@@ -96,8 +96,8 @@ def test_metrics_columns():
         print("ERROR: MONDAY_API_KEY not set")
         return None
 
-    from src.clients.monday import MondayClient
     from src.app.utils.async_helpers import run_async
+    from src.clients.monday import MondayClient
 
     client = MondayClient(api_key=api_key)
     board_id = METRICS_BOARD_CONFIG.board_id

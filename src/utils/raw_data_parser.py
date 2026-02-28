@@ -20,8 +20,7 @@ from typing import Optional
 import pandas as pd
 
 # Import the AdvisorMatcher for dynamic advisor name matching
-from .advisor_matcher import normalize_advisor_name, normalize_advisor_name_or_original
-
+from .advisor_matcher import normalize_advisor_name
 
 # =============================================================================
 # COMPANY NAME NORMALIZATION (copied from scripts/idc_statements_extractor.py)

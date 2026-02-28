@@ -12,8 +12,7 @@ Strategy:
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator
-
+from pydantic import BaseModel, BeforeValidator, Field
 
 # =============================================================================
 # FLEXIBLE TYPE COERCION

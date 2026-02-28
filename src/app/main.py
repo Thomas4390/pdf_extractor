@@ -29,16 +29,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import application modules
-from src.app.styles import apply_custom_styles
-from src.app.state import init_session_state
-from src.app.sidebar import render_sidebar
-from src.app.utils.board_utils import load_boards_async, start_background_aggregation_load
+# Import aggregation mode
+from src.app.aggregation import render_aggregation_mode
 
 # Import extraction stages
 from src.app.extraction import render_stage_1, render_stage_2, render_stage_3
-
-# Import aggregation mode
-from src.app.aggregation import render_aggregation_mode
+from src.app.sidebar import render_sidebar
+from src.app.state import init_session_state
+from src.app.styles import apply_custom_styles
+from src.app.utils.board_utils import load_boards_async, start_background_aggregation_load
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +73,9 @@ def _check_next_month_groups() -> None:
     """
     try:
         from src.utils.advisor_provisioning import (
-            load_provisioning_config,
             ensure_next_month_groups,
             get_next_month_group_name,
+            load_provisioning_config,
         )
 
         # Skip if no API key or provisioning config

@@ -27,15 +27,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline import (
-    Pipeline,
-    SourceType,
-    PipelineResult,
     BatchResult,
     ExtractionWarning,
-    get_pipeline,
+    Pipeline,
+    PipelineResult,
+    SourceType,
 )
 from src.utils.data_unifier import BoardType
-
 
 # =============================================================================
 # TEST DATA
@@ -95,7 +93,7 @@ def test_source_detection():
     # Test detection failure
     try:
         pipeline.detect_source("random_file.pdf")
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError:
         print("  ✓ Unknown source raises ValueError")
 
@@ -118,7 +116,7 @@ def test_pipeline_result_dataclass():
         extraction_time_ms=1500
     )
 
-    assert result.success == True
+    assert result.success is True
     assert result.row_count == 3
     assert result.source == SourceType.UV
     assert result.error is None
@@ -134,7 +132,7 @@ def test_pipeline_result_dataclass():
         error="Extraction failed"
     )
 
-    assert result_failed.success == False
+    assert result_failed.success is False
     assert result_failed.row_count == 0
     assert result_failed.error == "Extraction failed"
     print("  ✓ Failed result")
@@ -237,14 +235,14 @@ def test_pipeline_initialization():
     try:
         # Without Monday API key
         pipeline = Pipeline(use_advisor_matcher=False)
-        assert pipeline.monday_configured == False
+        assert pipeline.monday_configured is False
         assert len(pipeline.supported_sources) == 4
         print("  ✓ Pipeline without Monday key")
 
         # With mock Monday API key (won't connect, just tests initialization)
         os.environ["MONDAY_API_KEY"] = "test_key"
         pipeline_with_monday = Pipeline(use_advisor_matcher=False)
-        assert pipeline_with_monday.monday_configured == True
+        assert pipeline_with_monday.monday_configured is True
         print("  ✓ Pipeline with Monday key from env")
 
     finally:
@@ -335,7 +333,7 @@ async def test_single_pdf_extraction():
         print(f"  Error: {result.error}")
 
     if result.success and not result.dataframe.empty:
-        print(f"\n  DataFrame preview:")
+        print("\n  DataFrame preview:")
         print(result.dataframe.head(3).to_string())
 
     return result.success
@@ -367,7 +365,7 @@ async def test_batch_pdf_extraction():
         progress_callback=on_progress
     )
 
-    print(f"\n  Batch Summary:")
+    print("\n  Batch Summary:")
     print(f"    Total: {results.total_pdfs}")
     print(f"    Successful: {results.successful}")
     print(f"    Failed: {results.failed}")

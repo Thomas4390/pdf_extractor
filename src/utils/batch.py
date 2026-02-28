@@ -7,10 +7,11 @@ with progress tracking and error handling.
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, TypeVar, Generic
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Generic, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ def print_batch_summary(result: BatchResult) -> None:
         print(f"Avg time/PDF:   {avg_time:.2f}s")
 
     if result.failed > 0:
-        print(f"\nFailed PDFs:")
+        print("\nFailed PDFs:")
         for r in result.results:
             if not r.success:
                 print(f"  - {r.pdf_path.name}: {r.error}")

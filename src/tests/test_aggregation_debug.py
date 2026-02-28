@@ -15,6 +15,7 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 import pandas as pd
@@ -24,10 +25,9 @@ from src.utils.aggregator import (
     SOURCE_BOARDS,
     FlexiblePeriod,
     PeriodType,
-    filter_by_flexible_period,
     aggregate_by_advisor,
     combine_aggregations,
-    normalize_advisor_column,
+    filter_by_flexible_period,
 )
 
 
@@ -147,7 +147,7 @@ def test_load_and_filter_source_data(period: FlexiblePeriod):
                     total = pd.to_numeric(ayoub_filtered[config.aggregate_column], errors='coerce').sum()
                     print(f"   Total (Dec 2025 only): {total}")
             else:
-                print(f"\n🔍 AYOUB - No data after date filter")
+                print("\n🔍 AYOUB - No data after date filter")
 
     return all_source_data, all_filtered_data
 
@@ -194,7 +194,7 @@ def test_aggregation(filtered_data: dict):
             ayoub_mask = agg_df["Conseiller"].astype(str).str.lower().str.contains('ayoub', na=False)
             if ayoub_mask.any():
                 ayoub_agg = agg_df[ayoub_mask]
-                print(f"\n🔍 AYOUB after aggregation:")
+                print("\n🔍 AYOUB after aggregation:")
                 print(ayoub_agg.to_string())
 
         aggregated_data[source_key] = agg_df
@@ -218,7 +218,7 @@ def test_combine_aggregations(aggregated_data: dict):
         ayoub_mask = combined_df["Conseiller"].astype(str).str.lower().str.contains('ayoub', na=False)
         if ayoub_mask.any():
             ayoub_combined = combined_df[ayoub_mask]
-            print(f"\n🔍 AYOUB in combined data:")
+            print("\n🔍 AYOUB in combined data:")
             print(ayoub_combined.to_string())
 
             # Check if AE CA is 9547
@@ -260,7 +260,7 @@ def test_advisor_name_normalization():
     # Find Ayoub in the advisor list
     for advisor in matcher.advisors:
         if 'ayoub' in advisor.first_name.lower() or 'ayoub' in advisor.last_name.lower():
-            print(f"\nFound Ayoub in advisor list:")
+            print("\nFound Ayoub in advisor list:")
             print(f"  First name: {advisor.first_name}")
             print(f"  Last name: {advisor.last_name}")
             print(f"  Full name: {advisor.full_name}")

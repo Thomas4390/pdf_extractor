@@ -8,7 +8,8 @@ retry logic with configurable strategies for different error types.
 import asyncio
 import functools
 import logging
-from typing import Any, Callable, Optional, TypeVar, Union
+from collections.abc import Callable
+from typing import Any, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 

@@ -87,11 +87,11 @@ async def test_extraction(
     """Run extraction test on a UV PDF."""
     from src.extractors import UVExtractor
     from src.utils.model_registry import (
+        ExtractionMode,
+        ModelConfig,
+        OcrEngine,
         get_model_config,
         register_model,
-        ModelConfig,
-        ExtractionMode,
-        OcrEngine,
     )
     from src.utils.pdf import get_pdf_hash, pdf_to_images
 
@@ -147,10 +147,10 @@ async def test_extraction(
     print(f"Model: {effective_model}")
     print(f"Mode: {effective_mode.upper()}")
     if force_refresh:
-        print(f"Cache: FORCED REFRESH")
+        print("Cache: FORCED REFRESH")
 
     # Test PDF utilities
-    print(f"\n[1/4] Testing PDF utilities...")
+    print("\n[1/4] Testing PDF utilities...")
     pdf_hash = get_pdf_hash(pdf_path)
     print(f"  Hash: {pdf_hash[:16]}...")
 
@@ -159,13 +159,13 @@ async def test_extraction(
     print(f"  Image sizes: {[len(img)//1024 for img in images]} KB")
 
     # Test extractor initialization
-    print(f"\n[2/4] Initializing extractor...")
+    print("\n[2/4] Initializing extractor...")
     extractor = UVExtractor()
     print(f"  Source: {extractor.source_name}")
     print(f"  Pydantic Model: {extractor.model_class.__name__}")
 
     # Check cache
-    print(f"\n[3/4] Checking cache...")
+    print("\n[3/4] Checking cache...")
     is_cached = extractor.is_cached(pdf_path)
     print(f"  Cached: {is_cached}")
 
@@ -203,14 +203,14 @@ async def test_extraction(
 
         # Show sous-conseillers
         if report.sous_conseillers_uniques:
-            print(f"\nSous-conseillers:")
+            print("\nSous-conseillers:")
             for sc in sorted(report.sous_conseillers_uniques):
                 print(f"  - {sc}")
 
         # Show totals per sous-conseiller
         totals_par_sc = report.calculer_total_par_sous_conseiller()
         if totals_par_sc:
-            print(f"\nTotaux par sous-conseiller:")
+            print("\nTotaux par sous-conseiller:")
             for sc, total in sorted(totals_par_sc.items()):
                 print(f"  {sc}: {total:,.2f} $")
 

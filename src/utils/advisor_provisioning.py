@@ -14,9 +14,10 @@ Also handles monthly group provisioning:
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional, Callable
+from typing import Optional
 
 from src.clients.monday import MondayClient, MondayError
 from src.utils.aggregator import MONTHS_FR
@@ -156,7 +157,7 @@ def _get_settings_worksheet():
         gspread Worksheet object, or None if Google Sheets is not configured.
     """
     try:
-        from src.utils.advisor_matcher import get_gcp_credentials, get_secret, GSHEETS_AVAILABLE
+        from src.utils.advisor_matcher import GSHEETS_AVAILABLE, get_gcp_credentials, get_secret
     except ImportError:
         return None
 

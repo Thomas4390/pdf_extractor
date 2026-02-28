@@ -18,7 +18,7 @@ def render_advisor_management_tab() -> None:
     st.markdown("### 👥 Gestion des Conseillers")
 
     try:
-        from src.utils.advisor_matcher import get_advisor_matcher, Advisor
+        from src.utils.advisor_matcher import get_advisor_matcher
     except ImportError:
         st.error("Module advisor_matcher non disponible")
         return
@@ -95,8 +95,6 @@ def render_advisor_management_tab() -> None:
         names = matcher.recently_promoted
         st.info(f"🔄 **Promotion automatique:** {', '.join(names)} → statut **Active** (plus d'un mois depuis la création)")
 
-    total_variations = sum(len(a.variations) for a in advisors)
-
     # Count by status
     active_count = sum(1 for a in advisors if a.status == "Active")
     new_count = sum(1 for a in advisors if a.status == "New")
@@ -126,7 +124,7 @@ def render_advisor_management_tab() -> None:
 
 def _render_add_advisor_form(matcher) -> None:
     """Render the add advisor form."""
-    from src.utils.advisor_matcher import get_advisor_matcher, ADVISOR_STATUSES
+    from src.utils.advisor_matcher import ADVISOR_STATUSES
 
     st.markdown("#### ➕ Ajouter un conseiller")
 
@@ -179,7 +177,7 @@ def _render_add_advisor_form(matcher) -> None:
                 # Check if exists
                 existing = matcher.find_advisor(new_first_name, new_last_name)
                 if existing:
-                    st.error(f"❌ Ce conseiller existe déjà")
+                    st.error("❌ Ce conseiller existe déjà")
                 else:
                     try:
                         advisor = matcher.add_advisor(new_first_name, new_last_name, variations, new_status, email=new_email or None)
@@ -213,7 +211,7 @@ def _get_status_badge(status: str) -> str:
 
 def _render_advisors_list(advisors: list, matcher) -> None:
     """Render the list of existing advisors with edit/delete options."""
-    from src.utils.advisor_matcher import get_advisor_matcher, ADVISOR_STATUSES
+    from src.utils.advisor_matcher import ADVISOR_STATUSES
 
     st.markdown("#### 📋 Conseillers existants")
 
@@ -249,7 +247,6 @@ def _render_advisors_list(advisors: list, matcher) -> None:
         for idx, advisor in enumerate(advisors):
             advisor_id = getattr(advisor, '_row_id', idx)
             icon = status_icons.get(advisor.status, "⚪")
-            n_vars = len(advisor.variations)
             status_badge = _get_status_badge(advisor.status)
             with st.expander(f"{icon} **{advisor.first_name} {advisor.last_name}** — {advisor.display_name_compact} · {advisor.status}", expanded=False):
                 st.markdown(f"**Format compact:** {advisor.display_name_compact} &nbsp; {status_badge}", unsafe_allow_html=True)
@@ -389,11 +386,11 @@ def _try_provision_advisor(advisor) -> None:
     Shows inline results via st.spinner/st.success/st.error.
     """
     try:
-        from src.utils.advisor_provisioning import (
-            load_provisioning_config,
-            AdvisorBoardProvisioner,
-        )
         from src.clients.monday import MondayClient
+        from src.utils.advisor_provisioning import (
+            AdvisorBoardProvisioner,
+            load_provisioning_config,
+        )
 
         config = load_provisioning_config()
         if config is None:

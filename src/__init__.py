@@ -8,18 +8,18 @@ via OpenRouter API, with local caching and Pydantic validation.
 __version__ = "0.1.0"
 
 # Expose key classes at package level for convenience
+from .clients.monday import MondayClient, UploadResult
 from .pipeline import (
-    Pipeline,
-    SourceType,
-    PipelineResult,
     BatchResult,
+    Pipeline,
+    PipelineResult,
+    SourceType,
     UsageStats,
-    get_pipeline,
     extract_pdf,
     extract_pdf_sync,
+    get_pipeline,
 )
 from .utils.data_unifier import BoardType, DataUnifier
-from .clients.monday import MondayClient, UploadResult
 
 __all__ = [
     # Pipeline

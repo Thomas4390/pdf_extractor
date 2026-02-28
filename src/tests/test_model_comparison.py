@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -336,18 +336,18 @@ async def extract_with_model(
     Returns:
         ExtractionResult with all metrics
     """
-    from src.utils.model_registry import (
-        register_model,
-        get_model_config,
-        ModelConfig,
-        ExtractionMode,
-        OcrEngine,
-    )
     from src.extractors import (
-        UVExtractor,
-        IDCExtractor,
         AssomptionExtractor,
+        IDCExtractor,
         IDCStatementExtractor,
+        UVExtractor,
+    )
+    from src.utils.model_registry import (
+        ExtractionMode,
+        ModelConfig,
+        OcrEngine,
+        get_model_config,
+        register_model,
     )
 
     result = ExtractionResult(model_name=model_name, model_id=model_id, mode=mode)
@@ -642,10 +642,10 @@ async def run_single_comparison(
     # Invalidate cache if requested
     if invalidate_cache:
         from src.extractors import (
-            UVExtractor,
-            IDCExtractor,
             AssomptionExtractor,
+            IDCExtractor,
             IDCStatementExtractor,
+            UVExtractor,
         )
 
         extractors = {
@@ -706,10 +706,10 @@ async def run_mode_comparison(source: str, invalidate_cache: bool = False) -> Op
     # Invalidate cache if requested
     if invalidate_cache:
         from src.extractors import (
-            UVExtractor,
-            IDCExtractor,
             AssomptionExtractor,
+            IDCExtractor,
             IDCStatementExtractor,
+            UVExtractor,
         )
 
         extractors = {
@@ -869,7 +869,7 @@ async def main():
         if source not in valid_sources:
             print(f"{c.BRIGHT_RED}Error:{c.RESET} Invalid source: {source}")
             print(f"Valid sources: {', '.join(valid_sources)}")
-            print(f"\nUsage: python -m src.tests.test_model_comparison [source] [--single] [--invalidate] [--mode <mode>] [--compare-modes] [--model <id>]")
+            print("\nUsage: python -m src.tests.test_model_comparison [source] [--single] [--invalidate] [--mode <mode>] [--compare-modes] [--model <id>]")
             sys.exit(1)
 
         await run_single_comparison(source, invalidate_cache, mode, models)

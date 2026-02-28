@@ -7,7 +7,6 @@ with bonus pages (page 5) based on policy number.
 """
 
 from pathlib import Path
-from typing import Union
 
 from ..models.assomption import AssomptionReport
 from ..utils.prompt_loader import load_prompts
@@ -62,7 +61,7 @@ class AssomptionExtractor(BaseExtractor[AssomptionReport]):
 
 
 async def extract_assomption_report(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     force_refresh: bool = False,
 ) -> AssomptionReport:
     """

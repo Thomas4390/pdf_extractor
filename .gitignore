@@ -216,7 +216,6 @@ old/
 pdf/
 results/
 temp/
-scripts/
 cache/
 .idea/
 .vscode/

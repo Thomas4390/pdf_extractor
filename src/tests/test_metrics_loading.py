@@ -16,9 +16,9 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
-import pandas as pd
 
 from src.clients.monday import MondayClient
 from src.utils.aggregator import (
@@ -144,7 +144,7 @@ def test_metrics_import():
                 rewards = row.get("Récompenses", 0)
 
                 if "ayoub" in str(advisor).lower():
-                    print(f"\n🔍 AYOUB DATA:")
+                    print("\n🔍 AYOUB DATA:")
                     print(f"  Conseiller: {advisor}")
                     print(f"  Coût: {cout}")
                     print(f"  Dépenses par Conseiller: {depenses}")

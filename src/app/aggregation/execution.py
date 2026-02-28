@@ -9,24 +9,23 @@ to target boards.
 import pandas as pd
 import streamlit as st
 
-from src.utils.aggregator import (
-    SOURCE_BOARDS,
-    METRICS_BOARD_CONFIG,
-    get_group_name_for_period,
-    filter_by_date,
-    filter_by_flexible_period,
-    aggregate_by_advisor,
-    combine_aggregations,
-    merge_metrics_with_aggregation,
-    calculate_derived_metrics,
-    FlexiblePeriod,
-    PeriodType,
-)
+from src.app.utils.async_helpers import run_async
 from src.utils.advisor_status import (
     AdvisorStatusCalculator,
     load_advisor_history,
 )
-from src.app.utils.async_helpers import run_async
+from src.utils.aggregator import (
+    METRICS_BOARD_CONFIG,
+    SOURCE_BOARDS,
+    PeriodType,
+    aggregate_by_advisor,
+    calculate_derived_metrics,
+    combine_aggregations,
+    filter_by_date,
+    filter_by_flexible_period,
+    get_group_name_for_period,
+    merge_metrics_with_aggregation,
+)
 
 
 def _add_advisor_status(df: pd.DataFrame, period_month: str) -> pd.DataFrame:

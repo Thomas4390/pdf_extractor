@@ -152,7 +152,6 @@ async def test_parsing(pdf_path: str | None = None):
     """Run parsing test on extracted IDC Statement data."""
     from src.extractors.idc_statement_extractor import IDCStatementExtractor
     from src.utils.model_registry import get_model_config
-    from src.utils.pdf import get_pdf_hash
 
     # Default test file
     if pdf_path is None:
@@ -172,13 +171,13 @@ async def test_parsing(pdf_path: str | None = None):
     print("IDC Statement PARSING Test (raw_client_data → structured)")
     print(f"{'='*60}")
     print(f"PDF: {pdf_path.name}")
-    print(f"\nStep 1 - Extraction (PDF → raw_client_data):")
+    print("\nStep 1 - Extraction (PDF → raw_client_data):")
     print(f"  Model: {model_config.model_id} ({model_config.mode.value})")
-    print(f"\nStep 2 - Parsing (raw_client_data → structured fields):")
+    print("\nStep 2 - Parsing (raw_client_data → structured fields):")
     print(f"  Model: {PARSING_MODEL} (text-only)")
 
     # Step 1: Get raw extraction (from cache or new)
-    print(f"\n[1/3] Getting raw extraction...")
+    print("\n[1/3] Getting raw extraction...")
     extractor = IDCStatementExtractor()
 
     if extractor.is_cached(pdf_path):
@@ -195,7 +194,7 @@ async def test_parsing(pdf_path: str | None = None):
         return None
 
     # Step 2: Parse raw_client_data
-    print(f"\n[2/3] Parsing raw_client_data with VLM...")
+    print("\n[2/3] Parsing raw_client_data with VLM...")
     print(f"  Sending {len(trailing_fees)} entries for parsing...")
 
     start = time.time()
@@ -204,7 +203,7 @@ async def test_parsing(pdf_path: str | None = None):
     print(f"  Parsing completed in {elapsed:.2f}s")
 
     # Step 3: Merge and display results
-    print(f"\n[3/3] Merging parsed data...")
+    print("\n[3/3] Merging parsed data...")
     merged_data = merge_parsed_data(trailing_fees, parsed_result)
 
     print(f"\n{'='*60}")
@@ -219,7 +218,7 @@ async def test_parsing(pdf_path: str | None = None):
             advisors[advisor] = advisors.get(advisor, 0) + 1
 
     if advisors:
-        print(f"\nPar conseiller:")
+        print("\nPar conseiller:")
         for a, count in sorted(advisors.items()):
             print(f"  {a}: {count}")
 

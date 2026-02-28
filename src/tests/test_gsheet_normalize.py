@@ -130,7 +130,7 @@ def list_sheets():
             if headers:
                 print(f"    Headers: {', '.join(headers[:8])}{'...' if len(headers) > 8 else ''}")
             if has_conseiller:
-                print(f"    ✅ Has 'Conseiller' column")
+                print("    ✅ Has 'Conseiller' column")
         except Exception as e:
             print(f"  - {ws.title} (error: {e})")
 
@@ -149,7 +149,7 @@ def list_advisors():
     print(f"{'='*60}")
     print(f"Storage backend: {matcher.storage_backend}")
     print(f"Total advisors: {len(advisors)}")
-    print(f"\nAdvisors (compact format):")
+    print("\nAdvisors (compact format):")
 
     for advisor in sorted(advisors, key=lambda a: a.first_name):
         variations = ', '.join(advisor.variations[:3]) if advisor.variations else 'none'
@@ -173,8 +173,8 @@ def main():
         return
 
     # Run normalization
-    from src.utils.data_unifier import DataUnifier
     from src.utils.advisor_matcher import get_advisor_matcher
+    from src.utils.data_unifier import DataUnifier
 
     matcher = get_advisor_matcher()
     unifier = DataUnifier(advisor_matcher=matcher)

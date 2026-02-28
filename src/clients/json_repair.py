@@ -71,9 +71,8 @@ def repair_json(content: str) -> str:
     # Strategy 2: Fix unterminated strings
     # Count quotes and if odd, try to find where to close
     quote_count = 0
-    last_quote_pos = -1
     in_escape = False
-    for i, char in enumerate(content):
+    for char in content:
         if in_escape:
             in_escape = False
             continue
@@ -82,7 +81,6 @@ def repair_json(content: str) -> str:
             continue
         if char == '"':
             quote_count += 1
-            last_quote_pos = i
 
     if quote_count % 2 != 0:
         # Odd number of quotes - try to fix
@@ -92,7 +90,7 @@ def repair_json(content: str) -> str:
         fixed = []
         in_string = False
         in_escape = False
-        for i, char in enumerate(content):
+        for char in content:
             if in_escape:
                 fixed.append(char)
                 in_escape = False

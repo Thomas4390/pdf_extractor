@@ -6,7 +6,6 @@ PDF reports using vision language models.
 """
 
 from pathlib import Path
-from typing import Union
 
 from ..models.idc import IDCReport
 from ..utils.prompt_loader import load_prompts
@@ -55,7 +54,7 @@ class IDCExtractor(BaseExtractor[IDCReport]):
 
 
 async def extract_idc_report(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     force_refresh: bool = False,
 ) -> IDCReport:
     """

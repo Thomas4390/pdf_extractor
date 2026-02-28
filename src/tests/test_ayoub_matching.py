@@ -16,6 +16,7 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 import pandas as pd
@@ -41,7 +42,7 @@ def test_which_names_match_ayoub():
     for advisor in matcher.advisors:
         if 'ayoub' in advisor.first_name.lower() or 'ayoub' in advisor.last_name.lower():
             ayoub_advisor = advisor
-            print(f"\nFound Ayoub in advisor list:")
+            print("\nFound Ayoub in advisor list:")
             print(f"  First name: {advisor.first_name}")
             print(f"  Last name: {advisor.last_name}")
             print(f"  Full name: {advisor.full_name}")
@@ -154,7 +155,7 @@ def test_load_real_data_and_check():
         if normalized == "Ayoub Chamoumi":
             ayoub_matches.append(str(name))
 
-    print(f"\n--- Names that normalize to 'Ayoub Chamoumi' ---")
+    print("\n--- Names that normalize to 'Ayoub Chamoumi' ---")
     for original_name in ayoub_matches:
         # Count rows with this name
         count = len(filtered_df[filtered_df[advisor_col] == original_name])

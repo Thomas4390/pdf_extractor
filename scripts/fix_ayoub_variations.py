@@ -16,6 +16,7 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 from src.utils.advisor_matcher import get_advisor_matcher
@@ -44,7 +45,7 @@ def fix_ayoub_variations():
         print("ERROR: Ayoub not found in advisor database")
         return False
 
-    print(f"\nCurrent Ayoub record:")
+    print("\nCurrent Ayoub record:")
     print(f"  Name: {ayoub.full_name}")
     print(f"  Variations: {ayoub.variations}")
 

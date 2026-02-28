@@ -6,13 +6,12 @@ Provides functions for converting PDFs to images and computing file hashes.
 
 import hashlib
 from pathlib import Path
-from typing import Union
 
 import fitz  # PyMuPDF
 
 
 def pdf_to_images(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     dpi: int = 200,
     pages: list[int] | None = None,
 ) -> list[bytes]:
@@ -57,7 +56,7 @@ def pdf_to_images(
     return images
 
 
-def get_pdf_hash(pdf_path: Union[str, Path]) -> str:
+def get_pdf_hash(pdf_path: str | Path) -> str:
     """
     Compute SHA-256 hash of a PDF file.
 
@@ -86,7 +85,7 @@ def get_pdf_hash(pdf_path: Union[str, Path]) -> str:
     return sha256.hexdigest()
 
 
-def get_pdf_page_count(pdf_path: Union[str, Path]) -> int:
+def get_pdf_page_count(pdf_path: str | Path) -> int:
     """
     Get the number of pages in a PDF file.
 
@@ -111,7 +110,7 @@ def get_pdf_page_count(pdf_path: Union[str, Path]) -> int:
 
 
 def pdf_to_text(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     pages: list[int] | None = None,
     preserve_layout: bool = True,
 ) -> str:

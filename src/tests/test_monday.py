@@ -19,7 +19,6 @@ Environment variables:
 import asyncio
 import os
 import sys
-from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -29,13 +28,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.clients.monday import (
-    MondayClient,
-    MondayError,
     ColumnType,
     CreateResult,
+    MondayClient,
+    MondayError,
     UploadResult,
-    get_monday_client,
     get_board_id_for_type,
+    get_monday_client,
 )
 from src.utils.data_unifier import BoardType
 
@@ -227,17 +226,17 @@ def test_create_result_dataclass():
 
     # Test CreateResult
     result1 = CreateResult(success=True, id="123", name="Test Item")
-    assert result1.success == True
+    assert result1.success is True
     assert result1.id == "123"
-    assert result1.reused == False
+    assert result1.reused is False
     print("  ✓ CreateResult basic")
 
     result2 = CreateResult(success=True, id="456", name="Existing", reused=True)
-    assert result2.reused == True
+    assert result2.reused is True
     print("  ✓ CreateResult with reused")
 
     result3 = CreateResult(success=False, error="API Error")
-    assert result3.success == False
+    assert result3.success is False
     assert result3.error == "API Error"
     print("  ✓ CreateResult with error")
 

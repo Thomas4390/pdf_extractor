@@ -13,10 +13,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
+
 from src.utils.reconciler import (
     Reconciler,
-    ReconciliationStatus,
-    RecuClassification,
 )
 
 

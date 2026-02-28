@@ -5,7 +5,6 @@ Uses Vision LLM to extract structured data from UV Assurance PDF reports.
 """
 
 from pathlib import Path
-from typing import Union
 
 from ..models.uv import UVReport
 from ..utils.prompt_loader import load_prompts
@@ -51,7 +50,7 @@ class UVExtractor(BaseExtractor[UVReport]):
 
 
 async def extract_uv_report(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     force_refresh: bool = False,
 ) -> UVReport:
     """

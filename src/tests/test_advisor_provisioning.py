@@ -17,18 +17,17 @@ from unittest.mock import MagicMock, patch
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from src.clients.monday import MondayClient
 from src.utils.advisor_provisioning import (
-    rename_board_for_advisor,
+    AdvisorBoardProvisioner,
+    ProvisioningConfig,
+    ensure_next_month_groups,
     get_current_month_group_name,
     get_next_month_group_name,
     load_provisioning_config,
-    ensure_next_month_groups,
-    ProvisioningConfig,
-    AdvisorBoardProvisioner,
-    NextMonthGroupsResult,
+    rename_board_for_advisor,
 )
 from src.utils.aggregator import MONTHS_FR
-
 
 # =============================================================================
 # UNIT TESTS

@@ -20,16 +20,15 @@ Cloud Storage:
 
 import logging
 from dataclasses import dataclass
-from datetime import date
-from typing import Optional, Any, List, Dict
+from typing import Any, Optional
 
 import pandas as pd
 
 from src.utils.advisor_matcher import (
-    normalize_advisor_name_full,
+    GSHEETS_AVAILABLE,
     get_gcp_credentials,
     get_secret,
-    GSHEETS_AVAILABLE,
+    normalize_advisor_name_full,
 )
 
 # Try to import gspread
@@ -136,7 +135,7 @@ class AdvisorStatusHistoryStore:
         """Return the configuration error message, if any."""
         return AdvisorStatusHistoryStore._error
 
-    def get_status_history(self, advisor_name: str) -> List[Dict[str, str]]:
+    def get_status_history(self, advisor_name: str) -> list[dict[str, str]]:
         """
         Get all status history records for an advisor.
 
@@ -246,7 +245,7 @@ class AdvisorStatusHistoryStore:
 
     def save_batch_status(
         self,
-        records: List[Dict[str, str]],
+        records: list[dict[str, str]],
     ) -> int:
         """
         Save multiple status records in batch for efficiency.
@@ -312,7 +311,7 @@ class AdvisorStatusHistoryStore:
             logging.warning(f"Failed to save batch status: {e}")
             return 0
 
-    def get_all_status_for_month(self, month: str) -> Dict[str, str]:
+    def get_all_status_for_month(self, month: str) -> dict[str, str]:
         """
         Get all advisor statuses for a specific month.
 
@@ -494,7 +493,7 @@ class AdvisorStatusCalculator:
             sorted_groups.sort(key=lambda x: (x[0], x[1]))
 
             # Process groups from earliest to latest
-            for year, month, group in sorted_groups:
+            for _year, _month, group in sorted_groups:
                 group_id = group["id"]
                 group_title = group["title"]
 
@@ -641,7 +640,7 @@ class AdvisorStatusCalculator:
         return df
 
     @classmethod
-    def sync_status_to_cloud(cls, records: List[Dict[str, str]]) -> int:
+    def sync_status_to_cloud(cls, records: list[dict[str, str]]) -> int:
         """
         Sync status records to Google Sheets cloud storage.
 
@@ -663,7 +662,7 @@ class AdvisorStatusCalculator:
             return 0
 
     @classmethod
-    def load_status_from_cloud(cls, month: str) -> Dict[str, str]:
+    def load_status_from_cloud(cls, month: str) -> dict[str, str]:
         """
         Load all advisor statuses for a month from cloud storage.
 
@@ -733,7 +732,7 @@ def get_status_history_store() -> AdvisorStatusHistoryStore:
     return AdvisorStatusHistoryStore.get_instance()
 
 
-def get_advisor_status_history(advisor_name: str) -> List[Dict[str, str]]:
+def get_advisor_status_history(advisor_name: str) -> list[dict[str, str]]:
     """
     Get all status history records for an advisor from cloud storage.
 

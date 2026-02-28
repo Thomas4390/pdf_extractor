@@ -14,29 +14,32 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
+from datetime import date
+
 import pandas as pd
+
+from src.app.utils.async_helpers import run_async
 from src.clients.monday import MondayClient
 from src.utils.advisor_status import (
     AdvisorStatusCalculator,
-    load_advisor_history,
-    get_advisor_status,
     clear_advisor_status_cache,
+    get_advisor_status,
+    load_advisor_history,
 )
 from src.utils.aggregator import (
     METRICS_BOARD_CONFIG,
     SOURCE_BOARDS,
     FlexiblePeriod,
     PeriodType,
-    filter_by_flexible_period,
     aggregate_by_advisor,
-    combine_aggregations,
-    merge_metrics_with_aggregation,
     calculate_derived_metrics,
+    combine_aggregations,
+    filter_by_flexible_period,
+    merge_metrics_with_aggregation,
 )
-from src.app.utils.async_helpers import run_async
-from datetime import date
 
 
 def test_hassam_status_flow():
@@ -152,7 +155,7 @@ def test_hassam_status_flow():
 
     hassam_rows = combined_df[combined_df["Conseiller"].str.contains("Hassam", case=False, na=False)]
     if not hassam_rows.empty:
-        print(f"\nHassam after adding status:")
+        print("\nHassam after adding status:")
         print(hassam_rows[["Conseiller", "Advisor_Status"]].to_string())
 
     # Step 7: Load metrics
@@ -204,7 +207,7 @@ def test_hassam_status_flow():
 
         hassam_rows = merged_df[merged_df["Conseiller"].str.contains("Hassam", case=False, na=False)]
         if not hassam_rows.empty:
-            print(f"\nHassam after merge:")
+            print("\nHassam after merge:")
             if "Advisor_Status" in merged_df.columns:
                 print(hassam_rows[["Conseiller", "Advisor_Status"]].to_string())
             else:
@@ -227,7 +230,7 @@ def test_hassam_status_flow():
 
     hassam_rows = final_df[final_df["Conseiller"].str.contains("Hassam", case=False, na=False)]
     if not hassam_rows.empty:
-        print(f"\nHassam final result:")
+        print("\nHassam final result:")
         cols_to_show = ["Conseiller", "Advisor_Status", "Profitable", "Ratio Net"]
         cols_to_show = [c for c in cols_to_show if c in final_df.columns]
         print(hassam_rows[cols_to_show].to_string())
@@ -240,10 +243,10 @@ def test_hassam_status_flow():
     if not hassam_rows.empty:
         advisor_status = hassam_rows["Advisor_Status"].iloc[0] if "Advisor_Status" in hassam_rows.columns else "N/A"
         profitable = hassam_rows["Profitable"].iloc[0] if "Profitable" in hassam_rows.columns else "N/A"
-        print(f"Hassam Ramadan:")
+        print("Hassam Ramadan:")
         print(f"  Advisor_Status: {advisor_status}")
         print(f"  Profitable: {profitable}")
-        print(f"  Expected Profitable: New (because Advisor_Status should be New)")
+        print("  Expected Profitable: New (because Advisor_Status should be New)")
 
         if profitable != "New" and advisor_status == "New":
             print("\n  ❌ BUG: Advisor_Status is 'New' but Profitable is not 'New'!")

@@ -142,10 +142,6 @@ def _render_session_info() -> None:
     """Render the session info section."""
     st.markdown('<div class="sidebar-section-title">📈 Session actuelle</div>', unsafe_allow_html=True)
 
-    # Show current stage
-    stage_names = {1: "Configuration", 2: "Prévisualisation", 3: "Upload"}
-    current_stage_name = stage_names.get(st.session_state.stage, "Inconnu")
-
     files_count = len(st.session_state.uploaded_files) if st.session_state.uploaded_files else 0
     rows_count = len(st.session_state.combined_data) if st.session_state.combined_data is not None else 0
 

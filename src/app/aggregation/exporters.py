@@ -6,7 +6,6 @@ Provides CSV and Excel export capabilities for aggregated advisor data.
 
 import io
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -66,8 +65,7 @@ def export_to_excel(
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         export_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-        # Get the workbook and worksheet for formatting
-        workbook = writer.book
+        # Get the worksheet for formatting
         worksheet = writer.sheets[sheet_name]
 
         # Auto-adjust column widths
@@ -78,13 +76,13 @@ def export_to_excel(
                 try:
                     if cell.value:
                         max_length = max(max_length, len(str(cell.value)))
-                except:
+                except Exception:
                     pass
             adjusted_width = min(max_length + 2, 50)
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
         # Format header row
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Alignment, Font, PatternFill
 
         header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
         header_font = Font(color="FFFFFF", bold=True)

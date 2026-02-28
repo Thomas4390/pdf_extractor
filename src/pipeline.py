@@ -13,14 +13,16 @@ Features:
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Optional
 
 import pandas as pd
 
+from .clients.monday import MondayClient, UploadResult
 from .extractors import (
     AssomptionExtractor,
     BaseExtractor,
@@ -28,10 +30,8 @@ from .extractors import (
     IDCStatementExtractor,
     UVExtractor,
 )
-from .clients.monday import MondayClient, UploadResult
-from .utils.data_unifier import BoardType, DataUnifier
 from .utils.advisor_matcher import get_advisor_matcher
-
+from .utils.data_unifier import BoardType, DataUnifier
 
 # =============================================================================
 # CONFIGURATION
@@ -40,7 +40,7 @@ from .utils.advisor_matcher import get_advisor_matcher
 DEFAULT_MAX_PARALLEL = 6
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     """Supported PDF source types."""
     UV = "UV"
     IDC = "IDC"
@@ -248,7 +248,7 @@ class Pipeline:
     # Source detection
     # -------------------------------------------------------------------------
 
-    def detect_source(self, pdf_path: Union[str, Path]) -> SourceType:
+    def detect_source(self, pdf_path: str | Path) -> SourceType:
         """
         Auto-detect the source type from PDF path.
 
@@ -281,8 +281,8 @@ class Pipeline:
 
     async def process_pdf(
         self,
-        pdf_path: Union[str, Path],
-        source: Optional[Union[str, SourceType]] = None,
+        pdf_path: str | Path,
+        source: Optional[str | SourceType] = None,
         force_refresh: bool = False,
     ) -> PipelineResult:
         """
@@ -416,8 +416,8 @@ class Pipeline:
 
     async def process_batch(
         self,
-        pdf_paths: list[Union[str, Path]],
-        source: Optional[Union[str, SourceType]] = None,
+        pdf_paths: list[str | Path],
+        source: Optional[str | SourceType] = None,
         force_refresh: bool = False,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> BatchResult:
@@ -439,7 +439,7 @@ class Pipeline:
         batch_result = BatchResult()
 
         # Create tasks for all PDFs
-        async def process_with_callback(idx: int, path: Union[str, Path]) -> PipelineResult:
+        async def process_with_callback(idx: int, path: str | Path) -> PipelineResult:
             result = await self.process_pdf(path, source=source, force_refresh=force_refresh)
             if progress_callback:
                 progress_callback(idx + 1, len(pdf_paths), Path(path).name)
@@ -463,8 +463,8 @@ class Pipeline:
 
     def process_batch_sync(
         self,
-        pdf_paths: list[Union[str, Path]],
-        source: Optional[Union[str, SourceType]] = None,
+        pdf_paths: list[str | Path],
+        source: Optional[str | SourceType] = None,
         force_refresh: bool = False,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> BatchResult:
@@ -484,7 +484,7 @@ class Pipeline:
 
     async def upload_to_monday(
         self,
-        result: Union[PipelineResult, BatchResult],
+        result: PipelineResult | BatchResult,
         board_id: int,
         group_id: Optional[str] = None,
         create_missing_columns: bool = True,
@@ -539,7 +539,7 @@ class Pipeline:
 
     def upload_to_monday_sync(
         self,
-        result: Union[PipelineResult, BatchResult],
+        result: PipelineResult | BatchResult,
         board_id: int,
         group_id: Optional[str] = None,
         create_missing_columns: bool = True,
@@ -560,7 +560,7 @@ class Pipeline:
     # Utility methods
     # -------------------------------------------------------------------------
 
-    def is_cached(self, pdf_path: Union[str, Path], source: Optional[SourceType] = None) -> bool:
+    def is_cached(self, pdf_path: str | Path, source: Optional[SourceType] = None) -> bool:
         """Check if a PDF's extraction is cached."""
         if source is None:
             try:
@@ -573,7 +573,7 @@ class Pipeline:
             return extractor.is_cached(pdf_path)
         return False
 
-    def invalidate_cache(self, pdf_path: Union[str, Path], source: Optional[SourceType] = None) -> bool:
+    def invalidate_cache(self, pdf_path: str | Path, source: Optional[SourceType] = None) -> bool:
         """Remove a PDF's cached extraction."""
         if source is None:
             try:
@@ -627,7 +627,7 @@ def get_pipeline(
 
 
 async def extract_pdf(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     source: Optional[str] = None,
 ) -> pd.DataFrame:
     """
@@ -650,7 +650,7 @@ async def extract_pdf(
 
 
 def extract_pdf_sync(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     source: Optional[str] = None,
 ) -> pd.DataFrame:
     """Synchronous wrapper for extract_pdf."""

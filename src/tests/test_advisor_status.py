@@ -9,7 +9,6 @@ Also tests cloud storage synchronization to Google Sheets.
 
 import os
 import sys
-from datetime import date
 from pathlib import Path
 
 # Add project root to path
@@ -18,17 +17,16 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 from src.clients.monday import MondayClient
 from src.utils.advisor_status import (
-    AdvisorStatusCalculator,
-    AdvisorStatusHistoryStore,
-    load_advisor_history,
-    get_advisor_status,
     clear_advisor_status_cache,
-    get_status_history_store,
+    get_advisor_status,
     get_advisor_status_history,
+    get_status_history_store,
+    load_advisor_history,
     save_advisor_status_to_cloud,
 )
 from src.utils.aggregator import METRICS_BOARD_CONFIG
@@ -150,7 +148,7 @@ def test_cloud_storage():
     # Get the status history store
     store = get_status_history_store()
 
-    print(f"\nCloud Storage Status:")
+    print("\nCloud Storage Status:")
     print(f"  Configured: {store.is_configured}")
     if store.configuration_error:
         print(f"  Error: {store.configuration_error}")

@@ -11,9 +11,9 @@ Supports two extraction modes:
 
 import logging
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
-from ..models.idc_statement import IDCStatementReport, IDCStatementReportParsed, IDCTrailingFeeRaw
+from ..models.idc_statement import IDCStatementReport, IDCStatementReportParsed
 from ..utils.config import settings
 from ..utils.model_registry import ExtractionMode, get_model_config
 from ..utils.pdf import get_pdf_hash
@@ -119,7 +119,7 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
 
     async def extract_direct(
         self,
-        pdf_path: Union[str, Path],
+        pdf_path: str | Path,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
         """
@@ -210,7 +210,7 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
 
     async def extract_direct_validated(
         self,
-        pdf_path: Union[str, Path],
+        pdf_path: str | Path,
         force_refresh: bool = False,
     ) -> IDCStatementReportParsed:
         """
@@ -226,22 +226,22 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
         data = await self.extract_direct(pdf_path, force_refresh)
         return IDCStatementReportParsed(**data)
 
-    def is_direct_cached(self, pdf_path: Union[str, Path]) -> bool:
+    def is_direct_cached(self, pdf_path: str | Path) -> bool:
         """Check if a PDF's direct extraction is cached."""
         pdf_hash = get_pdf_hash(pdf_path) + "_direct"
         return self.cache.exists(pdf_hash)
 
-    def invalidate_direct_cache(self, pdf_path: Union[str, Path]) -> bool:
+    def invalidate_direct_cache(self, pdf_path: str | Path) -> bool:
         """Remove a PDF's cached direct extraction."""
         pdf_hash = get_pdf_hash(pdf_path) + "_direct"
         return self.cache.invalidate(pdf_hash)
 
 
 async def extract_idc_statement_report(
-    pdf_path: Union[str, Path],
+    pdf_path: str | Path,
     force_refresh: bool = False,
     raw: bool = False,
-) -> Union[IDCStatementReport, IDCStatementReportParsed]:
+) -> IDCStatementReport | IDCStatementReportParsed:
     """
     Convenience function to extract an IDC Statement report.
 
