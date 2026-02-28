@@ -205,22 +205,23 @@ class OpenRouterClient:
         print(f"   {c['bold']}Total cost:  ${s['total_cost']:.6f}{c['reset']}")
         print(f"{c['cyan']}{'═' * 60}{c['reset']}\n")
 
-    def _encode_image(self, image_bytes: bytes) -> str:
+    def _encode_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
         """Encode image bytes to base64 data URL."""
         b64 = base64.b64encode(image_bytes).decode("utf-8")
-        return f"data:image/png;base64,{b64}"
+        return f"data:{mime_type};base64,{b64}"
 
     def _build_messages(
         self,
         system_prompt: str,
         user_prompt: str,
         images: list[bytes] | None = None,
+        mime_type: str = "image/jpeg",
     ) -> list[dict]:
         """Build the messages payload for the API request."""
         if images:
             # Build image content blocks
             image_contents = [
-                {"type": "image_url", "image_url": {"url": self._encode_image(img)}}
+                {"type": "image_url", "image_url": {"url": self._encode_image(img, mime_type)}}
                 for img in images
             ]
             return [
@@ -257,6 +258,7 @@ class OpenRouterClient:
         temperature: float,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> dict[str, Any]:
         """Make a single API request."""
         payload = {
@@ -276,7 +278,8 @@ class OpenRouterClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        request_timeout = timeout if timeout is not None else self.timeout
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
             response = await client.post(
                 self.BASE_URL,
                 headers=self.headers,
@@ -348,6 +351,7 @@ class OpenRouterClient:
         model: str,
         model_name: str = "model",
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> tuple[Optional[dict[str, Any]], Optional[Exception], Optional[str]]:
         """
         Try extraction with a specific model.
@@ -356,7 +360,7 @@ class OpenRouterClient:
             Tuple of (result, error, raw_content)
         """
         try:
-            result = await self._make_request(messages, temperature, model=model, max_tokens=max_tokens)
+            result = await self._make_request(messages, temperature, model=model, max_tokens=max_tokens, timeout=timeout)
 
             choices = result.get("choices", [])
             if not choices:
@@ -386,17 +390,21 @@ class OpenRouterClient:
         max_retries: Optional[int] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        mime_type: str = "image/jpeg",
+        timeout: Optional[float] = None,
     ) -> dict[str, Any]:
         """
         Send images to the VLM and extract structured JSON data.
 
         Args:
-            images: List of PNG images as bytes
+            images: List of images as bytes
             system_prompt: System instructions (cached by OpenRouter)
             user_prompt: User prompt describing the extraction task
             max_retries: Number of retry attempts (defaults to settings)
             temperature: Model temperature (defaults to settings)
             max_tokens: Maximum tokens for response (defaults to settings.vlm_max_tokens)
+            mime_type: MIME type for the images (default: image/jpeg)
+            timeout: Request timeout in seconds (defaults to self.timeout)
 
         Returns:
             Parsed JSON response from the model
@@ -408,7 +416,7 @@ class OpenRouterClient:
         temperature = temperature if temperature is not None else settings.vlm_temperature
         max_tokens = max_tokens or settings.vlm_max_tokens
 
-        messages = self._build_messages(system_prompt, user_prompt, images)
+        messages = self._build_messages(system_prompt, user_prompt, images, mime_type=mime_type)
         last_error: Optional[Exception] = None
         last_content: Optional[str] = None
 
@@ -425,7 +433,7 @@ class OpenRouterClient:
                     f"(model={self.model}, temp={temperature:.2f}, max_tokens={max_tokens})"
                 )
 
-                result = await self._make_request(messages, temperature, max_tokens=max_tokens)
+                result = await self._make_request(messages, temperature, max_tokens=max_tokens, timeout=timeout)
 
                 choices = result.get("choices", [])
                 if not choices:
@@ -503,7 +511,7 @@ class OpenRouterClient:
             logger.info(f"Attempting fallback model: {self.fallback_model}")
 
             result, error, content = await self._try_model_extraction(
-                messages, temperature, self.fallback_model, "fallback", max_tokens=max_tokens
+                messages, temperature, self.fallback_model, "fallback", max_tokens=max_tokens, timeout=timeout
             )
 
             if result is not None:
@@ -541,7 +549,7 @@ class OpenRouterClient:
 
             # Keep images for vision models (Gemini 3 Pro supports vision)
             result, error, content = await self._try_model_extraction(
-                messages, temperature, self.secondary_fallback_model, "secondary", max_tokens=max_tokens
+                messages, temperature, self.secondary_fallback_model, "secondary", max_tokens=max_tokens, timeout=timeout
             )
 
             if result is not None:
@@ -591,6 +599,8 @@ class OpenRouterClient:
         max_retries: Optional[int] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        mime_type: str = "image/jpeg",
+        timeout: Optional[float] = None,
     ) -> Any:
         """
         Extract data and validate against a Pydantic model.
@@ -599,13 +609,15 @@ class OpenRouterClient:
         Will retry on validation errors.
 
         Args:
-            images: List of PNG images as bytes
+            images: List of images as bytes
             system_prompt: System instructions
             user_prompt: User prompt
             model_class: Pydantic model class for validation
             max_retries: Number of retry attempts
             temperature: Model temperature
             max_tokens: Maximum tokens for response (defaults to settings.vlm_max_tokens)
+            mime_type: MIME type for the images (default: image/jpeg)
+            timeout: Request timeout in seconds (defaults to self.timeout)
 
         Returns:
             Validated Pydantic model instance
@@ -618,7 +630,7 @@ class OpenRouterClient:
         temperature = temperature if temperature is not None else settings.vlm_temperature
         max_tokens = max_tokens or settings.vlm_max_tokens
 
-        messages = self._build_messages(system_prompt, user_prompt, images)
+        messages = self._build_messages(system_prompt, user_prompt, images, mime_type=mime_type)
         last_error: Optional[Exception] = None
         last_content: Optional[str] = None  # Track raw content for debug
 
@@ -629,7 +641,7 @@ class OpenRouterClient:
                     f"(max_tokens={max_tokens})"
                 )
 
-                result = await self._make_request(messages, temperature, max_tokens=max_tokens)
+                result = await self._make_request(messages, temperature, max_tokens=max_tokens, timeout=timeout)
 
                 # Extract content from response
                 choices = result.get("choices", [])
@@ -752,7 +764,7 @@ class OpenRouterClient:
             logger.info(f"Attempting fallback model: {self.fallback_model}")
 
             try:
-                result = await self._make_request(messages, temperature, model=self.fallback_model, max_tokens=max_tokens)
+                result = await self._make_request(messages, temperature, model=self.fallback_model, max_tokens=max_tokens, timeout=timeout)
 
                 choices = result.get("choices", [])
                 if not choices:

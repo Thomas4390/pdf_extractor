@@ -134,9 +134,6 @@ def init_session_state() -> None:
         "data_modified": False,
         "upload_key_counter": 0,  # Counter to reset file uploader widget
 
-        # Advisor management (Phase 2)
-        "advisor_matcher": None,
-
         # Verification (Phase 3)
         "verification_tolerance": 10.0,
 

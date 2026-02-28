@@ -281,29 +281,6 @@ class DataUnifier:
 
         return df_grouped
 
-    def _calculate_commission(
-        self,
-        premium: float,
-        sharing_rate: float,
-        commission_rate: float
-    ) -> float:
-        """
-        Calcule la commission selon la formule universelle.
-
-        commission = prime × taux_partage × taux_commission
-
-        Args:
-            premium: Prime annualisée
-            sharing_rate: Taux de partage (0.0-1.0)
-            commission_rate: Taux de commission (0.0-1.0)
-
-        Returns:
-            Montant de la commission
-        """
-        if pd.isna(premium) or pd.isna(sharing_rate) or pd.isna(commission_rate):
-            return None
-        return round(premium * sharing_rate * commission_rate, 2)
-
     def _clean_currency(self, value) -> Optional[float]:
         """
         Nettoie et convertit les valeurs monétaires en float.
@@ -635,9 +612,9 @@ class DataUnifier:
         rows = []
         filtered_nombre_count = 0
         for prop in report.propositions:
-            # Filtrer les lignes où nombre == 1.0 (lignes totaux/doublons)
+            # Ne garder que les lignes où nombre == 0.4
             nombre_val = self._decimal_to_float(prop.nombre)
-            if nombre_val is not None and nombre_val == 1.0:
+            if nombre_val is None or nombre_val != 0.4:
                 filtered_nombre_count += 1
                 continue
 
@@ -692,7 +669,7 @@ class DataUnifier:
             rows.append(row)
 
         if filtered_nombre_count > 0:
-            print(f"  ℹ️  IDC: {filtered_nombre_count} ligne(s) exclue(s) (nombre == 1)")
+            print(f"  ℹ️  IDC: {filtered_nombre_count} ligne(s) exclue(s) (nombre != 0.4)")
 
         return pd.DataFrame(rows)
 

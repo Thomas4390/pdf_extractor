@@ -14,9 +14,11 @@ def pdf_to_images(
     pdf_path: str | Path,
     dpi: int = 200,
     pages: list[int] | None = None,
-) -> list[bytes]:
+    image_format: str = "jpeg",
+    jpeg_quality: int = 85,
+) -> tuple[list[bytes], str]:
     """
-    Convert a PDF file to a list of PNG images.
+    Convert a PDF file to a list of images.
 
     Each page is rendered as a separate image at the specified DPI.
 
@@ -24,9 +26,11 @@ def pdf_to_images(
         pdf_path: Path to the PDF file
         dpi: Resolution for rendering (default: 200)
         pages: List of page indices to render (0-indexed). If None, renders all pages.
+        image_format: Output format - "jpeg" (smaller) or "png" (lossless)
+        jpeg_quality: JPEG quality 1-100 (only used when image_format="jpeg")
 
     Returns:
-        List of PNG images as bytes
+        Tuple of (list of images as bytes, MIME type string)
 
     Raises:
         FileNotFoundError: If the PDF file doesn't exist
@@ -39,6 +43,16 @@ def pdf_to_images(
     doc = fitz.open(pdf_path)
     images: list[bytes] = []
 
+    if image_format not in ("jpeg", "png"):
+        raise ValueError(
+            f"Unsupported image_format '{image_format}'. Must be 'jpeg' or 'png'."
+        )
+
+    if image_format == "jpeg":
+        mime_type = "image/jpeg"
+    else:
+        mime_type = "image/png"
+
     try:
         # Calculate zoom factor to achieve target DPI
         # PDF default is 72 DPI
@@ -49,11 +63,14 @@ def pdf_to_images(
             if pages is not None and i not in pages:
                 continue
             pixmap = page.get_pixmap(matrix=matrix)
-            images.append(pixmap.tobytes("png"))
+            if image_format == "jpeg":
+                images.append(pixmap.tobytes("jpeg", jpg_quality=jpeg_quality))
+            else:
+                images.append(pixmap.tobytes("png"))
     finally:
         doc.close()
 
-    return images
+    return images, mime_type
 
 
 def get_pdf_hash(pdf_path: str | Path) -> str:

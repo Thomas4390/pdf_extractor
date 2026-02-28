@@ -104,6 +104,7 @@ def load_source_data() -> bool:
         # Continue anyway - status will default to "Active"
 
     success = True
+    failed_sources: list[str] = []
     for idx, (source_key, board_id) in enumerate(selected_sources.items()):
         config = SOURCE_BOARDS.get(source_key)
         if not config:
@@ -122,15 +123,26 @@ def load_source_data() -> bool:
         except Exception as e:
             st.error(f"Erreur lors du chargement de {config.display_name}: {e}")
             source_data[source_key] = pd.DataFrame()
+            failed_sources.append(config.display_name)
             success = False
 
     # Complete progress
     progress_bar.progress(1.0)
-    status_text.text("✅ Données chargées!")
+    if failed_sources:
+        status_text.text(f"⚠️ Données chargées avec erreurs ({', '.join(failed_sources)})")
+    else:
+        status_text.text("✅ Données chargées!")
 
     # Store raw source data
     st.session_state.agg_source_data = source_data
     st.session_state.agg_data_loaded = True
+
+    # Persist warning about failed sources for downstream steps
+    if failed_sources:
+        st.warning(
+            f"Sources en erreur : {', '.join(failed_sources)}. "
+            "Les données de ces sources sont absentes de l'agrégation."
+        )
 
     # Clear progress indicators after a short delay
     import time

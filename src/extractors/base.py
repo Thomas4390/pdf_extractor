@@ -27,6 +27,8 @@ from ..utils.pdf import get_pdf_hash, get_pdf_page_count, pdf_to_images, pdf_to_
 
 T = TypeVar("T", bound=BaseModel)
 
+MAX_PAGES_PER_CHUNK = 8
+
 
 class BaseExtractor(ABC, Generic[T]):
     """
@@ -121,7 +123,7 @@ class BaseExtractor(ABC, Generic[T]):
         """
         return get_model_config(self.document_type).mode
 
-    def get_images(self, pdf_path: str | Path) -> list[bytes]:
+    def get_images(self, pdf_path: str | Path) -> tuple[list[bytes], str]:
         """
         Convert PDF to images for VLM processing.
 
@@ -132,7 +134,7 @@ class BaseExtractor(ABC, Generic[T]):
             pdf_path: Path to the PDF file
 
         Returns:
-            List of PNG images as bytes
+            Tuple of (list of images as bytes, MIME type string)
         """
         pdf_path = Path(pdf_path)
         total_pages = get_pdf_page_count(pdf_path)
@@ -144,14 +146,12 @@ class BaseExtractor(ABC, Generic[T]):
         )
 
         if pages == list(range(total_pages)):
-            # All pages - use default behavior
-            images = pdf_to_images(pdf_path, dpi=settings.pdf_dpi)
+            images, mime_type = pdf_to_images(pdf_path, dpi=settings.pdf_dpi)
         else:
-            # Specific pages
-            images = pdf_to_images(pdf_path, dpi=settings.pdf_dpi, pages=pages)
+            images, mime_type = pdf_to_images(pdf_path, dpi=settings.pdf_dpi, pages=pages)
 
-        logger.info(f"[{self.document_type}] Converted {len(images)} page(s) to images")
-        return images
+        logger.info(f"[{self.document_type}] Converted {len(images)} page(s) to {mime_type} images")
+        return images, mime_type
 
     def get_text(self, pdf_path: str | Path) -> str:
         """
@@ -184,6 +184,48 @@ class BaseExtractor(ABC, Generic[T]):
 
         logger.info(f"[{self.document_type}] Extracted {len(text)} characters of text")
         return text
+
+    def _merge_chunked_results(self, results: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Merge results from multiple chunked VLM calls.
+
+        Takes the first result as base. For fields that are lists,
+        concatenates lists from all chunks. Scalar fields are authoritative
+        from the first chunk (subsequent chunks' scalars are ignored).
+
+        Args:
+            results: List of raw dict results from each chunk
+
+        Returns:
+            Merged dict combining all chunk data
+        """
+        if not results:
+            return {}
+        if len(results) == 1:
+            return results[0]
+
+        merged = dict(results[0])
+        for chunk_idx, subsequent in enumerate(results[1:], start=2):
+            for key, value in subsequent.items():
+                if isinstance(value, list) and isinstance(merged.get(key), list):
+                    before = len(merged[key])
+                    merged[key] = merged[key] + value
+                    logger.debug(
+                        f"[merge] '{key}': chunk {chunk_idx} added {len(value)} items "
+                        f"({before} → {len(merged[key])})"
+                    )
+
+        # Log summary of merged list fields
+        list_summary = {
+            k: len(v) for k, v in merged.items() if isinstance(v, list)
+        }
+        if list_summary:
+            logger.info(
+                f"[merge] Merged {len(results)} chunks — "
+                f"list fields: {list_summary}"
+            )
+
+        return merged
 
     async def extract(
         self,
@@ -221,14 +263,65 @@ class BaseExtractor(ABC, Generic[T]):
 
         if mode == ExtractionMode.VISION:
             # Vision mode: send PDF pages as images to VLM
-            images = self.get_images(pdf_path)
-            result = await self.client.validate_and_extract(
-                images=images,
-                system_prompt=self.system_prompt,
-                user_prompt=self.user_prompt,
-                model_class=self.model_class,
-                max_tokens=model_config.max_tokens,
+            images, mime_type = self.get_images(pdf_path)
+
+            if not images:
+                raise ValueError(
+                    f"[{self.document_type}] No pages to extract from '{pdf_path.name}'"
+                )
+
+            # Adaptive timeout: scale with number of pages, capped at 5x base timeout
+            max_timeout = settings.vlm_timeout * 5
+            adaptive_timeout = min(
+                max(
+                    settings.vlm_timeout,
+                    len(images) * settings.vlm_timeout_per_page,
+                ),
+                max_timeout,
             )
+            logger.info(
+                f"[{self.document_type}] Adaptive timeout: {adaptive_timeout:.0f}s "
+                f"for {len(images)} pages (cap: {max_timeout:.0f}s)"
+            )
+
+            if len(images) > MAX_PAGES_PER_CHUNK:
+                # Chunk pages into batches and merge results
+                chunks = [
+                    images[i : i + MAX_PAGES_PER_CHUNK]
+                    for i in range(0, len(images), MAX_PAGES_PER_CHUNK)
+                ]
+                logger.info(
+                    f"[{self.document_type}] Splitting {len(images)} pages into "
+                    f"{len(chunks)} chunks of up to {MAX_PAGES_PER_CHUNK} pages"
+                )
+                chunk_results: list[dict[str, Any]] = []
+                for idx, chunk in enumerate(chunks):
+                    logger.info(
+                        f"[{self.document_type}] Processing chunk {idx + 1}/{len(chunks)} "
+                        f"({len(chunk)} pages)"
+                    )
+                    raw = await self.client.extract_with_vision(
+                        images=chunk,
+                        system_prompt=self.system_prompt,
+                        user_prompt=self.user_prompt,
+                        max_tokens=model_config.max_tokens,
+                        mime_type=mime_type,
+                        timeout=adaptive_timeout,
+                    )
+                    chunk_results.append(raw)
+
+                merged = self._merge_chunked_results(chunk_results)
+                result = self.model_class(**merged)
+            else:
+                result = await self.client.validate_and_extract(
+                    images=images,
+                    system_prompt=self.system_prompt,
+                    user_prompt=self.user_prompt,
+                    model_class=self.model_class,
+                    max_tokens=model_config.max_tokens,
+                    mime_type=mime_type,
+                    timeout=adaptive_timeout,
+                )
 
         elif mode == ExtractionMode.TEXT:
             # Text mode: extract text via PyMuPDF and send to LLM
@@ -320,11 +413,60 @@ class BaseExtractor(ABC, Generic[T]):
         model_config = get_model_config(self.document_type)
 
         if mode == ExtractionMode.VISION:
-            images = self.get_images(pdf_path)
+            images, mime_type = self.get_images(pdf_path)
+
+            if not images:
+                raise ValueError(
+                    f"[{self.document_type}] No pages to extract from '{pdf_path.name}'"
+                )
+
+            # Adaptive timeout: scale with number of pages, capped at 5x base timeout
+            max_timeout = settings.vlm_timeout * 5
+            adaptive_timeout = min(
+                max(
+                    settings.vlm_timeout,
+                    len(images) * settings.vlm_timeout_per_page,
+                ),
+                max_timeout,
+            )
+            logger.info(
+                f"[{self.document_type}] extract_raw adaptive timeout: {adaptive_timeout:.0f}s "
+                f"for {len(images)} pages"
+            )
+
+            if len(images) > MAX_PAGES_PER_CHUNK:
+                chunks = [
+                    images[i : i + MAX_PAGES_PER_CHUNK]
+                    for i in range(0, len(images), MAX_PAGES_PER_CHUNK)
+                ]
+                logger.info(
+                    f"[{self.document_type}] extract_raw splitting {len(images)} pages into "
+                    f"{len(chunks)} chunks"
+                )
+                chunk_results: list[dict[str, Any]] = []
+                for idx, chunk in enumerate(chunks):
+                    logger.info(
+                        f"[{self.document_type}] extract_raw chunk {idx + 1}/{len(chunks)} "
+                        f"({len(chunk)} pages)"
+                    )
+                    raw = await self.client.extract_with_vision(
+                        images=chunk,
+                        system_prompt=self.system_prompt,
+                        user_prompt=self.user_prompt,
+                        max_tokens=model_config.max_tokens,
+                        mime_type=mime_type,
+                        timeout=adaptive_timeout,
+                    )
+                    chunk_results.append(raw)
+                return self._merge_chunked_results(chunk_results)
+
             return await self.client.extract_with_vision(
                 images=images,
                 system_prompt=self.system_prompt,
                 user_prompt=self.user_prompt,
+                max_tokens=model_config.max_tokens,
+                mime_type=mime_type,
+                timeout=adaptive_timeout,
             )
 
         elif mode == ExtractionMode.TEXT:
@@ -333,6 +475,7 @@ class BaseExtractor(ABC, Generic[T]):
             return await self.client.extract_with_text(
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt_with_text,
+                max_tokens=model_config.max_tokens,
             )
 
         elif mode == ExtractionMode.PDF_NATIVE:
@@ -341,6 +484,7 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=self.user_prompt,
                 ocr_engine=model_config.ocr_engine.value,
+                max_tokens=model_config.max_tokens,
             )
 
         elif mode == ExtractionMode.HYBRID:
@@ -367,6 +511,7 @@ class BaseExtractor(ABC, Generic[T]):
                 system_prompt=self.system_prompt,
                 user_prompt=user_prompt_with_text,
                 model=analysis_model,
+                max_tokens=model_config.max_tokens,
             )
 
         else:

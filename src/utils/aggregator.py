@@ -805,7 +805,11 @@ def filter_by_date(
         return df
 
     if date_column not in df.columns:
-        # Return unfiltered if column doesn't exist
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            f"Date column '{date_column}' not found in DataFrame columns {list(df.columns)}. "
+            "Returning unfiltered data."
+        )
         return df
 
     # Make a copy to avoid modifying original
@@ -848,6 +852,11 @@ def filter_by_flexible_period(
         return df
 
     if date_column not in df.columns:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            f"Date column '{date_column}' not found in DataFrame columns {list(df.columns)}. "
+            "Returning unfiltered data."
+        )
         return df
 
     df = df.copy()

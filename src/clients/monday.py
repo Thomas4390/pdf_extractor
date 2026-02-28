@@ -169,9 +169,6 @@ class MondayClient:
             "API-Version": "2025-04"
         }
 
-        # Cache for column mappings
-        self._column_cache: dict[str, dict[str, str]] = {}
-
     # -------------------------------------------------------------------------
     # Low-level API methods
     # -------------------------------------------------------------------------
