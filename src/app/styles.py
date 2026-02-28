@@ -229,12 +229,6 @@ def get_css() -> str:
         border-radius: 12px;
         padding: 1rem;
     }
-    .warning-box {
-        background: linear-gradient(135deg, rgba(237, 137, 54, 0.1) 0%, rgba(237, 137, 54, 0.05) 100%);
-        border: 1px solid var(--warning);
-        border-radius: 12px;
-        padding: 1rem;
-    }
 
     /* ===========================================
        STEPPER STYLES
@@ -551,41 +545,6 @@ def get_css() -> str:
         color: var(--text-primary);
     }
 
-    /* Source card for aggregation sources */
-    .source-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 1rem;
-        margin-bottom: 0.75rem;
-        transition: all 0.2s ease;
-    }
-    .source-card:hover {
-        border-color: var(--accent-500);
-        box-shadow: var(--shadow-sm);
-    }
-    .source-card.active {
-        border-color: var(--accent-500);
-        background: rgba(56, 178, 172, 0.05);
-    }
-    .source-card .source-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 0.5rem;
-    }
-    .source-card .source-name {
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    .source-card .source-column {
-        font-size: 0.8rem;
-        color: var(--accent-600);
-        background: rgba(56, 178, 172, 0.1);
-        padding: 2px 8px;
-        border-radius: 4px;
-    }
-
     /* Summary stats row */
     .summary-stats {
         display: flex;
@@ -613,10 +572,6 @@ def get_css() -> str:
     /* ===========================================
        MODE TOGGLE BUTTONS
        =========================================== */
-
-    .mode-toggle-container {
-        display: none; /* Hidden - using Streamlit buttons instead */
-    }
 
     /* Style the mode toggle Streamlit buttons */
     [data-testid="column"] .stButton > button {

@@ -13,7 +13,7 @@ from typing import Optional
 import streamlit as st
 
 from src.pipeline import Pipeline
-from src.utils.aggregator import SOURCE_BOARDS, DATA_BOARD_ID
+from src.utils.aggregator import DATA_BOARD_ID, SOURCE_BOARDS
 from src.utils.data_unifier import BoardType
 
 
@@ -111,16 +111,12 @@ def init_session_state() -> None:
 
         # Processing state
         "is_processing": False,
-        "processing_progress": 0.0,
-        "current_file": "",
 
         # Monday.com
         "monday_api_key": get_secret("MONDAY_API_KEY"),
         "monday_boards": None,
         "selected_board_id": None,
-        "selected_group_id": None,
         "selected_board_type": BoardType.HISTORICAL_PAYMENTS,
-        "monday_groups": None,
         "upload_result": None,
         "is_uploading": False,
         "_current_board_name": "",
@@ -144,9 +140,6 @@ def init_session_state() -> None:
         # Verification (Phase 3)
         "verification_tolerance": 10.0,
 
-        # UI state
-        "show_columns": False,
-
         # Aggregation mode (Phase 5)
         "app_mode": "extraction",  # "extraction", "aggregation", or "column_conversion"
 
@@ -169,7 +162,6 @@ def init_session_state() -> None:
         "agg_combined_data": None,  # Combined DataFrame
         "agg_edited_data": None,  # Edited DataFrame (may differ from combined)
         "agg_upsert_result": None,
-        "agg_is_loading": False,
         "agg_is_executing": False,
         "agg_use_custom_group": False,  # Toggle for manual group name
         "agg_custom_group_name": "",  # Custom group name input
@@ -182,7 +174,6 @@ def init_session_state() -> None:
         "agg_validation_passed": True,  # Validation status for pre-upload check
 
         # Advisor provisioning
-        "provisioning_in_progress": False,
         "last_provisioning_result": None,
 
         # Reconciliation (cross-board Paiement Historique ↔ Ventes/Production)
@@ -216,10 +207,10 @@ def reset_pipeline() -> None:
     """Reset pipeline state to start over."""
     keys_to_reset = [
         'stage', 'uploaded_files', 'temp_pdf_paths', 'extraction_results',
-        'batch_result', 'combined_data', 'extraction_usage', 'is_processing', 'processing_progress',
-        'current_file', 'selected_board_id', 'selected_group_id', 'monday_groups',
+        'batch_result', 'combined_data', 'extraction_usage', 'is_processing',
+        'selected_board_id',
         'upload_result', 'is_uploading', 'selected_source', 'data_modified',
-        'show_columns', '_current_board_name', 'selected_model', 'file_group_overrides',
+        '_current_board_name', 'selected_model', 'file_group_overrides',
         'extraction_error', 'extraction_traceback',
         'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
         'reconciliation_result', 'reconciliation_sales_df',
@@ -233,9 +224,9 @@ def reset_pipeline() -> None:
             st.session_state[key] = []
         elif key in ['extraction_results', 'file_group_overrides']:
             st.session_state[key] = {}
-        elif key in ['is_processing', 'is_uploading', 'data_modified', 'show_columns', 'duplicate_check_done', 'reconciliation_sales_loaded', 'reconciliation_enabled']:
+        elif key in ['is_processing', 'is_uploading', 'data_modified', 'duplicate_check_done', 'reconciliation_sales_loaded', 'reconciliation_enabled']:
             st.session_state[key] = False
-        elif key in ['processing_progress', 'duplicate_count']:
+        elif key == 'duplicate_count':
             st.session_state[key] = 0
         else:
             st.session_state[key] = None
@@ -257,7 +248,6 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_combined_data = None
     st.session_state.agg_edited_data = None
     st.session_state.agg_upsert_result = None
-    st.session_state.agg_is_loading = False
     st.session_state.agg_is_executing = False
     st.session_state.agg_use_custom_group = False
     st.session_state.agg_custom_group_name = ""

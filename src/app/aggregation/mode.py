@@ -7,42 +7,42 @@ Provides the 3-step wizard interface for data aggregation:
 3. Execute upsert
 """
 
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
-from datetime import date
-from src.utils.aggregator import (
-    DatePeriod,
-    PeriodType,
-    FlexiblePeriod,
-    SOURCE_BOARDS,
-    DATA_BOARD_ID,
-    get_group_name_for_period,
-    get_period_date_range,
+from src.app.aggregation.charts import render_charts_tab
+from src.app.aggregation.execution import (
+    apply_metrics_to_aggregation,
+    execute_aggregation_upsert,
+    filter_and_aggregate_data,
+    load_source_data,
 )
+from src.app.aggregation.exporters import render_export_buttons
+from src.app.aggregation.validators import render_validation_report, validate_dataframe
 from src.app.aggregation_ui import (
-    render_target_board_selection,
-    render_source_data_preview,
     render_combined_preview,
     render_editable_preview,
-    render_execution_summary,
     render_execution_result,
+    render_execution_summary,
     render_navigation_buttons,
+    render_source_data_preview,
 )
-from src.app.aggregation.execution import (
-    load_source_data,
-    filter_and_aggregate_data,
-    execute_aggregation_upsert,
-    apply_metrics_to_aggregation,
-)
-from src.app.aggregation.charts import render_charts_tab
-from src.app.aggregation.exporters import render_export_buttons
-from src.app.aggregation.validators import validate_dataframe, render_validation_report
 from src.app.utils.board_utils import (
-    get_background_aggregation_status,
     apply_background_aggregation_data,
-    start_background_aggregation_load,
+    get_background_aggregation_status,
+    get_board_name_by_id,
     reset_background_aggregation_data,
+    start_background_aggregation_load,
+)
+from src.utils.aggregator import (
+    DATA_BOARD_ID,
+    SOURCE_BOARDS,
+    DatePeriod,
+    FlexiblePeriod,
+    PeriodType,
+    get_group_name_for_period,
 )
 
 
@@ -60,13 +60,11 @@ def render_aggregation_stepper(current_step: int) -> None:
     ]
 
     cols = st.columns(len(steps))
-    for idx, (num, label, icon) in enumerate(steps):
+    for idx, (_num, label, icon) in enumerate(steps):
         step_num = idx + 1
         with cols[idx]:
             is_current = step_num == current_step
             is_completed = step_num < current_step
-            is_future = step_num > current_step
-
             # Determine CSS class
             if is_current:
                 css_class = "current"
@@ -86,7 +84,7 @@ def render_aggregation_stepper(current_step: int) -> None:
 
             # Add clickable button for completed stages
             if is_completed:
-                if st.button(f"← Retour", key=f"agg_stepper_nav_{step_num}", width="stretch"):
+                if st.button("← Retour", key=f"agg_stepper_nav_{step_num}", width="stretch"):
                     st.session_state.agg_step = step_num
                     st.rerun()
 
@@ -127,11 +125,7 @@ def render_agg_step_1_config() -> None:
     st.session_state.agg_target_board_id = DATA_BOARD_ID
 
     # Show target board
-    target_board_name = f"ID: {DATA_BOARD_ID}"
-    for b in boards:
-        if int(b["id"]) == DATA_BOARD_ID:
-            target_board_name = b["name"]
-            break
+    target_board_name = get_board_name_by_id(boards, DATA_BOARD_ID, f"ID: {DATA_BOARD_ID}")
     st.subheader(f"🎯 Board cible : {target_board_name}")
 
     # Show which sources are configured
@@ -140,11 +134,7 @@ def render_agg_step_1_config() -> None:
     for source_key, board_id in st.session_state.agg_selected_sources.items():
         config = SOURCE_BOARDS.get(source_key)
         if config:
-            board_name = f"ID: {board_id}"
-            for b in boards:
-                if int(b["id"]) == board_id:
-                    board_name = b["name"]
-                    break
+            board_name = get_board_name_by_id(boards, board_id, f"ID: {board_id}")
             source_info.append({
                 "Source": config.display_name,
                 "Board": board_name,
@@ -277,12 +267,11 @@ def render_agg_step_2_period_preview() -> None:
 
     # Tab 1: Monthly
     with period_tabs[0]:
-        month_options = list(DatePeriod)
         current_index = 1  # Default to last month
         if flexible_period.period_type == PeriodType.MONTH:
             try:
                 current_index = flexible_period.months_ago
-            except:
+            except Exception:
                 current_index = 1
 
         selected_month = st.selectbox(
@@ -668,11 +657,7 @@ def render_agg_step_2_period_preview() -> None:
     # Tab 5: Editable upload preview
     with tab_upload:
         # Get target board name
-        target_board_name = "Non sélectionné"
-        for board in boards:
-            if int(board["id"]) == target_board_id:
-                target_board_name = board["name"]
-                break
+        target_board_name = get_board_name_by_id(boards, target_board_id, "Non sélectionné")
 
         if combined_df is not None and not combined_df.empty:
             edited_df = render_editable_preview(
@@ -715,11 +700,7 @@ def render_agg_step_3_execute() -> None:
     combined_df = st.session_state.agg_combined_data
 
     # Get target board name
-    target_board_name = "Unknown"
-    for board in boards:
-        if int(board["id"]) == target_board_id:
-            target_board_name = board["name"]
-            break
+    target_board_name = get_board_name_by_id(boards, target_board_id)
 
     # Get group name - use custom if specified, otherwise flexible period, otherwise legacy
     if st.session_state.get("agg_use_custom_group") and st.session_state.get("agg_custom_group_name"):

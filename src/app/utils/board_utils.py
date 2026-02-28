@@ -13,12 +13,19 @@ import streamlit as st
 
 from src.app.utils.async_helpers import run_async
 
-
 # Global storage for background loading results (thread-safe)
 _background_agg_data: dict = {}
 _background_agg_loading: bool = False
 _background_agg_error: Optional[str] = None
 _background_agg_progress: dict = {}
+
+
+def get_board_name_by_id(boards: list[dict], board_id: int, fallback: str = "Unknown") -> str:
+    """Look up a board name by its ID."""
+    for b in boards:
+        if int(b["id"]) == board_id:
+            return b["name"]
+    return fallback
 
 
 def sort_and_filter_boards(boards: list, search_query: str = "") -> list:
