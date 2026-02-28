@@ -154,7 +154,7 @@ async def test_extraction(
     pdf_hash = get_pdf_hash(pdf_path)
     print(f"  Hash: {pdf_hash[:16]}...")
 
-    images = pdf_to_images(pdf_path)
+    images, _mime = pdf_to_images(pdf_path)
     print(f"  Pages: {len(images)}")
     print(f"  Image sizes: {[len(img)//1024 for img in images]} KB")
 

@@ -90,10 +90,14 @@ class Settings(BaseSettings):
 
     # PDF Processing
     pdf_dpi: int = Field(
-        default=300,
+        default=200,
         ge=72,
         le=600,
         description="DPI for PDF to image conversion",
+    )
+    vlm_timeout_per_page: float = Field(
+        default=60.0,
+        description="Timeout in seconds per page for adaptive VLM timeout calculation",
     )
 
     # Cache Configuration
