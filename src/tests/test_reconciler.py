@@ -497,10 +497,10 @@ def test_reconcile_mixed_police_aggregation():
     r = Reconciler()
 
     hist_df = pd.DataFrame([
-        {"# de Police": "POL001", "Compagnie": "UV", "Texte": "Commission A", "Reçu": 50.0, "Statut": "Payé"},
-        {"# de Police": "POL001", "Compagnie": "UV", "Texte": "Commission B", "Reçu": 50.0, "Statut": "Payé"},
-        {"# de Police": "POL002", "Compagnie": "UV", "Texte": "Boni X", "Reçu": 25.0, "Statut": "Payé"},
-        {"# de Police": "POL002", "Compagnie": "UV", "Texte": "Boni Y", "Reçu": 25.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc", "Texte": "Commission A", "Reçu": 50.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc", "Texte": "Commission B", "Reçu": 50.0, "Statut": "Payé"},
+        {"# de Police": "POL002", "Compagnie": "UV Perso", "Texte": "Boni X", "Reçu": 25.0, "Statut": "Payé"},
+        {"# de Police": "POL002", "Compagnie": "UV Perso", "Texte": "Boni Y", "Reçu": 25.0, "Statut": "Payé"},
     ])
 
     sales_df = pd.DataFrame([
@@ -517,6 +517,82 @@ def test_reconcile_mixed_police_aggregation():
     updates = result.get_sales_updates()
     assert updates["A1"] == {"Reçu 1": 100.0}
     assert updates["B2"] == {"Reçu 2": 50.0}
+
+
+# --- IDC / multi-compagnie text-based classification tests ---
+
+
+def test_classify_idc_uses_text_rules():
+    """IDC lines use text-based rules like any other compagnie."""
+    r = Reconciler()
+
+    c = r.classify_row("Commission 1ère année - Produit X")
+    assert c is not None
+    assert c.recu_field == "Reçu 1"
+    assert c.compare_column == "Com"
+
+    c = r.classify_row("Boni quelque chose")
+    assert c is not None
+    assert c.recu_field == "Reçu 2"
+    assert c.compare_column == "Boni"
+
+    c = r.classify_row("Sur-Com paiement")
+    assert c is not None
+    assert c.recu_field == "Reçu 3"
+    assert c.compare_column == "Sur-Com"
+
+
+def test_reconcile_idc_three_recu_types():
+    """Integration: IDC lines with commission/boni/sur-com map to Reçu 1/2/3."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "IDC",
+            "Texte": "Commission 1ère année - Produit X",
+            "Reçu": 100.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "IDC",
+            "Texte": "Boni annuel",
+            "Reçu": 50.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "IDC",
+            "Texte": "Sur-Com paiement",
+            "Reçu": 30.0,
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": 50.0,
+            "Sur-Com": 30.0,
+            "PA": 1000.0,
+            "item_id": "IDC1",
+            "Conseiller": "Pierre",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    assert result.total_hist_lines == 3
+    assert result.total_groups == 3  # One group per Reçu type
+    assert result.passed == 3
+    assert result.flagged == 0
+
+    updates = result.get_sales_updates()
+    assert updates["IDC1"]["Reçu 1"] == 100.0
+    assert updates["IDC1"]["Reçu 2"] == 50.0
+    assert updates["IDC1"]["Reçu 3"] == 30.0
 
 
 def main():
@@ -540,6 +616,8 @@ def main():
         test_reconcile_empty_hist,
         test_reconcile_within_threshold,
         test_reconcile_mixed_police_aggregation,
+        test_classify_idc_uses_text_rules,
+        test_reconcile_idc_three_recu_types,
     ]
 
     passed = 0
