@@ -25,7 +25,7 @@ def render_advisor_management_tab() -> None:
 
     # Initialize matcher (or reset if outdated version missing required methods)
     required_methods = ['find_advisor', 'update_advisor', 'delete_advisor']
-    if (st.session_state.advisor_matcher is None or
+    if (st.session_state.get("advisor_matcher") is None or
         not all(hasattr(st.session_state.advisor_matcher, m) for m in required_methods)):
         # Reset both the module-level singleton and class-level singleton
         from src.utils import advisor_matcher as am_module
