@@ -30,14 +30,24 @@ logger = logging.getLogger(__name__)
 # Default API URL
 API_URL = "https://api.monday.com/v2"
 
-# Rate limiting
-DEFAULT_BATCH_SIZE = 50
-DEFAULT_MAX_CONCURRENT = 5
-RATE_LIMIT_DELAY = 0.5  # seconds between requests (increased for stability)
+# Rate limiting — defaults from config, with module-level fallbacks
+def _get_monday_config():
+    """Get Monday.com config values from settings."""
+    try:
+        from ..utils.config import get_settings
+        cfg = get_settings()
+        return cfg
+    except Exception:
+        return None
+
+_cfg = _get_monday_config()
+DEFAULT_BATCH_SIZE = _cfg.monday_batch_size if _cfg else 50
+DEFAULT_MAX_CONCURRENT = _cfg.monday_max_concurrent if _cfg else 5
+RATE_LIMIT_DELAY = _cfg.monday_rate_limit_delay if _cfg else 0.5
 
 # Retry configuration for transient server errors (5xx)
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2.0  # seconds
+MAX_RETRIES = _cfg.monday_max_retries if _cfg else 3
+RETRY_BASE_DELAY = _cfg.monday_retry_base_delay if _cfg else 2.0
 
 
 # =============================================================================

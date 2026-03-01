@@ -67,6 +67,7 @@ class BaseExtractor(ABC, Generic[T]):
         self.cache = ExtractionCache(self.cache_dir)
         self._client = client
         self._configured_client: OpenRouterClient | None = None
+        self._last_was_cached: bool = False
 
     @property
     def client(self) -> OpenRouterClient:
@@ -112,6 +113,11 @@ class BaseExtractor(ABC, Generic[T]):
     def document_type(self) -> str:
         """Document type for model registry lookup (e.g., 'UV', 'IDC_STATEMENT')."""
         pass
+
+    @property
+    def last_was_cached(self) -> bool:
+        """Whether the last extraction was served from cache."""
+        return self._last_was_cached
 
     @property
     def extraction_mode(self) -> ExtractionMode:
@@ -251,11 +257,13 @@ class BaseExtractor(ABC, Generic[T]):
         """
         pdf_path = Path(pdf_path)
         pdf_hash = get_pdf_hash(pdf_path)
+        self._last_was_cached = False
 
         # Check cache unless force refresh
         if not force_refresh and settings.cache_enabled:
             cached = self.cache.get(pdf_hash)
             if cached is not None:
+                self._last_was_cached = True
                 return self.model_class(**cached)
 
         mode = self.extraction_mode
@@ -300,14 +308,22 @@ class BaseExtractor(ABC, Generic[T]):
                         f"[{self.document_type}] Processing chunk {idx + 1}/{len(chunks)} "
                         f"({len(chunk)} pages)"
                     )
-                    raw = await self.client.extract_with_vision(
-                        images=chunk,
-                        system_prompt=self.system_prompt,
-                        user_prompt=self.user_prompt,
-                        max_tokens=model_config.max_tokens,
-                        mime_type=mime_type,
-                        timeout=adaptive_timeout,
-                    )
+                    try:
+                        raw = await self.client.extract_with_vision(
+                            images=chunk,
+                            system_prompt=self.system_prompt,
+                            user_prompt=self.user_prompt,
+                            max_tokens=model_config.max_tokens,
+                            mime_type=mime_type,
+                            timeout=adaptive_timeout,
+                        )
+                    except Exception as e:
+                        chunk_start = idx * MAX_PAGES_PER_CHUNK
+                        chunk_end = chunk_start + len(chunk) - 1
+                        raise type(e)(
+                            f"[{self.document_type}] Chunk {idx + 1}/{len(chunks)} "
+                            f"(pages {chunk_start}-{chunk_end}) failed: {e}"
+                        ) from e
                     chunk_results.append(raw)
 
                 merged = self._merge_chunked_results(chunk_results)
@@ -449,14 +465,22 @@ class BaseExtractor(ABC, Generic[T]):
                         f"[{self.document_type}] extract_raw chunk {idx + 1}/{len(chunks)} "
                         f"({len(chunk)} pages)"
                     )
-                    raw = await self.client.extract_with_vision(
-                        images=chunk,
-                        system_prompt=self.system_prompt,
-                        user_prompt=self.user_prompt,
-                        max_tokens=model_config.max_tokens,
-                        mime_type=mime_type,
-                        timeout=adaptive_timeout,
-                    )
+                    try:
+                        raw = await self.client.extract_with_vision(
+                            images=chunk,
+                            system_prompt=self.system_prompt,
+                            user_prompt=self.user_prompt,
+                            max_tokens=model_config.max_tokens,
+                            mime_type=mime_type,
+                            timeout=adaptive_timeout,
+                        )
+                    except Exception as e:
+                        chunk_start = idx * MAX_PAGES_PER_CHUNK
+                        chunk_end = chunk_start + len(chunk) - 1
+                        raise type(e)(
+                            f"[{self.document_type}] extract_raw chunk {idx + 1}/{len(chunks)} "
+                            f"(pages {chunk_start}-{chunk_end}) failed: {e}"
+                        ) from e
                     chunk_results.append(raw)
                 return self._merge_chunked_results(chunk_results)
 

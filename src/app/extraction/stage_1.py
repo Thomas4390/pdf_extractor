@@ -20,6 +20,24 @@ from src.app.utils.date_utils import detect_date_from_filename
 from src.app.utils.navigation import render_breadcrumb, render_stepper
 
 
+def _render_duration_estimate(uploaded_files) -> None:
+    """Show estimated extraction duration based on file sizes."""
+    if not uploaded_files:
+        return
+    total_bytes = sum(f.size for f in uploaded_files)
+    total_mb = total_bytes / (1024 * 1024)
+    # ~10 pages per MB, ~15s per page VLM processing
+    est_pages = max(1, int(total_mb * 10))
+    est_seconds = est_pages * 15
+    if est_seconds < 60:
+        duration_str = f"~{est_seconds}s"
+    else:
+        minutes = est_seconds // 60
+        seconds = est_seconds % 60
+        duration_str = f"~{minutes}min {seconds}s" if seconds else f"~{minutes}min"
+    st.caption(f"Durée estimée : {duration_str} ({est_pages} pages estimées)")
+
+
 def render_stage_1() -> None:
     """Render configuration stage with tabs."""
     st.markdown("## Pipeline de Commissions")
@@ -246,6 +264,9 @@ def render_pdf_extraction_tab() -> None:
     st.session_state.force_refresh = force_refresh
 
     st.divider()
+
+    # Duration estimate
+    _render_duration_estimate(uploaded_files)
 
     # Submit button
     button_text = f"🚀 Extraire {len(uploaded_files)} fichier{'s' if is_batch else ''}"

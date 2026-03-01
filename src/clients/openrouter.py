@@ -107,6 +107,7 @@ class OpenRouterClient:
             "request_count": 0,
             "last_model_used": None,  # Track the actual model used (including fallbacks)
             "models_used": [],  # List of all models used in this session
+            "json_repaired": False,  # Whether JSON repair was needed
         }
 
     def _format_number(self, num: int) -> str:
@@ -320,6 +321,7 @@ class OpenRouterClient:
             result = json.loads(repaired)
             logger.info("JSON parsed successfully after repair")
             print("🔧 JSON repaired successfully")
+            self.session_usage["json_repaired"] = True
             return result
         except json.JSONDecodeError:
             pass
@@ -337,6 +339,7 @@ class OpenRouterClient:
                 result = json.loads(truncated)
                 logger.warning(f"JSON parsed by truncating to {end_pos} chars")
                 print("🔧 JSON parsed by truncating (lost some data)")
+                self.session_usage["json_repaired"] = True
                 return result
             except (json.JSONDecodeError, Exception):
                 continue
@@ -587,7 +590,9 @@ class OpenRouterClient:
             return best_partial
 
         raise OpenRouterError(
-            f"Failed after {max_retries} attempts + fallbacks. Last error: {last_error}"
+            f"Failed after {max_retries} attempts. "
+            f"Primary model: {self.model}, fallback: {self.fallback_model or 'none'}, "
+            f"timeout: {timeout or self.timeout}s. Last error: {last_error}"
         )
 
     async def validate_and_extract(

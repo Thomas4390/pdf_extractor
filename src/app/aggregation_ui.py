@@ -239,10 +239,28 @@ def render_editable_preview(
             disabled=True,
         )
 
+    # Contextual help per column
+    COLUMN_HELP = {
+        "PA Vendues": "Primes annualisées vendues pour la période",
+        "Collected": "Montants collectés via AE Tracker",
+        "AE CA": "Chiffre d'affaires AE (paiement historique)",
+        "Coût": "Coût total du conseiller (négatif)",
+        "Dépenses par Conseiller": "Dépenses directes attribuées au conseiller (négatif)",
+        "Leads": "Nombre de leads générés",
+        "Bonus": "Bonus attribué (négatif = charge)",
+        "Récompenses": "Récompenses attribuées",
+        "Total Dépenses": "Somme des coûts, dépenses et bonus",
+        "Profit": "AE CA + Récompenses + charges",
+        "CA/Lead": "Chiffre d'affaires par lead",
+        "Profit/Lead": "Profit par lead",
+        "Ratio Brut": "Ratio brut de profitabilité (%)",
+        "Ratio Net": "Ratio net de profitabilité (%)",
+    }
+
     for col in numeric_cols:
         column_config[col] = st.column_config.NumberColumn(
             col,
-            help=f"Valeur agrégée pour {col}",
+            help=COLUMN_HELP.get(col, f"Valeur agrégée pour {col}"),
             format="%.2f",
         )
 

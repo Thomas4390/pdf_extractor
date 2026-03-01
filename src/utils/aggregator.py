@@ -374,31 +374,88 @@ class SourceBoardConfig:
     use_group_as_advisor: bool = False  # If True, use group_title as advisor
 
 
-SOURCE_BOARDS = {
-    "paiement_historique": SourceBoardConfig(
-        display_name="Paiement historique",
-        aggregate_column="Reçu",
-        date_column="Date",
-        output_column_name="AE CA",
-        board_id=8553813876,  # Monday.com "Paiement Historique" board
-    ),
-    "vente_production": SourceBoardConfig(
-        display_name="Vente et production",
-        aggregate_column="PA",
-        date_column="Date",
-        output_column_name="PA Vendues",
-        board_id=9423464449,  # Monday.com "Ventes/Production" board
-    ),
-    "ae_tracker": SourceBoardConfig(
-        display_name="AE Tracker",
-        aggregate_column="$$$ Recues",
-        date_column="Date",
-        output_column_name="Collected",
-        board_id=9142978904,  # Monday.com "AE Tracker" board
-        advisor_column="group_title",  # Advisor name is in group title
-        use_group_as_advisor=True,
-    ),
-}
+def _build_source_boards() -> dict[str, SourceBoardConfig]:
+    """Build SOURCE_BOARDS with board IDs from config."""
+    from src.utils.config import get_settings
+    cfg = get_settings()
+    return {
+        "paiement_historique": SourceBoardConfig(
+            display_name="Paiement historique",
+            aggregate_column="Reçu",
+            date_column="Date",
+            output_column_name="AE CA",
+            board_id=cfg.monday_board_paiement_historique,
+        ),
+        "vente_production": SourceBoardConfig(
+            display_name="Vente et production",
+            aggregate_column="PA",
+            date_column="Date",
+            output_column_name="PA Vendues",
+            board_id=cfg.monday_board_vente_production,
+        ),
+        "ae_tracker": SourceBoardConfig(
+            display_name="AE Tracker",
+            aggregate_column="$$$ Recues",
+            date_column="Date",
+            output_column_name="Collected",
+            board_id=cfg.monday_board_ae_tracker,
+            advisor_column="group_title",
+            use_group_as_advisor=True,
+        ),
+    }
+
+
+# Module-level access — lazily built from config
+_source_boards_cache: dict[str, SourceBoardConfig] | None = None
+
+
+def _get_source_boards() -> dict[str, SourceBoardConfig]:
+    global _source_boards_cache
+    if _source_boards_cache is None:
+        _source_boards_cache = _build_source_boards()
+    return _source_boards_cache
+
+
+# Keep backward-compatible module-level name via property-like access
+class _SourceBoardsProxy(dict):
+    """Lazy proxy that builds SOURCE_BOARDS on first access."""
+    _built = False
+
+    def _ensure_built(self):
+        if not self._built:
+            self.update(_build_source_boards())
+            self._built = True
+
+    def __getitem__(self, key):
+        self._ensure_built()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._ensure_built()
+        return super().__contains__(key)
+
+    def __iter__(self):
+        self._ensure_built()
+        return super().__iter__()
+
+    def items(self):
+        self._ensure_built()
+        return super().items()
+
+    def values(self):
+        self._ensure_built()
+        return super().values()
+
+    def keys(self):
+        self._ensure_built()
+        return super().keys()
+
+    def get(self, key, default=None):
+        self._ensure_built()
+        return super().get(key, default)
+
+
+SOURCE_BOARDS = _SourceBoardsProxy()
 
 
 # =============================================================================
@@ -418,8 +475,15 @@ class MetricsConfig:
     rewards_column: str = "Récompenses"
 
 
+def _get_data_board_id() -> int:
+    """Get the Data board ID from config."""
+    from src.utils.config import get_settings
+    return get_settings().monday_board_data
+
+
 # Monday.com "Data" board ID — used as both metrics source and default aggregation target
-DATA_BOARD_ID = 9142121714
+# Kept as module-level for backward compat; reads from config on first use
+DATA_BOARD_ID = _get_data_board_id()
 
 # Default metrics board configuration
 # The metrics board "Data" has groups named by month (e.g., "Janvier 2026")

@@ -885,7 +885,10 @@ def get_advisor_matcher() -> AdvisorMatcher:
     """Get the global AdvisorMatcher instance."""
     global _matcher_instance
     if _matcher_instance is None:
-        _matcher_instance = AdvisorMatcher()
+        from src.utils.config import get_settings
+        _matcher_instance = AdvisorMatcher(
+            fuzzy_threshold=get_settings().advisor_fuzzy_threshold,
+        )
     return _matcher_instance
 
 

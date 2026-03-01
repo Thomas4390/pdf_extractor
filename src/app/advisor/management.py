@@ -220,12 +220,13 @@ def _render_advisors_list(advisors: list, matcher) -> None:
     else:
         # Summary table for quick overview
         import pandas as pd
+        status_labels = {"Active": "🟢 Actif", "New": "🔵 Nouveau", "Inactive": "⚪ Inactif"}
         status_icons = {"Active": "🟢", "New": "🔵", "Inactive": "⚪"}
         table_data = []
         for advisor in advisors:
-            icon = status_icons.get(advisor.status, "⚪")
+            label = status_labels.get(advisor.status, f"⚪ {advisor.status}")
             table_data.append({
-                "Statut": f"{icon} {advisor.status}",
+                "Statut": label,
                 "Nom": f"{advisor.first_name} {advisor.last_name}",
                 "Format compact": advisor.display_name_compact,
                 "Email": advisor.email or "",

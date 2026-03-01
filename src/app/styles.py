@@ -40,6 +40,20 @@ def get_css() -> str:
         --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
         --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
         --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+
+        /* Border radius tokens */
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+
+        /* Font size tokens */
+        --font-xs: 0.7rem;
+        --font-sm: 0.75rem;
+        --font-base: 0.85rem;
+        --font-md: 0.9rem;
+        --font-lg: 1.1rem;
+        --font-xl: 1.5rem;
+        --font-2xl: 1.75rem;
     }
 
     /* Typography */
@@ -69,7 +83,7 @@ def get_css() -> str:
     .stButton > button[data-testid="baseButton-primary"] {
         background: linear-gradient(135deg, var(--accent-500) 0%, var(--accent-600) 100%);
         border: none;
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         font-weight: 600;
         padding: 0.6rem 1.5rem;
         transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -83,7 +97,7 @@ def get_css() -> str:
 
     /* Secondary/default button */
     .stButton > button {
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         font-weight: 500;
         padding: 0.55rem 1.25rem;
         border: 1.5px solid var(--border);
@@ -121,7 +135,7 @@ def get_css() -> str:
 
     [data-testid="stExpander"] {
         border: 1px solid var(--border);
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         background: var(--surface);
         box-shadow: var(--shadow-sm);
         transition: box-shadow 0.2s ease;
@@ -142,10 +156,10 @@ def get_css() -> str:
         gap: 8px;
         background: var(--surface-hover);
         padding: 6px;
-        border-radius: 14px;
+        border-radius: var(--radius-md);
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 10px;
+        border-radius: var(--radius-md);
         padding: 10px 24px;
         font-weight: 500;
         transition: all 0.2s ease;
@@ -161,7 +175,7 @@ def get_css() -> str:
 
     [data-testid="stForm"] {
         border: 1px solid var(--border);
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         padding: 1.5rem;
         background: var(--surface);
     }
@@ -169,7 +183,7 @@ def get_css() -> str:
     /* Text inputs */
     .stTextInput > div > div > input,
     .stSelectbox > div > div > div {
-        border-radius: 10px;
+        border-radius: var(--radius-md);
         border: 1.5px solid var(--border);
         transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
@@ -184,7 +198,7 @@ def get_css() -> str:
        =========================================== */
 
     [data-testid="stDataFrame"] {
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         overflow: hidden;
         border: 1px solid var(--border);
     }
@@ -193,7 +207,7 @@ def get_css() -> str:
         color: white !important;
         font-weight: 600;
         text-transform: uppercase;
-        font-size: 0.75rem;
+        font-size: var(--font-sm);
         letter-spacing: 0.03em;
     }
     [data-testid="stDataFrame"] tr:nth-child(even) {
@@ -209,7 +223,7 @@ def get_css() -> str:
 
     [data-testid="stFileUploader"] {
         border: 2px dashed var(--border);
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         padding: 1rem;
         background: var(--surface-hover);
         transition: all 0.2s ease;
@@ -226,7 +240,7 @@ def get_css() -> str:
     .success-box {
         background: linear-gradient(135deg, rgba(72, 187, 120, 0.1) 0%, rgba(72, 187, 120, 0.05) 100%);
         border: 1px solid var(--success);
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         padding: 1rem;
     }
 
@@ -237,7 +251,7 @@ def get_css() -> str:
     .stepper-step {
         text-align: center;
         padding: 16px 12px;
-        border-radius: 14px;
+        border-radius: var(--radius-md);
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         cursor: pointer;
     }
@@ -261,12 +275,12 @@ def get_css() -> str:
         border: 1px solid var(--border);
     }
     .stepper-step .step-icon {
-        font-size: 1.75rem;
+        font-size: var(--font-2xl);
         margin-bottom: 4px;
     }
     .stepper-step .step-label {
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: var(--font-md);
     }
 
     /* ===========================================
@@ -275,7 +289,7 @@ def get_css() -> str:
 
     .metrics-dashboard {
         background: linear-gradient(135deg, var(--primary-500) 0%, var(--primary-600) 100%);
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         padding: 20px 24px;
         margin-bottom: 1.5rem;
         box-shadow: var(--shadow-lg);
@@ -285,11 +299,11 @@ def get_css() -> str:
         color: white;
     }
     .metrics-dashboard .metric-value {
-        font-size: 1.75rem;
+        font-size: var(--font-2xl);
         font-weight: 700;
     }
     .metrics-dashboard .metric-label {
-        font-size: 0.75rem;
+        font-size: var(--font-sm);
         text-transform: uppercase;
         letter-spacing: 0.05em;
         opacity: 0.85;
@@ -327,7 +341,7 @@ def get_css() -> str:
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 0.85rem;
+        font-size: var(--font-base);
         color: var(--text-secondary);
         margin-bottom: 1rem;
     }
@@ -351,18 +365,18 @@ def get_css() -> str:
         background: linear-gradient(135deg, var(--primary-500) 0%, var(--primary-600) 100%);
         color: white;
         padding: 1.25rem;
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         margin-bottom: 1rem;
         text-align: center;
     }
     .sidebar-header h2 {
         color: white;
         margin: 0;
-        font-size: 1.1rem;
+        font-size: var(--font-lg);
         font-weight: 600;
     }
     .sidebar-header .version {
-        font-size: 0.75rem;
+        font-size: var(--font-sm);
         opacity: 0.8;
         margin-top: 4px;
     }
@@ -371,12 +385,12 @@ def get_css() -> str:
     .sidebar-section {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         padding: 1rem;
         margin-bottom: 1rem;
     }
     .sidebar-section-title {
-        font-size: 0.85rem;
+        font-size: var(--font-base);
         font-weight: 600;
         color: var(--text-primary);
         margin-bottom: 0.75rem;
@@ -391,8 +405,8 @@ def get_css() -> str:
         align-items: center;
         gap: 8px;
         padding: 0.5rem 0.75rem;
-        border-radius: 8px;
-        font-size: 0.85rem;
+        border-radius: var(--radius-sm);
+        font-size: var(--font-base);
         font-weight: 500;
     }
     .status-indicator.connected {
@@ -415,30 +429,30 @@ def get_css() -> str:
     .sidebar-info-card {
         background: linear-gradient(135deg, rgba(56, 178, 172, 0.1) 0%, rgba(56, 178, 172, 0.05) 100%);
         border: 1px solid rgba(56, 178, 172, 0.2);
-        border-radius: 10px;
+        border-radius: var(--radius-md);
         padding: 0.75rem;
         margin-bottom: 0.5rem;
     }
     .sidebar-info-card .label {
-        font-size: 0.7rem;
+        font-size: var(--font-xs);
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: var(--text-secondary);
         margin-bottom: 2px;
     }
     .sidebar-info-card .value {
-        font-size: 0.9rem;
+        font-size: var(--font-md);
         font-weight: 600;
         color: var(--text-primary);
     }
 
     /* Help section styling */
     .help-section {
-        font-size: 0.85rem;
+        font-size: var(--font-base);
         line-height: 1.6;
     }
     .help-section h4 {
-        font-size: 0.9rem;
+        font-size: var(--font-md);
         font-weight: 600;
         color: var(--accent-600);
         margin: 1rem 0 0.5rem 0;
@@ -480,7 +494,7 @@ def get_css() -> str:
     .sidebar-stat {
         background: var(--surface-hover);
         padding: 0.5rem;
-        border-radius: 8px;
+        border-radius: var(--radius-sm);
         text-align: center;
     }
     .sidebar-stat .number {
@@ -503,13 +517,13 @@ def get_css() -> str:
         margin-bottom: 1rem;
     }
     .section-card .section-title {
-        font-size: 1.1rem;
+        font-size: var(--font-lg);
         font-weight: 600;
         color: var(--text-primary);
         margin-bottom: 0.25rem;
     }
     .section-card .section-description {
-        font-size: 0.85rem;
+        font-size: var(--font-base);
         color: var(--text-secondary);
         margin: 0;
     }
@@ -521,19 +535,19 @@ def get_css() -> str:
         gap: 12px;
         background: linear-gradient(135deg, rgba(56, 178, 172, 0.08) 0%, rgba(56, 178, 172, 0.03) 100%);
         border: 1px solid rgba(56, 178, 172, 0.2);
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         padding: 1rem;
         margin-bottom: 0.5rem;
     }
     .info-card .info-icon {
-        font-size: 1.5rem;
+        font-size: var(--font-xl);
         flex-shrink: 0;
     }
     .info-card .info-content {
         flex: 1;
     }
     .info-card .info-label {
-        font-size: 0.7rem;
+        font-size: var(--font-xs);
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: var(--text-secondary);
@@ -554,17 +568,17 @@ def get_css() -> str:
     .summary-stat {
         flex: 1;
         background: var(--surface-hover);
-        border-radius: 10px;
+        border-radius: var(--radius-md);
         padding: 0.75rem;
         text-align: center;
     }
     .summary-stat .stat-value {
-        font-size: 1.5rem;
+        font-size: var(--font-xl);
         font-weight: 700;
         color: var(--accent-600);
     }
     .summary-stat .stat-label {
-        font-size: 0.7rem;
+        font-size: var(--font-xs);
         text-transform: uppercase;
         color: var(--text-secondary);
     }
@@ -575,7 +589,7 @@ def get_css() -> str:
 
     /* Style the mode toggle Streamlit buttons */
     [data-testid="column"] .stButton > button {
-        font-size: 0.85rem;
+        font-size: var(--font-base);
         padding: 0.5rem 0.75rem;
     }
 
@@ -584,9 +598,9 @@ def get_css() -> str:
         padding: 0 0.15rem;
     }
     section[data-testid="stSidebar"] [data-testid="column"] .stButton > button {
-        font-size: 0.75rem;
+        font-size: var(--font-sm);
         padding: 0.4rem 0.5rem;
-        border-radius: 10px;
+        border-radius: var(--radius-md);
     }
     section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[kind="primary"],
     section[data-testid="stSidebar"] [data-testid="column"] .stButton > button[data-testid="baseButton-primary"] {

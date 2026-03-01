@@ -110,6 +110,58 @@ class Settings(BaseSettings):
         description="Directory for cached extraction results",
     )
 
+    # Monday.com Board IDs
+    monday_board_paiement_historique: int = Field(
+        default=8553813876,
+        description="Monday.com board ID for Paiement Historique",
+    )
+    monday_board_vente_production: int = Field(
+        default=9423464449,
+        description="Monday.com board ID for Ventes/Production",
+    )
+    monday_board_ae_tracker: int = Field(
+        default=9142978904,
+        description="Monday.com board ID for AE Tracker",
+    )
+    monday_board_data: int = Field(
+        default=9142121714,
+        description="Monday.com board ID for Data (metrics + aggregation target)",
+    )
+
+    # Monday.com Client
+    monday_batch_size: int = Field(
+        default=50, ge=1, le=200,
+        description="Number of items per batch upload to Monday.com",
+    )
+    monday_max_concurrent: int = Field(
+        default=5, ge=1, le=20,
+        description="Maximum concurrent requests to Monday.com API",
+    )
+    monday_rate_limit_delay: float = Field(
+        default=0.5, ge=0.0, le=5.0,
+        description="Delay in seconds between Monday.com API requests",
+    )
+    monday_max_retries: int = Field(
+        default=3, ge=1, le=10,
+        description="Maximum retries for transient Monday.com errors",
+    )
+    monday_retry_base_delay: float = Field(
+        default=2.0, ge=0.5, le=30.0,
+        description="Base delay in seconds for retry backoff",
+    )
+
+    # Verification
+    verification_tolerance_pct: float = Field(
+        default=10.0, ge=1.0, le=50.0,
+        description="Tolerance percentage for Reçu vs PA verification",
+    )
+
+    # Advisor matching
+    advisor_fuzzy_threshold: float = Field(
+        default=0.85, ge=0.5, le=1.0,
+        description="Minimum similarity ratio for fuzzy advisor name matching",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

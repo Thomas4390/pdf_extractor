@@ -166,11 +166,24 @@ def _render_session_info() -> None:
         </div>
         """, unsafe_allow_html=True)
 
-    # Quick actions
+    # Quick actions — two-click confirmation
     if st.session_state.stage > 1:
-        if st.button("⬅️ Recommencer", width="stretch"):
-            reset_pipeline()
-            st.rerun()
+        if st.session_state.get("_confirm_reset"):
+            st.warning("Êtes-vous sûr ? Les données extraites seront perdues.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Confirmer", type="primary"):
+                    st.session_state._confirm_reset = False
+                    reset_pipeline()
+                    st.rerun()
+            with col_no:
+                if st.button("Annuler"):
+                    st.session_state._confirm_reset = False
+                    st.rerun()
+        else:
+            if st.button("⬅️ Recommencer", width="stretch"):
+                st.session_state._confirm_reset = True
+                st.rerun()
 
 
 def _render_help_section() -> None:

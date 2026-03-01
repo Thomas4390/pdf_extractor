@@ -7,6 +7,7 @@ configuration options, and data editing capabilities.
 
 import io
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from src.app.state import cleanup_temp_files, get_pipeline, reset_pipeline, sani
 from src.app.utils.async_helpers import run_async
 from src.app.utils.date_utils import analyze_groups_in_data, detect_groups_from_data, get_months_fr
 from src.app.utils.navigation import render_breadcrumb, render_stepper
+from src.utils.config import get_settings
 from src.utils.data_unifier import BoardType
 from src.utils.model_registry import get_available_models, get_model_config
 
@@ -107,6 +109,8 @@ def run_extraction() -> None:
     progress_bar = st.progress(0, text="Démarrage de l'extraction...")
     status_text = st.empty()
     fallback_alert = st.empty()
+    timeout_warning = st.empty()
+    extraction_start_time = time.time()
 
     # Clean up previous temp files before creating new ones
     cleanup_temp_files()
@@ -132,6 +136,17 @@ def run_extraction() -> None:
     def on_progress(current: int, total: int, filename: str) -> None:
         progress = current / total if total > 0 else 0
         progress_bar.progress(progress, text=f"Traitement: {filename} ({current}/{total})")
+
+        # Timeout warning if extraction is taking long
+        elapsed = time.time() - extraction_start_time
+        remaining_ratio = (total - current) / total if total > 0 else 0
+        est_remaining = (elapsed / max(current, 1)) * (total - current)
+        if elapsed > 60 and est_remaining > 30:
+            elapsed_min = int(elapsed // 60)
+            timeout_warning.warning(
+                f"L'extraction prend du temps ({elapsed_min}min écoulées, "
+                f"~{int(est_remaining)}s restantes estimées)..."
+            )
 
         # Update file status
         for fname, placeholder in file_placeholders.items():
@@ -253,6 +268,40 @@ def run_extraction() -> None:
         st.session_state.force_refresh = False  # Reset force refresh flag
 
 
+def _render_extraction_alerts() -> None:
+    """Show transparency alerts for cache hits, fallback usage, JSON repairs, and warnings."""
+    batch_result = st.session_state.get("batch_result")
+    if not batch_result:
+        return
+
+    cached_files = []
+    fallback_files = []
+    repaired_files = []
+
+    for result in batch_result.results:
+        fname = Path(result.pdf_path).name
+        if result.was_cached:
+            cached_files.append(fname)
+        if result.usage and result.usage.was_fallback:
+            fallback_files.append(fname)
+        if result.usage and result.usage.json_repaired:
+            repaired_files.append(fname)
+
+    if cached_files:
+        st.info(f"Résultats en cache pour : {', '.join(cached_files)}")
+    if fallback_files:
+        st.warning(f"Modèle de secours utilisé pour : {', '.join(fallback_files)}")
+    if repaired_files:
+        st.warning(f"Réparation JSON appliquée pour : {', '.join(repaired_files)}")
+
+    # Show pipeline warnings if any
+    all_warnings = batch_result.all_warnings
+    if all_warnings:
+        with st.expander(f"Avertissements ({len(all_warnings)})", expanded=False):
+            for w in all_warnings:
+                st.caption(f"• {Path(w.pdf_path).name}: {w.message}")
+
+
 def render_stage_2() -> None:
     """Render data preview stage with modern tabs layout."""
     st.markdown("## 📊 Pipeline de Commissions")
@@ -292,7 +341,7 @@ def render_stage_2() -> None:
     # Determine status
     has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
     if has_verification_cols:
-        df_verified = verify_recu_vs_com(df, tolerance_pct=st.session_state.get('verification_tolerance', 10.0))
+        df_verified = verify_recu_vs_com(df, tolerance_pct=st.session_state.get('verification_tolerance', get_settings().verification_tolerance_pct))
         stats = get_verification_stats(df_verified)
         status_icon = "OK" if stats['ecart'] == 0 else f"{stats['ecart']} Ecarts"
     else:
@@ -307,6 +356,9 @@ def render_stage_2() -> None:
         model=model_name,
         status=status_icon
     )
+
+    # Extraction transparency alerts
+    _render_extraction_alerts()
 
     # ===========================================
     # TABBED INTERFACE (Replaces Expanders)
@@ -398,9 +450,21 @@ def _render_empty_data_error() -> None:
             if not api_key:
                 st.error("⚠️ **OPENROUTER_API_KEY** n'est pas configurée. Ajoutez-la dans les secrets Streamlit ou le fichier .env")
 
-    if st.button("Recommencer"):
-        reset_pipeline()
-        st.rerun()
+    col_retry, col_reset = st.columns(2)
+    with col_retry:
+        if st.button("Réessayer l'extraction"):
+            # Reset extraction state but keep files and config
+            st.session_state.combined_data = None
+            st.session_state.extraction_results = {}
+            st.session_state.batch_result = None
+            st.session_state.extraction_usage = None
+            st.session_state.extraction_error = None
+            st.session_state.extraction_traceback = None
+            st.rerun()
+    with col_reset:
+        if st.button("Recommencer"):
+            reset_pipeline()
+            st.rerun()
 
 
 def _check_duplicates_against_board(df: pd.DataFrame) -> pd.DataFrame:
@@ -503,6 +567,13 @@ def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verificati
 
 def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> None:
     """Render the verification tab."""
+    # Advisor normalization display
+    normalizations = df.attrs.get('advisor_normalizations', [])
+    if normalizations:
+        with st.expander(f"Normalisation des noms ({len(normalizations)} modification(s))", expanded=False):
+            for orig, norm in normalizations:
+                st.caption(f"• {orig} → {norm}")
+
     if has_verification_cols:
         st.markdown("### Vérification Reçu vs Commission")
         st.caption("Formule: `Com Calculée = ROUND((PA × Taux Partage) × 0.5 [× Taux Boni si ≠ 0], 2)`")
@@ -511,7 +582,7 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
             "Tolérance (%)",
             min_value=1.0,
             max_value=50.0,
-            value=st.session_state.get('verification_tolerance', 10.0),
+            value=st.session_state.get('verification_tolerance', get_settings().verification_tolerance_pct),
             step=1.0,
             key="verification_tolerance_slider"
         )
@@ -520,17 +591,18 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
         df_verified = verify_recu_vs_com(df, tolerance_pct=tolerance)
         stats = get_verification_stats(df_verified)
 
+        # Summary one-liner
+        if stats['ecart'] == 0:
+            st.success(f"Vérification OK — {stats['ok']} lignes conformes, {stats['bonus']} bonus")
+        else:
+            st.warning(f"{stats['ecart']} écart(s) détecté(s) sur {stats['ok'] + stats['ecart'] + stats['bonus']} lignes")
+
         # Stats display
         stat_cols = st.columns(4)
         stat_cols[0].metric("OK", stats['ok'])
         stat_cols[1].metric("Bonus", stats['bonus'])
         stat_cols[2].metric("Ecart", stats['ecart'])
         stat_cols[3].metric("N/A", stats['na'])
-
-        if stats['ecart'] > 0:
-            st.warning(f"**{stats['ecart']} ligne(s)** ont un écart négatif")
-        if stats['bonus'] > 0:
-            st.success(f"**{stats['bonus']} ligne(s)** ont un bonus")
 
         st.markdown("---")
 

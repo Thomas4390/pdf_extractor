@@ -330,19 +330,19 @@ def render_validation_report(report: ValidationReport) -> None:
                 st.markdown("**Erreurs (bloquantes):**")
                 for issue in errors:
                     col_info = f" (colonne: {issue.column})" if issue.column else ""
-                    st.markdown(f"- 🔴 {issue.message}{col_info}")
+                    st.markdown(f"- 🔴 Erreur: {issue.message}{col_info}")
 
             if warnings:
                 st.markdown("**Avertissements:**")
                 for issue in warnings:
                     col_info = f" (colonne: {issue.column})" if issue.column else ""
-                    st.markdown(f"- 🟡 {issue.message}{col_info}")
+                    st.markdown(f"- 🟡 Avertissement: {issue.message}{col_info}")
 
             if infos:
                 st.markdown("**Informations:**")
                 for issue in infos:
                     col_info = f" (colonne: {issue.column})" if issue.column else ""
-                    st.markdown(f"- 🔵 {issue.message}{col_info}")
+                    st.markdown(f"- 🔵 Info: {issue.message}{col_info}")
 
 
 def validate_and_display(

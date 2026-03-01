@@ -350,6 +350,9 @@ def render_upload_result(result: dict) -> None:
             with st.expander("Voir les erreurs"):
                 for error in errors[:10]:
                     st.error(error)
+            if st.button("Réessayer l'upload"):
+                st.session_state.upload_result = None
+                st.rerun()
 
 
 def _execute_reconciliation_writeback(

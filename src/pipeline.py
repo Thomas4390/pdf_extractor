@@ -69,6 +69,8 @@ class UsageStats:
     total_tokens: int = 0
     cost: float = 0.0
     cached_tokens: int = 0
+    was_fallback: bool = False
+    json_repaired: bool = False
 
 
 @dataclass
@@ -84,6 +86,7 @@ class PipelineResult:
     extraction_time_ms: int = 0
     row_count: int = 0
     usage: Optional[UsageStats] = None
+    was_cached: bool = False
 
     def __post_init__(self):
         self.row_count = len(self.dataframe) if self.dataframe is not None else 0
@@ -338,6 +341,9 @@ class Pipeline:
                 extractor = self._extractors[source_type]
                 report = await extractor.extract(pdf_path, force_refresh=force_refresh)
 
+                # Track cache status
+                was_cached = extractor.last_was_cached
+
                 # Step 2: Unify to DataFrame
                 df, board_type = self._unifier.unify(report, source_type.value)
 
@@ -352,12 +358,20 @@ class Pipeline:
                         # Use the actual model that was used (including fallbacks)
                         actual_model = client_usage.get("last_model_used") or model_config.model_id
 
+                        # Detect fallback usage
+                        was_fallback = actual_model != model_config.model_id
+
+                        # Detect JSON repair
+                        json_repaired = client_usage.get("json_repaired", False)
+
                         usage_stats = UsageStats(
                             model=actual_model,
                             prompt_tokens=client_usage.get("total_prompt_tokens", 0),
                             completion_tokens=client_usage.get("total_completion_tokens", 0),
                             total_tokens=client_usage.get("total_prompt_tokens", 0) + client_usage.get("total_completion_tokens", 0),
                             cost=client_usage.get("total_cost", 0.0),
+                            was_fallback=was_fallback,
+                            json_repaired=json_repaired,
                         )
                     else:
                         # Cached result - still report the configured model
@@ -395,7 +409,8 @@ class Pipeline:
                     success=True,
                     warnings=warnings,
                     extraction_time_ms=elapsed_ms,
-                    usage=usage_stats
+                    usage=usage_stats,
+                    was_cached=was_cached,
                 )
 
             except Exception as e:

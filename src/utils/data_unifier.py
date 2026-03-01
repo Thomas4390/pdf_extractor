@@ -177,10 +177,16 @@ class DataUnifier:
             df = self._convert_assomption(report)
 
         # Normaliser les noms de conseillers si matcher disponible
+        advisor_normalizations = []
         if self.advisor_matcher and 'Conseiller' in df.columns:
+            originals = df['Conseiller'].copy()
             df['Conseiller'] = df['Conseiller'].apply(
                 lambda x: self._normalize_advisor(x) if pd.notna(x) else x
             )
+            # Track changes
+            for orig, norm in zip(originals, df['Conseiller']):
+                if pd.notna(orig) and pd.notna(norm) and str(orig).strip() != str(norm).strip():
+                    advisor_normalizations.append((str(orig), str(norm)))
 
         # Appliquer le schéma de colonnes final
         df = self._apply_final_schema(df, board_type)
@@ -193,6 +199,9 @@ class DataUnifier:
         # Stocker le board_type dans les attributs du DataFrame
         df.attrs['board_type'] = board_type.value
         df.attrs['source'] = source
+        if advisor_normalizations:
+            # Deduplicate
+            df.attrs['advisor_normalizations'] = list(set(advisor_normalizations))
 
         return df, board_type
 
