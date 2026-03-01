@@ -341,7 +341,7 @@ def render_stage_2() -> None:
     # Determine status
     has_verification_cols = 'Reçu' in df.columns and 'PA' in df.columns
     if has_verification_cols:
-        df_verified = verify_recu_vs_com(df, tolerance_pct=st.session_state.get('verification_tolerance', get_settings().verification_tolerance_pct))
+        df_verified = verify_recu_vs_com(df, tolerance_pct=st.session_state.get('verification_tolerance', getattr(get_settings(), 'verification_tolerance_pct', 10.0)))
         stats = get_verification_stats(df_verified)
         status_icon = "OK" if stats['ecart'] == 0 else f"{stats['ecart']} Ecarts"
     else:
@@ -582,7 +582,7 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
             "Tolérance (%)",
             min_value=1.0,
             max_value=50.0,
-            value=st.session_state.get('verification_tolerance', get_settings().verification_tolerance_pct),
+            value=st.session_state.get('verification_tolerance', getattr(get_settings(), 'verification_tolerance_pct', 10.0)),
             step=1.0,
             key="verification_tolerance_slider"
         )

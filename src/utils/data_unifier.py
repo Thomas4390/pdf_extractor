@@ -618,13 +618,22 @@ class DataUnifier:
         if not report.propositions:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
-        rows = []
-        filtered_nombre_count = 0
+        # Phase 1: Identify policy numbers that have at least one nombre == 0.4
+        policies_with_04: set[str] = set()
         for prop in report.propositions:
-            # Ne garder que les lignes où nombre == 0.4
             nombre_val = self._decimal_to_float(prop.nombre)
-            if nombre_val is None or nombre_val != 0.4:
-                filtered_nombre_count += 1
+            if nombre_val is not None and nombre_val == 0.4:
+                police_str = str(prop.police) if prop.police else ""
+                if police_str:
+                    policies_with_04.add(police_str)
+
+        # Phase 2: Include all rows for qualifying policies
+        rows = []
+        filtered_count = 0
+        for prop in report.propositions:
+            police_str = str(prop.police) if prop.police else ""
+            if police_str not in policies_with_04:
+                filtered_count += 1
                 continue
 
             # IDC: Utiliser le nom de la compagnie extrait du PDF, normalisé
@@ -677,8 +686,14 @@ class DataUnifier:
             }
             rows.append(row)
 
-        if filtered_nombre_count > 0:
-            print(f"  ℹ️  IDC: {filtered_nombre_count} ligne(s) exclue(s) (nombre != 0.4)")
+        included = len(rows)
+        total_props = len(report.propositions)
+        if filtered_count > 0:
+            print(
+                f"  ℹ️  IDC: {included}/{total_props} ligne(s) incluses "
+                f"({len(policies_with_04)} police(s) avec nombre=0.4, "
+                f"{filtered_count} ligne(s) exclues sans nombre=0.4 sur leur police)"
+            )
 
         return pd.DataFrame(rows)
 
