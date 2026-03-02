@@ -258,63 +258,59 @@ def test_parse_formula_value():
 
     parse = MondayClient._parse_formula_value
 
-    # Plain number
+    # --- display_value (priority 1, from FormulaValue fragment) ---
+    assert parse({"display_value": "123.45", "text": "", "value": None}) == 123.45
+    print("  ✓ display_value: plain number")
+
+    assert parse({"display_value": "0", "text": "", "value": None}) == 0.0
+    print("  ✓ display_value: zero")
+
+    assert parse({"display_value": "1 234,56", "text": "", "value": None}) == 1234.56
+    print("  ✓ display_value: French format with spaces")
+
+    assert parse({"display_value": "$1,234.56", "text": "", "value": None}) == 1234.56
+    print("  ✓ display_value: currency with thousands")
+
+    assert parse({"display_value": "Yes", "text": "", "value": None}) == "Yes"
+    print("  ✓ display_value: non-numeric → raw text")
+
+    # display_value takes priority over text
+    assert parse({"display_value": "99.9", "text": "wrong", "value": None}) == 99.9
+    print("  ✓ display_value takes priority over text")
+
+    # --- text fallback (when display_value absent) ---
     assert parse({"text": "123.45", "value": None}) == 123.45
-    print("  ✓ Plain number")
+    print("  ✓ text fallback: plain number")
 
-    # Integer
-    assert parse({"text": "100", "value": None}) == 100.0
-    print("  ✓ Integer")
-
-    # Zero
-    assert parse({"text": "0", "value": None}) == 0.0
-    print("  ✓ Zero")
-
-    # Empty text → None
-    assert parse({"text": "", "value": None}) is None
-    print("  ✓ Empty text")
-
-    # None text → None
-    assert parse({"text": None, "value": None}) is None
-    print("  ✓ None text")
-
-    # French decimal format: comma as decimal separator
     assert parse({"text": "1234,56", "value": None}) == 1234.56
-    print("  ✓ French decimal (comma)")
+    print("  ✓ text fallback: French decimal")
 
-    # English thousands: 1,234.56
     assert parse({"text": "1,234.56", "value": None}) == 1234.56
-    print("  ✓ English thousands separator")
+    print("  ✓ text fallback: English thousands")
 
-    # Currency with dollar sign
     assert parse({"text": "$123.45", "value": None}) == 123.45
-    print("  ✓ Dollar sign")
+    print("  ✓ text fallback: dollar sign")
 
-    # Spaces as thousands separator: 1 234.56
-    assert parse({"text": "1 234.56", "value": None}) == 1234.56
-    print("  ✓ Spaces as thousands separator")
+    assert parse({"text": "-50.25", "value": None}) == -50.25
+    print("  ✓ text fallback: negative number")
 
-    # Non-breaking space
-    assert parse({"text": "1\u00a0234.56", "value": None}) == 1234.56
-    print("  ✓ Non-breaking space")
+    # --- Empty / None ---
+    assert parse({"text": "", "value": None}) is None
+    print("  ✓ Empty text → None")
 
-    # JSON value field available
+    assert parse({"text": None, "value": None}) is None
+    print("  ✓ None text → None")
+
+    assert parse({"display_value": "", "text": "", "value": None}) is None
+    print("  ✓ Empty display_value + empty text → None")
+
+    # --- JSON value field ---
     import json
-    assert parse({"text": "ignored", "value": json.dumps(123.45)}) == 123.45
+    assert parse({"text": "", "value": json.dumps(123.45)}) == 123.45
     print("  ✓ JSON value field (direct number)")
 
-    # JSON value field with dict
-    assert parse({"text": "ignored", "value": json.dumps({"value": 99.9})}) == 99.9
+    assert parse({"text": "", "value": json.dumps({"value": 99.9})}) == 99.9
     print("  ✓ JSON value field (dict)")
-
-    # Non-numeric formula text → returns raw text
-    result = parse({"text": "Yes", "value": None})
-    assert result == "Yes"
-    print("  ✓ Non-numeric text kept as-is")
-
-    # Negative number
-    assert parse({"text": "-50.25", "value": None}) == -50.25
-    print("  ✓ Negative number")
 
     print("  _parse_formula_value OK!")
     return True

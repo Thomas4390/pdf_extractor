@@ -1496,6 +1496,9 @@ class MondayClient:
                                             title
                                             type
                                         }}
+                                        ... on FormulaValue {{
+                                            display_value
+                                        }}
                                     }}
                                 }}
                             }}
@@ -1523,6 +1526,9 @@ class MondayClient:
                                     column {{
                                         title
                                         type
+                                    }}
+                                    ... on FormulaValue {{
+                                        display_value
                                     }}
                                 }}
                             }}
@@ -1563,12 +1569,24 @@ class MondayClient:
     def _parse_formula_value(col_val: dict):
         """Parse a Monday.com formula column value as a number.
 
-        Tries value (JSON) first, then text with formatting cleanup.
+        Priority:
+        1. display_value (from ... on FormulaValue fragment, API 2025-01+)
+        2. value (JSON)
+        3. text (fallback)
+
         Returns float if numeric, raw text if not, None if empty.
         """
         import json as json_module
 
-        # 1. Try JSON value field (some formulas expose it)
+        # 1. display_value — the reliable source for formula results
+        display = col_val.get("display_value")
+        if display and str(display).strip():
+            parsed = MondayClient._clean_numeric_text(str(display))
+            if parsed is not None:
+                return parsed
+            return display  # Non-numeric formula → keep raw text
+
+        # 2. JSON value field (some formulas expose it)
         raw_value = col_val.get("value")
         if raw_value:
             try:
@@ -1582,28 +1600,40 @@ class MondayClient:
             except (ValueError, TypeError, json.JSONDecodeError):
                 pass
 
-        # 2. Try text field with format cleanup
+        # 3. text field with format cleanup
         text = col_val.get("text", "")
         if not text or not text.strip():
             return None
 
+        parsed = MondayClient._clean_numeric_text(text)
+        if parsed is not None:
+            return parsed
+        return text  # Non-numeric formula → keep raw text
+
+    @staticmethod
+    def _clean_numeric_text(text: str):
+        """Try to parse a text value as a float, handling various formats.
+
+        Returns float if numeric, None otherwise.
+        """
         cleaned = (
             text.strip()
             .replace("$", "")
             .replace("\u00a0", "")  # non-breaking space
             .replace(" ", "")
         )
+        if not cleaned:
+            return None
         # French decimal: "1234,56" → "1234.56"
         if "," in cleaned and "." not in cleaned:
             cleaned = cleaned.replace(",", ".")
         # English thousands: "1,234.56" → "1234.56"
         elif "," in cleaned and "." in cleaned:
             cleaned = cleaned.replace(",", "")
-
         try:
             return float(cleaned)
         except (ValueError, TypeError):
-            return text  # Non-numeric formula → keep raw text
+            return None
 
     def board_items_to_dataframe(
         self,
