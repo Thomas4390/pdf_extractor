@@ -5,6 +5,7 @@ Provides date period filtering and aggregation by advisor for
 creating summarized data in target boards.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
@@ -13,6 +14,8 @@ from typing import Optional
 import pandas as pd
 
 from src.utils.advisor_matcher import normalize_advisor_name_full
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # CONSTANTS
@@ -975,7 +978,15 @@ def aggregate_by_advisor(
         df, unknown_names = normalize_advisor_column(df, advisor_column, filter_unknown=True)
 
     # Convert value column to numeric
-    df[value_column] = pd.to_numeric(df[value_column], errors="coerce").fillna(0)
+    df[value_column] = pd.to_numeric(df[value_column], errors="coerce")
+    nan_count = df[value_column].isna().sum()
+    if nan_count > 0:
+        logger.warning(
+            "Agrégation %s: %d valeur(s) non-numériques remplacées par 0",
+            value_column,
+            nan_count,
+        )
+    df[value_column] = df[value_column].fillna(0)
 
     # Group by advisor and sum
     result = (
@@ -983,6 +994,7 @@ def aggregate_by_advisor(
         .sum()
         .sort_values(value_column, ascending=False)
     )
+    result[value_column] = result[value_column].round(2)
 
     return result, unknown_names
 
@@ -1048,10 +1060,10 @@ def combine_aggregations(
     if result is None:
         return pd.DataFrame()
 
-    # Fill NaN with 0 for numeric columns
+    # Fill NaN with 0 for numeric columns and round to 2 decimals
     for col in result.columns:
         if col != advisor_column:
-            result[col] = result[col].fillna(0)
+            result[col] = result[col].fillna(0).round(2)
 
     # Reorder columns: Conseiller first, then PA Vendues, Collected, AE CA
     desired_order = [advisor_column, "PA Vendues", "Collected", "AE CA"]

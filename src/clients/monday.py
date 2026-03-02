@@ -432,6 +432,55 @@ class MondayClient:
             raise MondayError(f"Board {board_id} not found or not accessible")
         return boards[0]["groups"]
 
+    async def list_groups_with_item_count(self, board_id: int) -> list[dict]:
+        """List all groups in a board with item count information.
+
+        Uses items_page(limit: 1) to efficiently check if each group has items.
+
+        Args:
+            board_id: Board ID to list groups from
+
+        Returns:
+            List of group dicts with id, title, color, items_count, and is_empty
+        """
+        query = f"""
+        {{
+            boards(ids: {board_id}) {{
+                groups {{
+                    id
+                    title
+                    color
+                    items_page(limit: 1) {{
+                        cursor
+                        items {{
+                            id
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        """
+        result = await self._execute_query(query)
+        boards = result["data"]["boards"]
+        if not boards:
+            raise MondayError(f"Board {board_id} not found or not accessible")
+
+        groups = []
+        for group in boards[0]["groups"]:
+            items = group.get("items_page", {}).get("items", [])
+            has_cursor = group.get("items_page", {}).get("cursor") is not None
+            # If there are items or a cursor (meaning more items exist), it's not empty
+            items_count = len(items)
+            is_empty = items_count == 0 and not has_cursor
+            groups.append({
+                "id": group["id"],
+                "title": group["title"],
+                "color": group.get("color"),
+                "items_count": items_count,
+                "is_empty": is_empty,
+            })
+        return groups
+
     async def get_or_create_group(
         self,
         board_id: int,
@@ -1951,20 +2000,36 @@ class MondayClient:
         Returns:
             List of folder dicts with id, name, and children
         """
-        query = f"""
-        {{
-            folders(workspace_ids: [{workspace_id}]) {{
-                id
-                name
-                children {{
+        all_folders = []
+        page = 1
+
+        while True:
+            query = f"""
+            {{
+                folders(workspace_ids: [{workspace_id}], limit: 50, page: {page}) {{
                     id
                     name
+                    children {{
+                        id
+                        name
+                    }}
                 }}
             }}
-        }}
-        """
-        result = await self._execute_query(query)
-        return result["data"]["folders"]
+            """
+            result = await self._execute_query(query)
+            folders = result["data"]["folders"]
+
+            if not folders:
+                break
+
+            all_folders.extend(folders)
+
+            if len(folders) < 50:
+                break
+
+            page += 1
+
+        return all_folders
 
     def list_folders_sync(self, workspace_id: int) -> list[dict]:
         """Synchronous wrapper for list_folders."""
@@ -1982,20 +2047,36 @@ class MondayClient:
         Returns:
             List of folder dicts with id, name, and parent {id, name}
         """
-        query = f"""
-        {{
-            folders(workspace_ids: [{workspace_id}], limit: 100) {{
-                id
-                name
-                parent {{
+        all_folders = []
+        page = 1
+
+        while True:
+            query = f"""
+            {{
+                folders(workspace_ids: [{workspace_id}], limit: 50, page: {page}) {{
                     id
                     name
+                    parent {{
+                        id
+                        name
+                    }}
                 }}
             }}
-        }}
-        """
-        result = await self._execute_query(query)
-        return result["data"]["folders"]
+            """
+            result = await self._execute_query(query)
+            folders = result["data"]["folders"]
+
+            if not folders:
+                break
+
+            all_folders.extend(folders)
+
+            if len(folders) < 50:
+                break
+
+            page += 1
+
+        return all_folders
 
     def list_all_folders_in_workspace_sync(self, workspace_id: int) -> list[dict]:
         """Synchronous wrapper for list_all_folders_in_workspace."""
@@ -2358,6 +2439,10 @@ class MondayClient:
     def list_groups_sync(self, board_id: int) -> list[dict]:
         """Synchronous wrapper for list_groups."""
         return asyncio.run(self.list_groups(board_id))
+
+    def list_groups_with_item_count_sync(self, board_id: int) -> list[dict]:
+        """Synchronous wrapper for list_groups_with_item_count."""
+        return asyncio.run(self.list_groups_with_item_count(board_id))
 
     def list_columns_sync(self, board_id: int) -> list[dict]:
         """Synchronous wrapper for list_columns."""
