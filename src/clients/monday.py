@@ -1496,9 +1496,6 @@ class MondayClient:
                                             title
                                             type
                                         }}
-                                        ... on FormulaValue {{
-                                            display_value
-                                        }}
                                     }}
                                 }}
                             }}
@@ -1526,9 +1523,6 @@ class MondayClient:
                                     column {{
                                         title
                                         type
-                                    }}
-                                    ... on FormulaValue {{
-                                        display_value
                                     }}
                                 }}
                             }}
@@ -1563,7 +1557,105 @@ class MondayClient:
             if not cursor:
                 break
 
+        # Enrich formula columns with display_value (separate rate-limited query)
+        await self._enrich_formula_columns(all_items)
+
         return all_items
+
+    async def _enrich_formula_columns(
+        self,
+        items: list[dict],
+        batch_size: int = 50,
+        max_retries: int = 3,
+    ) -> None:
+        """Fetch display_value for formula columns in small batches.
+
+        The FormulaValue display_value field is rate-limited to 10,000
+        values/minute. Querying it in the main bulk request causes 429
+        errors on large boards.  This method fetches it separately in
+        small batches with automatic retry on rate limit.
+
+        Mutates items in-place by adding 'display_value' to formula
+        column_values dicts.
+        """
+        if not items:
+            return
+
+        # Detect formula column IDs from first item
+        formula_col_ids = []
+        for cv in items[0].get("column_values", []):
+            if cv.get("column", {}).get("type") == "formula":
+                formula_col_ids.append(cv["id"])
+
+        if not formula_col_ids:
+            return
+
+        # Build item_id → {col_id → col_val reference} map
+        item_cv_map: dict[str, dict[str, dict]] = {}
+        for item in items:
+            cv_refs = {}
+            for cv in item.get("column_values", []):
+                if cv["id"] in formula_col_ids:
+                    cv_refs[cv["id"]] = cv
+            item_cv_map[item["id"]] = cv_refs
+
+        # Query in batches
+        item_ids = list(item_cv_map.keys())
+        col_ids_str = ", ".join(f'"{cid}"' for cid in formula_col_ids)
+
+        for i in range(0, len(item_ids), batch_size):
+            batch_ids = item_ids[i : i + batch_size]
+            ids_str = ", ".join(batch_ids)
+
+            query = f"""
+            {{
+                items(ids: [{ids_str}]) {{
+                    id
+                    column_values(ids: [{col_ids_str}]) {{
+                        id
+                        ... on FormulaValue {{
+                            display_value
+                        }}
+                    }}
+                }}
+            }}
+            """
+
+            # Execute with rate-limit retry
+            for attempt in range(max_retries):
+                try:
+                    result = await self._execute_query(query)
+                    break
+                except MondayError as e:
+                    is_rate_limit = e.errors and any(
+                        err.get("extensions", {}).get("code")
+                        == "FIELD_MINUTE_RATE_LIMIT_EXCEEDED"
+                        for err in (e.errors if isinstance(e.errors, list) else [])
+                    )
+                    if is_rate_limit and attempt < max_retries - 1:
+                        retry_secs = 1
+                        for err in (e.errors if isinstance(e.errors, list) else []):
+                            retry_secs = max(
+                                retry_secs,
+                                err.get("extensions", {}).get("retry_in_seconds", 1),
+                            )
+                        logger.warning(
+                            f"Formula rate limit hit (batch {i // batch_size + 1}). "
+                            f"Retrying in {retry_secs}s..."
+                        )
+                        await asyncio.sleep(retry_secs)
+                        continue
+                    raise
+            else:
+                continue  # All retries exhausted for this batch, skip
+
+            # Merge display_value back into items
+            for item_data in result.get("data", {}).get("items", []):
+                cv_refs = item_cv_map.get(item_data["id"], {})
+                for cv in item_data.get("column_values", []):
+                    ref = cv_refs.get(cv["id"])
+                    if ref:
+                        ref["display_value"] = cv.get("display_value")
 
     @staticmethod
     def _parse_formula_value(col_val: dict):

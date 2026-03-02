@@ -414,11 +414,6 @@ def render_stage_2() -> None:
             reset_pipeline()
             st.rerun()
 
-    with footer_col3:
-        if st.button("Uploader vers Monday.com", type="primary", width="stretch"):
-            st.session_state.stage = 3
-            st.rerun()
-
 
 def _render_empty_data_error() -> None:
     """Render error message when no data is extracted."""
@@ -563,6 +558,14 @@ def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verificati
                     st.markdown(f"**{filename}**: {result.row_count} lignes ({result.extraction_time_ms}ms)")
                 else:
                     st.markdown(f"**{filename}**: {result.error}")
+
+    # Upload button — only in Données tab
+    st.markdown("---")
+    _, _, btn_col = st.columns([1, 2, 1])
+    with btn_col:
+        if st.button("Uploader vers Monday.com", type="primary", width="stretch", key="upload_from_data_tab"):
+            st.session_state.stage = 3
+            st.rerun()
 
 
 def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> None:
