@@ -152,11 +152,12 @@ class ReconciliationResult:
     }
 
     def to_sales_view_dataframe(self, sales_df: pd.DataFrame) -> pd.DataFrame:
-        """Board-format sales view: one row per police with Reçu 1/2/3 filled.
+        """Board-format sales view: one row per police with Reçu 1/2/3 and écarts.
 
         Columns produced:
-        # de Police | Compagnie | Conseiller | PA | Com | Reçu 1 |
-        Boni | Reçu 2 | Sur-Com | Reçu 3 | Statut Rapp.
+        # de Police | Compagnie | Conseiller | PA |
+        Com | Reçu 1 | Écart 1 | Boni | Reçu 2 | Écart 2 |
+        Sur-Com | Reçu 3 | Écart 3 | Statut Rapp.
 
         Args:
             sales_df: Sales/production DataFrame from Monday.com.
@@ -199,6 +200,7 @@ class ReconciliationResult:
 
             # Find match for each Reçu type
             recu_1 = recu_2 = recu_3 = None
+            ecart_1 = ecart_2 = ecart_3 = None
             worst_status = ReconciliationStatus.PASSED
 
             for m in matches:
@@ -210,10 +212,13 @@ class ReconciliationResult:
 
                 if m.classification.recu_field == "Reçu 1":
                     recu_1 = m.recu_amount
+                    ecart_1 = m.ecart_pct
                 elif m.classification.recu_field == "Reçu 2":
                     recu_2 = m.recu_amount
+                    ecart_2 = m.ecart_pct
                 elif m.classification.recu_field == "Reçu 3":
                     recu_3 = m.recu_amount
+                    ecart_3 = m.ecart_pct
 
             rows.append({
                 "# de Police": police,
@@ -222,10 +227,13 @@ class ReconciliationResult:
                 "PA": pa,
                 "Com": com_ref,
                 "Reçu 1": recu_1,
+                "Écart 1": f"{ecart_1:.1f}%" if ecart_1 is not None else "—",
                 "Boni": boni_ref,
                 "Reçu 2": recu_2,
+                "Écart 2": f"{ecart_2:.1f}%" if ecart_2 is not None else "—",
                 "Sur-Com": surcom_ref,
                 "Reçu 3": recu_3,
+                "Écart 3": f"{ecart_3:.1f}%" if ecart_3 is not None else "—",
                 "Statut Rapp.": worst_status.value,
             })
 
@@ -253,20 +261,25 @@ class ReconciliationResult:
         if hist_paye.empty:
             return pd.DataFrame()
 
-        # Build lookup: hist_index → (conseiller, status)
-        passed_lookup: dict[int, str] = {}  # index → conseiller
+        # Build lookups: index → conseiller for all found matches,
+        # and set of passed indices for Verifié
+        conseiller_lookup: dict[int, str] = {}  # index → conseiller
+        passed_indices: set[int] = set()
         for m in self.matches:
+            if m.status == ReconciliationStatus.NOT_FOUND:
+                continue
+            for idx in m.hist_indices:
+                conseiller_lookup[idx] = m.conseiller or ""
             if m.status == ReconciliationStatus.PASSED:
-                for idx in m.hist_indices:
-                    passed_lookup[idx] = m.conseiller or ""
+                passed_indices.update(m.hist_indices)
 
         # Add Verifié and update Conseiller
         hist_paye["Verifié"] = False
         for idx in hist_paye.index:
-            if idx in passed_lookup:
+            if idx in conseiller_lookup and conseiller_lookup[idx]:
+                hist_paye.at[idx, "Conseiller"] = conseiller_lookup[idx]
+            if idx in passed_indices:
                 hist_paye.at[idx, "Verifié"] = True
-                if passed_lookup[idx]:
-                    hist_paye.at[idx, "Conseiller"] = passed_lookup[idx]
 
         # Ensure Conseiller column exists
         if "Conseiller" not in hist_paye.columns:

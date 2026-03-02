@@ -252,6 +252,74 @@ def test_create_result_dataclass():
     return True
 
 
+def test_parse_formula_value():
+    """Test formula column parsing with various formats."""
+    print("\n[5/5] Testing _parse_formula_value...")
+
+    parse = MondayClient._parse_formula_value
+
+    # Plain number
+    assert parse({"text": "123.45", "value": None}) == 123.45
+    print("  ✓ Plain number")
+
+    # Integer
+    assert parse({"text": "100", "value": None}) == 100.0
+    print("  ✓ Integer")
+
+    # Zero
+    assert parse({"text": "0", "value": None}) == 0.0
+    print("  ✓ Zero")
+
+    # Empty text → None
+    assert parse({"text": "", "value": None}) is None
+    print("  ✓ Empty text")
+
+    # None text → None
+    assert parse({"text": None, "value": None}) is None
+    print("  ✓ None text")
+
+    # French decimal format: comma as decimal separator
+    assert parse({"text": "1234,56", "value": None}) == 1234.56
+    print("  ✓ French decimal (comma)")
+
+    # English thousands: 1,234.56
+    assert parse({"text": "1,234.56", "value": None}) == 1234.56
+    print("  ✓ English thousands separator")
+
+    # Currency with dollar sign
+    assert parse({"text": "$123.45", "value": None}) == 123.45
+    print("  ✓ Dollar sign")
+
+    # Spaces as thousands separator: 1 234.56
+    assert parse({"text": "1 234.56", "value": None}) == 1234.56
+    print("  ✓ Spaces as thousands separator")
+
+    # Non-breaking space
+    assert parse({"text": "1\u00a0234.56", "value": None}) == 1234.56
+    print("  ✓ Non-breaking space")
+
+    # JSON value field available
+    import json
+    assert parse({"text": "ignored", "value": json.dumps(123.45)}) == 123.45
+    print("  ✓ JSON value field (direct number)")
+
+    # JSON value field with dict
+    assert parse({"text": "ignored", "value": json.dumps({"value": 99.9})}) == 99.9
+    print("  ✓ JSON value field (dict)")
+
+    # Non-numeric formula text → returns raw text
+    result = parse({"text": "Yes", "value": None})
+    assert result == "Yes"
+    print("  ✓ Non-numeric text kept as-is")
+
+    # Negative number
+    assert parse({"text": "-50.25", "value": None}) == -50.25
+    print("  ✓ Negative number")
+
+    print("  _parse_formula_value OK!")
+    return True
+
+
 async def test_api_list_boards():
     """Test listing boards (requires API key)."""
     print("\n[API] Testing list_boards...")
@@ -330,6 +398,7 @@ def run_mock_tests():
         test_dataframe_creation,
         test_board_type_mapping,
         test_create_result_dataclass,
+        test_parse_formula_value,
     ]
 
     passed = 0

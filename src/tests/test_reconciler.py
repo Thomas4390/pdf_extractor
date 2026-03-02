@@ -642,15 +642,12 @@ def test_to_sales_view_dataframe():
     assert len(view) == 1
     row = view.iloc[0]
 
-    # Board-format columns (no Écart columns)
+    # Board-format columns with écarts
     for col in ["# de Police", "Compagnie", "Conseiller", "PA",
-                "Com", "Reçu 1", "Boni", "Reçu 2",
-                "Sur-Com", "Reçu 3", "Statut Rapp."]:
+                "Com", "Reçu 1", "Écart 1",
+                "Boni", "Reçu 2", "Écart 2",
+                "Sur-Com", "Reçu 3", "Écart 3", "Statut Rapp."]:
         assert col in view.columns, f"Missing column: {col}"
-
-    # No Écart columns
-    for col in view.columns:
-        assert "Écart" not in col, f"Unexpected Écart column: {col}"
 
     # Values correctly placed
     assert row["# de Police"] == "POL001"
@@ -776,9 +773,10 @@ def test_to_hist_view_dataframe():
     assert row_pol001["Verifié"] == True
     assert row_pol001["Conseiller"] == "Marie Tremblay"
 
-    # POL002 flagged → Verifié = False, Conseiller unchanged
+    # POL002 flagged → Verifié = False, but Conseiller still filled from sales
     row_pol002 = view[view["# de Police"] == "POL002"].iloc[0]
     assert row_pol002["Verifié"] == False
+    assert row_pol002["Conseiller"] == "Jean Dupont"
 
 
 def main():

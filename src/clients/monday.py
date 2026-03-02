@@ -1559,6 +1559,52 @@ class MondayClient:
 
         return all_items
 
+    @staticmethod
+    def _parse_formula_value(col_val: dict):
+        """Parse a Monday.com formula column value as a number.
+
+        Tries value (JSON) first, then text with formatting cleanup.
+        Returns float if numeric, raw text if not, None if empty.
+        """
+        import json as json_module
+
+        # 1. Try JSON value field (some formulas expose it)
+        raw_value = col_val.get("value")
+        if raw_value:
+            try:
+                parsed = json_module.loads(raw_value)
+                if isinstance(parsed, (int, float)):
+                    return float(parsed)
+                if isinstance(parsed, dict):
+                    v = parsed.get("value")
+                    if v is not None:
+                        return float(v)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+
+        # 2. Try text field with format cleanup
+        text = col_val.get("text", "")
+        if not text or not text.strip():
+            return None
+
+        cleaned = (
+            text.strip()
+            .replace("$", "")
+            .replace("\u00a0", "")  # non-breaking space
+            .replace(" ", "")
+        )
+        # French decimal: "1234,56" → "1234.56"
+        if "," in cleaned and "." not in cleaned:
+            cleaned = cleaned.replace(",", ".")
+        # English thousands: "1,234.56" → "1234.56"
+        elif "," in cleaned and "." in cleaned:
+            cleaned = cleaned.replace(",", "")
+
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return text  # Non-numeric formula → keep raw text
+
     def board_items_to_dataframe(
         self,
         items: list[dict],
@@ -1597,21 +1643,19 @@ class MondayClient:
 
                 # Use text representation for most columns
                 # For numbers, try to parse the value
-                if col_type in ("numbers", "numeric", "formula"):
+                if col_type in ("numbers", "numeric"):
                     try:
-                        if col_type == "formula":
-                            raw = col_val.get("text")
-                            row[col_title] = float(raw) if raw else None
+                        raw_value = col_val.get("value")
+                        if raw_value:
+                            import json as json_module
+                            parsed = json_module.loads(raw_value)
+                            row[col_title] = float(parsed) if parsed else None
                         else:
-                            raw_value = col_val.get("value")
-                            if raw_value:
-                                import json as json_module
-                                parsed = json_module.loads(raw_value)
-                                row[col_title] = float(parsed) if parsed else None
-                            else:
-                                row[col_title] = None
+                            row[col_title] = None
                     except (ValueError, TypeError, json.JSONDecodeError):
                         row[col_title] = col_val.get("text")
+                elif col_type == "formula":
+                    row[col_title] = self._parse_formula_value(col_val)
                 else:
                     row[col_title] = col_val.get("text")
 
