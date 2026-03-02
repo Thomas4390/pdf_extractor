@@ -143,6 +143,105 @@ class ReconciliationResult:
             })
         return pd.DataFrame(rows)
 
+    # Status priority: worst first (higher index = worse)
+    _STATUS_PRIORITY = {
+        ReconciliationStatus.PASSED: 0,
+        ReconciliationStatus.UNCLASSIFIED: 1,
+        ReconciliationStatus.NOT_FOUND: 2,
+        ReconciliationStatus.FLAGGED: 3,
+    }
+
+    def to_sales_view_dataframe(self, sales_df: pd.DataFrame) -> pd.DataFrame:
+        """Pivot matches into one row per police with Com/Boni/Sur-Com side by side.
+
+        Columns produced:
+        # Police | Compagnie | Conseiller | PA |
+        Com | Reçu 1 | Écart 1 | Boni | Reçu 2 | Écart 2 |
+        Sur-Com | Reçu 3 | Écart 3 | Statut
+
+        Args:
+            sales_df: Sales/production DataFrame (for PA/Com/Boni/Sur-Com values
+                      even when no historical match exists).
+
+        Returns:
+            DataFrame with one row per police number.
+        """
+        # Build sales lookup
+        sales_lookup: dict[str, pd.Series] = {}
+        if "# de Police" in sales_df.columns:
+            for _, row in sales_df.iterrows():
+                police = str(row.get("# de Police", "")).strip()
+                if police:
+                    sales_lookup[police] = row
+
+        # Group matches by police_number
+        from collections import defaultdict
+        by_police: dict[str, list[ReconciliationMatch]] = defaultdict(list)
+        for m in self.matches:
+            by_police[m.police_number].append(m)
+
+        rows = []
+        for police, matches in by_police.items():
+            sales_row = sales_lookup.get(police)
+
+            # Base info from first match or sales
+            compagnie = matches[0].compagnie
+            conseiller = matches[0].conseiller or "—"
+            pa = matches[0].pa_amount
+
+            # Sales reference values
+            com_ref = None
+            boni_ref = None
+            surcom_ref = None
+            if sales_row is not None:
+                com_ref = Reconciler._to_float(sales_row.get("Com"))
+                boni_ref = Reconciler._to_float(sales_row.get("Boni"))
+                surcom_ref = Reconciler._to_float(sales_row.get("Sur-Com"))
+                if pa is None:
+                    pa = Reconciler._to_float(sales_row.get("PA"))
+
+            # Find match for each Reçu type
+            recu_1 = recu_2 = recu_3 = None
+            ecart_1 = ecart_2 = ecart_3 = None
+            worst_status = ReconciliationStatus.PASSED
+
+            for m in matches:
+                # Track worst status
+                if self._STATUS_PRIORITY.get(m.status, 0) > self._STATUS_PRIORITY.get(worst_status, 0):
+                    worst_status = m.status
+
+                if m.classification is None:
+                    continue
+
+                if m.classification.recu_field == "Reçu 1":
+                    recu_1 = m.recu_amount
+                    ecart_1 = m.ecart_pct
+                elif m.classification.recu_field == "Reçu 2":
+                    recu_2 = m.recu_amount
+                    ecart_2 = m.ecart_pct
+                elif m.classification.recu_field == "Reçu 3":
+                    recu_3 = m.recu_amount
+                    ecart_3 = m.ecart_pct
+
+            rows.append({
+                "# Police": police,
+                "Compagnie": compagnie,
+                "Conseiller": conseiller,
+                "PA": pa,
+                "Com": com_ref,
+                "Reçu 1": recu_1,
+                "Écart 1": f"{ecart_1:.1f}%" if ecart_1 is not None else "—",
+                "Boni": boni_ref,
+                "Reçu 2": recu_2,
+                "Écart 2": f"{ecart_2:.1f}%" if ecart_2 is not None else "—",
+                "Sur-Com": surcom_ref,
+                "Reçu 3": recu_3,
+                "Écart 3": f"{ecart_3:.1f}%" if ecart_3 is not None else "—",
+                "Statut": worst_status.value,
+            })
+
+        return pd.DataFrame(rows)
+
 
 class Reconciler:
     """Reconciliation engine for cross-board matching."""

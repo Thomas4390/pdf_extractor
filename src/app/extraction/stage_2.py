@@ -1183,7 +1183,7 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     m_cols[4].metric("Non trouvées", result.not_found)
 
     # --- Results table ---
-    display_df = result.to_display_dataframe()
+    display_df = result.to_sales_view_dataframe(sales_df)
 
     if not display_df.empty:
         def _highlight_status(row):

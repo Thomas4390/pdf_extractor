@@ -595,6 +595,116 @@ def test_reconcile_idc_three_recu_types():
     assert updates["IDC1"]["Reçu 3"] == 30.0
 
 
+def test_to_sales_view_dataframe():
+    """Test pivoted sales view: 1 police with 3 types → 1 row."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection | Commission 1ère année",
+            "Reçu": 100.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection | Boni 1ère année vie",
+            "Reçu": 50.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Protection | Commission (Partage: 100%) [Sur-Com]",
+            "Reçu": 30.0,
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": 50.0,
+            "Sur-Com": 30.0,
+            "PA": 1000.0,
+            "item_id": "99",
+            "Conseiller": "Marie Tremblay",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    view = result.to_sales_view_dataframe(sales_df)
+
+    # One row per police
+    assert len(view) == 1
+    row = view.iloc[0]
+
+    # All expected columns present
+    for col in ["# Police", "Compagnie", "Conseiller", "PA",
+                "Com", "Reçu 1", "Écart 1",
+                "Boni", "Reçu 2", "Écart 2",
+                "Sur-Com", "Reçu 3", "Écart 3", "Statut"]:
+        assert col in view.columns, f"Missing column: {col}"
+
+    # Values correctly placed
+    assert row["# Police"] == "POL001"
+    assert row["Conseiller"] == "Marie Tremblay"
+    assert row["PA"] == 1000.0
+    assert row["Com"] == 100.0
+    assert row["Reçu 1"] == 100.0
+    assert row["Boni"] == 50.0
+    assert row["Reçu 2"] == 50.0
+    assert row["Sur-Com"] == 30.0
+    assert row["Reçu 3"] == 30.0
+
+    # All pass → status Vérifié
+    assert row["Statut"] == "Vérifié"
+
+
+def test_to_sales_view_worst_status():
+    """Test that pivoted view picks the worst status across match types."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 100.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Boni test",
+            "Reçu": 999.0,  # Huge deviation → Flagged
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": 50.0,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "12345",
+            "Conseiller": "Jean",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    view = result.to_sales_view_dataframe(sales_df)
+
+    assert len(view) == 1
+    # Flagged is worst → should be global status
+    assert view.iloc[0]["Statut"] == "Écart"
+
+
 def main():
     """Run all tests."""
     tests = [
@@ -618,6 +728,8 @@ def main():
         test_reconcile_mixed_police_aggregation,
         test_classify_idc_uses_text_rules,
         test_reconcile_idc_three_recu_types,
+        test_to_sales_view_dataframe,
+        test_to_sales_view_worst_status,
     ]
 
     passed = 0
