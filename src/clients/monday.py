@@ -1631,6 +1631,8 @@ class MondayClient:
                         id
                         column_values(ids: [{col_ids_str}]) {{
                             id
+                            text
+                            value
                             ... on FormulaValue {{
                                 display_value
                             }}
@@ -1645,14 +1647,25 @@ class MondayClient:
                 if result is None:
                     continue  # Batch failed after retries, skip
 
-                # Merge display_value back into items
+                # Merge enriched fields back into items
                 for item_data in result.get("data", {}).get("items", []):
                     cv_refs = item_cv_map.get(item_data["id"], {})
                     for cv in item_data.get("column_values", []):
                         ref = cv_refs.get(cv["id"])
-                        if ref and cv.get("display_value") is not None:
+                        if not ref:
+                            continue
+                        # display_value: best source
+                        if cv.get("display_value") is not None:
                             ref["display_value"] = cv["display_value"]
                             enriched_count += 1
+                        # Also update text/value if the enrichment
+                        # got a non-empty value the main query missed
+                        enrich_text = cv.get("text")
+                        if enrich_text and not ref.get("text"):
+                            ref["text"] = enrich_text
+                        enrich_value = cv.get("value")
+                        if enrich_value and not ref.get("value"):
+                            ref["value"] = enrich_value
 
         logger.info(f"Formula enrichment: {enriched_count} values populated")
 
@@ -1698,24 +1711,30 @@ class MondayClient:
     def _parse_formula_value(col_val: dict):
         """Parse a Monday.com formula column value as a number.
 
-        Priority:
-        1. display_value (from ... on FormulaValue fragment, API 2025-01+)
-        2. value (JSON)
-        3. text (fallback)
+        Tries every available source — the first non-empty wins:
+        1. display_value (FormulaValue fragment, most reliable)
+        2. value (JSON — some formulas expose it)
+        3. text (populated for some formulas in API 2024-10+)
 
         Returns float if numeric, raw text if not, None if empty.
         """
         import json as json_module
 
-        # 1. display_value — the reliable source for formula results
+        # 1. display_value — most reliable for formula results
+        #    Use `is not None` (not truthiness) to handle numeric 0
         display = col_val.get("display_value")
-        if display and str(display).strip():
-            parsed = MondayClient._clean_numeric_text(str(display))
-            if parsed is not None:
-                return parsed
-            return display  # Non-numeric formula → keep raw text
+        if display is not None:
+            # Already a number (some APIs return int/float directly)
+            if isinstance(display, (int, float)):
+                return float(display)
+            s = str(display).strip()
+            if s:
+                parsed = MondayClient._clean_numeric_text(s)
+                if parsed is not None:
+                    return parsed
+                return s  # Non-numeric formula → keep raw text
 
-        # 2. JSON value field (some formulas expose it)
+        # 2. JSON value field
         raw_value = col_val.get("value")
         if raw_value:
             try:
@@ -1729,19 +1748,24 @@ class MondayClient:
             except (ValueError, TypeError, json.JSONDecodeError):
                 pass
 
-        # 3. text field with format cleanup
-        text = col_val.get("text", "")
-        if not text or not text.strip():
-            return None
+        # 3. text field — populated for some formula types
+        text = col_val.get("text")
+        if text is not None:
+            s = str(text).strip()
+            if s:
+                parsed = MondayClient._clean_numeric_text(s)
+                if parsed is not None:
+                    return parsed
+                return s
 
-        parsed = MondayClient._clean_numeric_text(text)
-        if parsed is not None:
-            return parsed
-        return text  # Non-numeric formula → keep raw text
+        return None
 
     @staticmethod
     def _clean_numeric_text(text: str):
         """Try to parse a text value as a float, handling various formats.
+
+        Handles: $, spaces, non-breaking spaces, French/English separators,
+        trailing %, parenthesised negatives like (123.45).
 
         Returns float if numeric, None otherwise.
         """
@@ -1750,9 +1774,13 @@ class MondayClient:
             .replace("$", "")
             .replace("\u00a0", "")  # non-breaking space
             .replace(" ", "")
+            .replace("%", "")
         )
         if not cleaned:
             return None
+        # Parenthesised negative: "(123.45)" → "-123.45"
+        if cleaned.startswith("(") and cleaned.endswith(")"):
+            cleaned = "-" + cleaned[1:-1]
         # French decimal: "1234,56" → "1234.56"
         if "," in cleaned and "." not in cleaned:
             cleaned = cleaned.replace(",", ".")

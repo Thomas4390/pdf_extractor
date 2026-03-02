@@ -294,6 +294,16 @@ def test_parse_formula_value():
     assert parse({"text": "-50.25", "value": None}) == -50.25
     print("  ✓ text fallback: negative number")
 
+    # --- display_value as numeric (not string) ---
+    assert parse({"display_value": 0, "text": "", "value": None}) == 0.0
+    print("  ✓ display_value: numeric 0 (falsy but valid)")
+
+    assert parse({"display_value": 0.0, "text": "", "value": None}) == 0.0
+    print("  ✓ display_value: float 0.0")
+
+    assert parse({"display_value": 42, "text": "", "value": None}) == 42.0
+    print("  ✓ display_value: numeric int")
+
     # --- Empty / None ---
     assert parse({"text": "", "value": None}) is None
     print("  ✓ Empty text → None")
@@ -311,6 +321,17 @@ def test_parse_formula_value():
 
     assert parse({"text": "", "value": json.dumps({"value": 99.9})}) == 99.9
     print("  ✓ JSON value field (dict)")
+
+    # --- Percentage and parenthesised negatives ---
+    assert parse({"display_value": "12.5%", "text": "", "value": None}) == 12.5
+    print("  ✓ display_value: percentage")
+
+    assert parse({"display_value": "(50.25)", "text": "", "value": None}) == -50.25
+    print("  ✓ display_value: parenthesised negative")
+
+    # --- text as fallback when display_value is None ---
+    assert parse({"display_value": None, "text": "77.5", "value": None}) == 77.5
+    print("  ✓ text fallback when display_value is None")
 
     print("  _parse_formula_value OK!")
     return True
