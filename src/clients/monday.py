@@ -1597,15 +1597,19 @@ class MondayClient:
 
                 # Use text representation for most columns
                 # For numbers, try to parse the value
-                if col_type == "numbers" or col_type == "numeric":
+                if col_type in ("numbers", "numeric", "formula"):
                     try:
-                        raw_value = col_val.get("value")
-                        if raw_value:
-                            import json as json_module
-                            parsed = json_module.loads(raw_value)
-                            row[col_title] = float(parsed) if parsed else None
+                        if col_type == "formula":
+                            raw = col_val.get("text")
+                            row[col_title] = float(raw) if raw else None
                         else:
-                            row[col_title] = None
+                            raw_value = col_val.get("value")
+                            if raw_value:
+                                import json as json_module
+                                parsed = json_module.loads(raw_value)
+                                row[col_title] = float(parsed) if parsed else None
+                            else:
+                                row[col_title] = None
                     except (ValueError, TypeError, json.JSONDecodeError):
                         row[col_title] = col_val.get("text")
                 else:

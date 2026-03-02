@@ -152,19 +152,17 @@ class ReconciliationResult:
     }
 
     def to_sales_view_dataframe(self, sales_df: pd.DataFrame) -> pd.DataFrame:
-        """Pivot matches into one row per police with Com/Boni/Sur-Com side by side.
+        """Board-format sales view: one row per police with Reçu 1/2/3 filled.
 
         Columns produced:
-        # Police | Compagnie | Conseiller | PA |
-        Com | Reçu 1 | Écart 1 | Boni | Reçu 2 | Écart 2 |
-        Sur-Com | Reçu 3 | Écart 3 | Statut
+        # de Police | Compagnie | Conseiller | PA | Com | Reçu 1 |
+        Boni | Reçu 2 | Sur-Com | Reçu 3 | Statut Rapp.
 
         Args:
-            sales_df: Sales/production DataFrame (for PA/Com/Boni/Sur-Com values
-                      even when no historical match exists).
+            sales_df: Sales/production DataFrame from Monday.com.
 
         Returns:
-            DataFrame with one row per police number.
+            DataFrame with one row per police number (only matched polices).
         """
         # Build sales lookup
         sales_lookup: dict[str, pd.Series] = {}
@@ -175,7 +173,6 @@ class ReconciliationResult:
                     sales_lookup[police] = row
 
         # Group matches by police_number
-        from collections import defaultdict
         by_police: dict[str, list[ReconciliationMatch]] = defaultdict(list)
         for m in self.matches:
             by_police[m.police_number].append(m)
@@ -202,11 +199,9 @@ class ReconciliationResult:
 
             # Find match for each Reçu type
             recu_1 = recu_2 = recu_3 = None
-            ecart_1 = ecart_2 = ecart_3 = None
             worst_status = ReconciliationStatus.PASSED
 
             for m in matches:
-                # Track worst status
                 if self._STATUS_PRIORITY.get(m.status, 0) > self._STATUS_PRIORITY.get(worst_status, 0):
                     worst_status = m.status
 
@@ -215,32 +210,76 @@ class ReconciliationResult:
 
                 if m.classification.recu_field == "Reçu 1":
                     recu_1 = m.recu_amount
-                    ecart_1 = m.ecart_pct
                 elif m.classification.recu_field == "Reçu 2":
                     recu_2 = m.recu_amount
-                    ecart_2 = m.ecart_pct
                 elif m.classification.recu_field == "Reçu 3":
                     recu_3 = m.recu_amount
-                    ecart_3 = m.ecart_pct
 
             rows.append({
-                "# Police": police,
+                "# de Police": police,
                 "Compagnie": compagnie,
                 "Conseiller": conseiller,
                 "PA": pa,
                 "Com": com_ref,
                 "Reçu 1": recu_1,
-                "Écart 1": f"{ecart_1:.1f}%" if ecart_1 is not None else "—",
                 "Boni": boni_ref,
                 "Reçu 2": recu_2,
-                "Écart 2": f"{ecart_2:.1f}%" if ecart_2 is not None else "—",
                 "Sur-Com": surcom_ref,
                 "Reçu 3": recu_3,
-                "Écart 3": f"{ecart_3:.1f}%" if ecart_3 is not None else "—",
-                "Statut": worst_status.value,
+                "Statut Rapp.": worst_status.value,
             })
 
         return pd.DataFrame(rows)
+
+    def to_hist_view_dataframe(self, hist_df: pd.DataFrame) -> pd.DataFrame:
+        """Board-format historical view: Payé rows with Conseiller/Vérifié updated.
+
+        For PASSED matches, fills in Conseiller from sales and sets Vérifié = "✓".
+
+        Columns produced:
+        # de Police | Nom Client | Compagnie | Conseiller | Vérifié |
+        Reçu | Texte | Statut
+
+        Args:
+            hist_df: Historical payments DataFrame.
+
+        Returns:
+            DataFrame with Payé rows, Conseiller and Vérifié updated for matches.
+        """
+        # Filter to Payé only
+        paye_mask = hist_df.get("Statut", pd.Series(dtype=str)).astype(str).str.strip() == "Payé"
+        hist_paye = hist_df[paye_mask].copy()
+
+        if hist_paye.empty:
+            return pd.DataFrame()
+
+        # Build lookup: hist_index → (conseiller, status)
+        passed_lookup: dict[int, str] = {}  # index → conseiller
+        for m in self.matches:
+            if m.status == ReconciliationStatus.PASSED:
+                for idx in m.hist_indices:
+                    passed_lookup[idx] = m.conseiller or ""
+
+        # Add Verifié and update Conseiller
+        hist_paye["Verifié"] = False
+        for idx in hist_paye.index:
+            if idx in passed_lookup:
+                hist_paye.at[idx, "Verifié"] = True
+                if passed_lookup[idx]:
+                    hist_paye.at[idx, "Conseiller"] = passed_lookup[idx]
+
+        # Ensure Conseiller column exists
+        if "Conseiller" not in hist_paye.columns:
+            hist_paye["Conseiller"] = ""
+
+        # Select and order columns
+        output_cols = [
+            "# de Police", "Nom Client", "Compagnie", "Conseiller",
+            "Verifié", "Reçu", "Texte", "Statut",
+        ]
+        # Only include columns that exist
+        cols = [c for c in output_cols if c in hist_paye.columns]
+        return hist_paye[cols].reset_index(drop=True)
 
 
 class Reconciler:

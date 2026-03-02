@@ -1182,22 +1182,39 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     m_cols[3].metric("Écarts", result.flagged)
     m_cols[4].metric("Non trouvées", result.not_found)
 
-    # --- Results table ---
-    display_df = result.to_sales_view_dataframe(sales_df)
+    # --- Status highlight helper ---
+    def _highlight_status(row, status_col="Statut Rapp."):
+        status = row.get(status_col, "")
+        if status == ReconciliationStatus.PASSED.value:
+            return ["background-color: rgba(0, 200, 83, 0.1)"] * len(row)
+        elif status == ReconciliationStatus.FLAGGED.value:
+            return ["background-color: rgba(255, 152, 0, 0.1)"] * len(row)
+        elif status == ReconciliationStatus.NOT_FOUND.value:
+            return ["background-color: rgba(244, 67, 54, 0.1)"] * len(row)
+        return [""] * len(row)
 
-    if not display_df.empty:
-        def _highlight_status(row):
-            status = row.get("Statut", "")
-            if status == ReconciliationStatus.PASSED.value:
+    # --- Sales / Production table ---
+    sales_view_df = result.to_sales_view_dataframe(sales_df)
+
+    if not sales_view_df.empty:
+        st.subheader("Ventes / Production — Mise à jour Reçu")
+        styled_sales = sales_view_df.style.apply(_highlight_status, axis=1)
+        st.dataframe(styled_sales, width="stretch", height=400, hide_index=True)
+
+    # --- Historical payments table ---
+    hist_view_df = result.to_hist_view_dataframe(df)
+
+    if not hist_view_df.empty:
+        st.subheader("Paiement Historique — Mise à jour Conseiller / Vérifié")
+
+        def _highlight_verified(row):
+            verified = row.get("Verifié", False)
+            if verified is True:
                 return ["background-color: rgba(0, 200, 83, 0.1)"] * len(row)
-            elif status == ReconciliationStatus.FLAGGED.value:
-                return ["background-color: rgba(255, 152, 0, 0.1)"] * len(row)
-            elif status == ReconciliationStatus.NOT_FOUND.value:
-                return ["background-color: rgba(244, 67, 54, 0.1)"] * len(row)
             return [""] * len(row)
 
-        styled_df = display_df.style.apply(_highlight_status, axis=1)
-        st.dataframe(styled_df, width="stretch", height=400, hide_index=True)
+        styled_hist = hist_view_df.style.apply(_highlight_verified, axis=1)
+        st.dataframe(styled_hist, width="stretch", height=400, hide_index=True)
 
     # --- Detail sections ---
     if result.not_found > 0:

@@ -596,7 +596,7 @@ def test_reconcile_idc_three_recu_types():
 
 
 def test_to_sales_view_dataframe():
-    """Test pivoted sales view: 1 police with 3 types → 1 row."""
+    """Test board-format sales view: 1 police with 3 types → 1 row, no Écart columns."""
     r = Reconciler()
 
     hist_df = pd.DataFrame([
@@ -642,15 +642,18 @@ def test_to_sales_view_dataframe():
     assert len(view) == 1
     row = view.iloc[0]
 
-    # All expected columns present
-    for col in ["# Police", "Compagnie", "Conseiller", "PA",
-                "Com", "Reçu 1", "Écart 1",
-                "Boni", "Reçu 2", "Écart 2",
-                "Sur-Com", "Reçu 3", "Écart 3", "Statut"]:
+    # Board-format columns (no Écart columns)
+    for col in ["# de Police", "Compagnie", "Conseiller", "PA",
+                "Com", "Reçu 1", "Boni", "Reçu 2",
+                "Sur-Com", "Reçu 3", "Statut Rapp."]:
         assert col in view.columns, f"Missing column: {col}"
 
+    # No Écart columns
+    for col in view.columns:
+        assert "Écart" not in col, f"Unexpected Écart column: {col}"
+
     # Values correctly placed
-    assert row["# Police"] == "POL001"
+    assert row["# de Police"] == "POL001"
     assert row["Conseiller"] == "Marie Tremblay"
     assert row["PA"] == 1000.0
     assert row["Com"] == 100.0
@@ -661,11 +664,11 @@ def test_to_sales_view_dataframe():
     assert row["Reçu 3"] == 30.0
 
     # All pass → status Vérifié
-    assert row["Statut"] == "Vérifié"
+    assert row["Statut Rapp."] == "Vérifié"
 
 
 def test_to_sales_view_worst_status():
-    """Test that pivoted view picks the worst status across match types."""
+    """Test that sales view picks the worst status across match types."""
     r = Reconciler()
 
     hist_df = pd.DataFrame([
@@ -702,7 +705,80 @@ def test_to_sales_view_worst_status():
 
     assert len(view) == 1
     # Flagged is worst → should be global status
-    assert view.iloc[0]["Statut"] == "Écart"
+    assert view.iloc[0]["Statut Rapp."] == "Écart"
+
+
+def test_to_hist_view_dataframe():
+    """Test historical view: Conseiller and Vérifié filled for PASSED matches."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Nom Client": "Client A",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 100.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL002",
+            "Nom Client": "Client B",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 999.0,  # Will be flagged (huge deviation)
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL003",
+            "Nom Client": "Client C",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 100.0,
+            "Statut": "Charge back",  # Not Payé → filtered out
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": None,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "A1",
+            "Conseiller": "Marie Tremblay",
+        },
+        {
+            "# de Police": "POL002",
+            "Com": 50.0,
+            "Boni": None,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "A2",
+            "Conseiller": "Jean Dupont",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    view = result.to_hist_view_dataframe(hist_df)
+
+    # Only Payé rows (2 out of 3)
+    assert len(view) == 2
+
+    # Expected columns
+    for col in ["# de Police", "Nom Client", "Compagnie", "Conseiller",
+                "Verifié", "Reçu", "Texte", "Statut"]:
+        assert col in view.columns, f"Missing column: {col}"
+
+    # POL001 passed → Verifié = True, Conseiller from sales
+    row_pol001 = view[view["# de Police"] == "POL001"].iloc[0]
+    assert row_pol001["Verifié"] == True
+    assert row_pol001["Conseiller"] == "Marie Tremblay"
+
+    # POL002 flagged → Verifié = False, Conseiller unchanged
+    row_pol002 = view[view["# de Police"] == "POL002"].iloc[0]
+    assert row_pol002["Verifié"] == False
 
 
 def main():
@@ -730,6 +806,7 @@ def main():
         test_reconcile_idc_three_recu_types,
         test_to_sales_view_dataframe,
         test_to_sales_view_worst_status,
+        test_to_hist_view_dataframe,
     ]
 
     passed = 0
