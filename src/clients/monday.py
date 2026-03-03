@@ -2602,6 +2602,44 @@ class MondayClient:
         """Synchronous wrapper for add_users_to_board."""
         return asyncio.run(self.add_users_to_board(board_id, user_ids, kind))
 
+    async def set_board_permission(
+        self,
+        board_id: int,
+        basic_role_name: str = "contributor",
+    ) -> dict:
+        """Set the default permission role for a board.
+
+        Args:
+            board_id: Board ID to update
+            basic_role_name: "contributor" (edit content only),
+                             "editor" (edit content + structure),
+                             or "viewer" (read-only)
+
+        Returns:
+            Dict with edit_permissions and failed_actions
+        """
+        mutation = f"""
+        mutation {{
+            set_board_permission(
+                board_id: {board_id},
+                basic_role_name: {basic_role_name}
+            ) {{
+                edit_permissions
+                failed_actions
+            }}
+        }}
+        """
+        result = await self._execute_query(mutation)
+        return result["data"]["set_board_permission"]
+
+    def set_board_permission_sync(
+        self,
+        board_id: int,
+        basic_role_name: str = "contributor",
+    ) -> dict:
+        """Synchronous wrapper for set_board_permission."""
+        return asyncio.run(self.set_board_permission(board_id, basic_role_name))
+
     # -------------------------------------------------------------------------
     # Synchronous wrappers
     # -------------------------------------------------------------------------

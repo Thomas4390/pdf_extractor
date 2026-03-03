@@ -450,12 +450,13 @@ class AdvisorBoardProvisioner:
     ) -> ProvisioningResult:
         """Provision Monday.com boards for a new advisor.
 
-        5-step process:
+        6-step process:
         1. Create advisor folder
         2. Discover template boards
         3. Duplicate and rename each board
         4. Clean up groups (delete old, create current month)
         5. Invite advisor via email (if email provided)
+        6. Set board permissions to contributor (edit content only)
 
         Args:
             advisor: Advisor dataclass with first_name, last_name, email
@@ -669,6 +670,34 @@ class AdvisorBoardProvisioner:
         else:
             step5.status = "success"
             step5.message = "Pas d'email fourni, invitation ignorée"
+
+        # Step 6: Set board permissions to contributor
+        step6 = ProvisioningStep(name="Configurer les permissions")
+        result.steps.append(step6)
+        step6.status = "running"
+        _update("Configurer les permissions", "Restriction des boards en mode contributeur...")
+
+        permissions_set = 0
+        for board_info in duplicated_boards:
+            board_id = int(board_info["id"])
+            try:
+                self.client.set_board_permission_sync(
+                    board_id=board_id,
+                    basic_role_name="contributor",
+                )
+                permissions_set += 1
+                logger.info(f"Set board {board_info['name']} to contributor mode")
+            except MondayError as e:
+                logger.warning(f"Failed to set permissions on board {board_info['id']}: {e}")
+                result.errors.append(f"Permission setting failed for board {board_info['name']}: {e}")
+            time.sleep(0.3)
+
+        if permissions_set > 0:
+            step6.status = "success"
+            step6.message = f"{permissions_set}/{len(duplicated_boards)} board(s) en mode contributeur"
+        else:
+            step6.status = "error"
+            step6.message = "Aucun board configuré (plan Enterprise requis ?)"
 
         # Final status
         critical_steps = [s for s in result.steps if s.name in ["Créer le dossier", "Dupliquer les boards"]]
