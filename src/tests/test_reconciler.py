@@ -779,6 +779,187 @@ def test_to_hist_view_dataframe():
     assert row_pol002["Conseiller"] == "Jean Dupont"
 
 
+# --- New Texte format classification tests (post-118b50b) ---
+
+
+def test_classify_new_format_commission_with_boni_param():
+    """New Texte format: Commission row has TB: 0% param — must be Reçu 1, NOT Reçu 2."""
+    r = Reconciler()
+
+    # This is the exact regression case: "Boni: 0%" (now "TB: 0%") in params
+    # caused naive substring to match "boni" and misclassify as Reçu 2.
+    texte = "Assurance A | Commission (Partage: 40%, Com: 50%, TB: 0%)"
+    c = r.classify_row(texte)
+    assert c is not None, "Should classify structured Commission"
+    assert c.recu_field == "Reçu 1", f"Expected Reçu 1, got {c.recu_field}"
+    assert c.compare_column == "Com"
+
+    # Even with old "Boni:" param (before rename), label-based parsing should work
+    texte_old = "Assurance A | Commission (Partage: 40%, Com: 50%, Boni: 0%)"
+    c2 = r.classify_row(texte_old)
+    assert c2 is not None
+    assert c2.recu_field == "Reçu 1", f"Expected Reçu 1, got {c2.recu_field}"
+
+
+def test_classify_new_format_boni():
+    """New Texte format: Boni label → Reçu 2."""
+    r = Reconciler()
+
+    texte = "Assurance A | Boni (Partage: 40%, Com: 50%, TB: 175%)"
+    c = r.classify_row(texte)
+    assert c is not None
+    assert c.recu_field == "Reçu 2"
+    assert c.compare_column == "Boni"
+
+
+def test_classify_new_format_surcom_suffix():
+    """New Texte format: [Sur-Com] suffix → Reçu 3."""
+    r = Reconciler()
+
+    texte = "Assurance A | Sur-Com (Partage: 100%, Com: 50%, TB: 75%) [Sur-Com]"
+    c = r.classify_row(texte)
+    assert c is not None
+    assert c.recu_field == "Reçu 3"
+    assert c.compare_column == "Sur-Com"
+
+    # Commission label with [Sur-Com] suffix → still Reçu 3
+    texte2 = "Assurance A | Commission (Partage: 100%, Com: 50%, TB: 75%) [Sur-Com]"
+    c2 = r.classify_row(texte2)
+    assert c2 is not None
+    assert c2.recu_field == "Reçu 3"
+
+
+def test_classify_old_format_backward_compat():
+    """Old unstructured Texte (no |) still works via substring fallback."""
+    r = Reconciler()
+
+    assert r.classify_row("Commission 1ère année - Produit X").recu_field == "Reçu 1"
+    assert r.classify_row("Boni annuel").recu_field == "Reçu 2"
+    assert r.classify_row("Sur-Com paiement").recu_field == "Reçu 3"
+    assert r.classify_row("something else entirely") is None
+
+
+def test_reconcile_new_format_uv_multi_police():
+    """Realistic UV Inc + UV Perso: multiple polices, new Texte format, correct Reçu 1/2/3."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        # POL001 - UV Inc: Commission + Boni + Sur-Com
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Assurance Vie | Commission (Partage: 50%, Com: 50%, TB: 0%)",
+         "Reçu": 80.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Assurance Vie | Boni (Partage: 50%, Com: 50%, TB: 175%)",
+         "Reçu": 40.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Assurance Vie | Sur-Com (Partage: 100%, Com: 50%, TB: 75%) [Sur-Com]",
+         "Reçu": 20.0, "Statut": "Payé"},
+        # POL002 - UV Perso: Commission only
+        {"# de Police": "POL002", "Compagnie": "UV Perso",
+         "Texte": "Garantie B | Commission (Partage: 40%, Com: 60%, TB: 0%)",
+         "Reçu": 120.0, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 80.0, "Boni": 40.0, "Sur-Com": 20.0,
+         "PA": 1000.0, "item_id": "S1", "Conseiller": "Alice"},
+        {"# de Police": "POL002", "Com": 120.0, "Boni": None, "Sur-Com": None,
+         "PA": 800.0, "item_id": "S2", "Conseiller": "Bob"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    assert result.total_hist_lines == 4
+    assert result.passed == 4  # All should pass (3 for POL001 + 1 for POL002)
+    assert result.flagged == 0
+
+    updates = result.get_sales_updates()
+    assert updates["S1"]["Reçu 1"] == 80.0
+    assert updates["S1"]["Reçu 2"] == 40.0
+    assert updates["S1"]["Reçu 3"] == 20.0
+    assert updates["S2"]["Reçu 1"] == 120.0
+
+
+def test_reconcile_none_reference_default_flagged():
+    """Default: None reference → FLAGGED (ecart_pct is None)."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Protection | Commission (Partage: 50%, Com: 50%, TB: 0%)",
+         "Reçu": 100.0, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": None, "Boni": None, "Sur-Com": None,
+         "PA": 1000.0, "item_id": "X1", "Conseiller": "Claire"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    assert result.flagged == 1
+    assert result.passed == 0
+
+
+def test_reconcile_none_reference_allow_passed():
+    """allow_none_reference=True: None reference → PASSED."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Protection | Commission (Partage: 50%, Com: 50%, TB: 0%)",
+         "Reçu": 100.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Protection | Boni (Partage: 50%, Com: 50%, TB: 175%)",
+         "Reçu": 50.0, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": None, "Boni": None, "Sur-Com": None,
+         "PA": 1000.0, "item_id": "X1", "Conseiller": "Claire"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df, allow_none_reference=True)
+    assert result.passed == 2
+    assert result.flagged == 0
+
+    # Reçu amounts should still be written
+    updates = result.get_sales_updates()
+    assert updates["X1"]["Reçu 1"] == 100.0
+    assert updates["X1"]["Reçu 2"] == 50.0
+
+
+def test_reconcile_mixed_compagnie_same_police():
+    """Same police, different Compagnie text — should still group by (police, classification)."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Prot A | Commission (Partage: 50%, Com: 50%, TB: 0%)",
+         "Reçu": 60.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Prot B | Commission (Partage: 50%, Com: 50%, TB: 0%)",
+         "Reçu": 40.0, "Statut": "Payé"},
+        {"# de Police": "POL001", "Compagnie": "UV Inc",
+         "Texte": "Prot A | Boni (Partage: 50%, Com: 50%, TB: 175%)",
+         "Reçu": 25.0, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 100.0, "Boni": 25.0, "Sur-Com": None,
+         "PA": 600.0, "item_id": "M1", "Conseiller": "Denis"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+
+    # 2 groups: Commission (60+40=100) and Boni (25)
+    assert result.total_groups == 2
+    assert result.passed == 2
+
+    updates = result.get_sales_updates()
+    assert updates["M1"]["Reçu 1"] == 100.0
+    assert updates["M1"]["Reçu 2"] == 25.0
+
+
 def main():
     """Run all tests."""
     tests = [
@@ -805,6 +986,15 @@ def main():
         test_to_sales_view_dataframe,
         test_to_sales_view_worst_status,
         test_to_hist_view_dataframe,
+        # New tests (post-118b50b regression fix)
+        test_classify_new_format_commission_with_boni_param,
+        test_classify_new_format_boni,
+        test_classify_new_format_surcom_suffix,
+        test_classify_old_format_backward_compat,
+        test_reconcile_new_format_uv_multi_police,
+        test_reconcile_none_reference_default_flagged,
+        test_reconcile_none_reference_allow_passed,
+        test_reconcile_mixed_compagnie_same_police,
     ]
 
     passed = 0

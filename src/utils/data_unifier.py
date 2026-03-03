@@ -573,7 +573,7 @@ class DataUnifier:
             boni_rate_str = f"{int(bonus_rate_pct)}%" if bonus_rate_pct is not None else "?"
             protection_str = act.protection or "N/A"
             surcom_label = " [Sur-Com]" if is_surcom_line else ""
-            texte = f"{protection_str} | {category_label} (Partage: {sharing_rate_str}, Com: {commission_rate_str}, Boni: {boni_rate_str}){surcom_label}"
+            texte = f"{protection_str} | {category_label} (Partage: {sharing_rate_str}, Com: {commission_rate_str}, TB: {boni_rate_str}){surcom_label}"
 
             # Déterminer le statut basé sur la PA
             if premium is not None:

@@ -15,6 +15,7 @@ Key behavior:
 """
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -301,14 +302,21 @@ class ReconciliationResult:
 class Reconciler:
     """Reconciliation engine for cross-board matching."""
 
+    # Regex to extract the category label between "|" and "(" in structured Texte.
+    # Example: "Protection A | Commission (Partage: 40%, Com: 50%, TB: 0%)"
+    #   → captures "Commission"
+    _STRUCTURED_LABEL_RE = re.compile(r"\|\s*([^(|]+?)\s*\(")
+
     @staticmethod
     def classify_row(texte: str) -> Optional[RecuClassification]:
         """Classify a historical row into Reçu 1/2/3 based on Texte content.
 
-        Priority order (most specific first):
-        1. Sur-Com → Reçu 3
-        2. Boni → Reçu 2
-        3. Commission → Reçu 1
+        For **structured** Texte (contains "|" separator):
+        1. Check for "[sur-com]" suffix → Reçu 3 (strongest signal)
+        2. Extract category label between "|" and "("
+        3. Match label: sur-com → Reçu 3, boni → Reçu 2, commission → Reçu 1
+
+        For **unstructured** Texte (no "|"): fall back to substring matching.
 
         Args:
             texte: The Texte field from the historical payment row.
@@ -321,7 +329,68 @@ class Reconciler:
 
         texte_lower = texte.lower()
 
-        # Rule 1: Sur-Com (most specific, UV Inc only)
+        # --- Structured Texte path (contains "|") ---
+        if "|" in texte:
+            # Rule 1: [Sur-Com] suffix → always Reçu 3
+            if texte_lower.rstrip().endswith("[sur-com]"):
+                return RecuClassification(
+                    recu_field="Reçu 3",
+                    compare_column="Sur-Com",
+                    label="Sur-Commission",
+                )
+
+            # Rule 2: Extract category label between "|" and "("
+            m = Reconciler._STRUCTURED_LABEL_RE.search(texte)
+            if m:
+                label = m.group(1).strip().lower()
+                if "sur-com" in label or "surcom" in label:
+                    return RecuClassification(
+                        recu_field="Reçu 3",
+                        compare_column="Sur-Com",
+                        label="Sur-Commission",
+                    )
+                if "boni" in label:
+                    return RecuClassification(
+                        recu_field="Reçu 2",
+                        compare_column="Boni",
+                        label="Boni",
+                    )
+                if "commission" in label:
+                    return RecuClassification(
+                        recu_field="Reçu 1",
+                        compare_column="Com",
+                        label="Commission",
+                    )
+
+            # Structured but no parenthesized params — check each segment
+            # (handles both "label | ..." Assomption format and "... | label" UV format)
+            segments = [s.strip().lower() for s in texte.split("|")]
+            for seg in segments:
+                if "sur-com" in seg or "surcom" in seg:
+                    return RecuClassification(
+                        recu_field="Reçu 3",
+                        compare_column="Sur-Com",
+                        label="Sur-Commission",
+                    )
+            for seg in segments:
+                if "boni" in seg:
+                    return RecuClassification(
+                        recu_field="Reçu 2",
+                        compare_column="Boni",
+                        label="Boni",
+                    )
+            for seg in segments:
+                if "commission" in seg:
+                    return RecuClassification(
+                        recu_field="Reçu 1",
+                        compare_column="Com",
+                        label="Commission",
+                    )
+
+            return None
+
+        # --- Unstructured Texte fallback (no "|") ---
+        # Rule 1: Sur-Com (most specific)
         if "sur-com" in texte_lower or "surcom" in texte_lower:
             return RecuClassification(
                 recu_field="Reçu 3",
@@ -337,7 +406,7 @@ class Reconciler:
                 label="Boni",
             )
 
-        # Rule 3: Commission (includes "commission 1ère année", etc.)
+        # Rule 3: Commission
         if "commission" in texte_lower:
             return RecuClassification(
                 recu_field="Reçu 1",
@@ -365,6 +434,8 @@ class Reconciler:
         self,
         hist_df: pd.DataFrame,
         sales_df: pd.DataFrame,
+        *,
+        allow_none_reference: bool = False,
     ) -> ReconciliationResult:
         """Run reconciliation between historical payments and sales/production.
 
@@ -375,6 +446,10 @@ class Reconciler:
         Args:
             hist_df: Historical payments DataFrame.
             sales_df: Sales/production DataFrame.
+            allow_none_reference: If True, when the sales reference value
+                (Com/Boni/Sur-Com) is None, mark the match as PASSED instead
+                of FLAGGED.  Useful when formula enrichment from Monday.com
+                is partial or failed.
 
         Returns:
             ReconciliationResult with all matches and metrics.
@@ -496,6 +571,14 @@ class Reconciler:
 
             ecart_pct = self._compute_ecart(total_recu, reference)
             if ecart_pct is not None and ecart_pct <= threshold:
+                status = ReconciliationStatus.PASSED
+            elif reference is None and allow_none_reference:
+                logger.warning(
+                    "Reconciler: %s reference for police %s is None — "
+                    "marking as PASSED (allow_none_reference=True)",
+                    classification.compare_column,
+                    police,
+                )
                 status = ReconciliationStatus.PASSED
             else:
                 status = ReconciliationStatus.FLAGGED
