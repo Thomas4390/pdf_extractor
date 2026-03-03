@@ -1596,14 +1596,15 @@ class MondayClient:
         items: list[dict],
         batch_size: int = 50,
         max_formula_cols_per_query: int = 5,
-        max_retries: int = 3,
+        max_retries: int = 5,
     ) -> None:
         """Fetch display_value for formula columns in small batches.
 
         The FormulaValue display_value field is rate-limited to 10,000
         values/minute and max 5 formula columns per request.  This
         method fetches it separately in small item batches, splitting
-        formula columns into groups of 5.
+        formula columns into groups of 5, with inter-batch delays to
+        stay within the rate limit.
 
         Mutates items in-place by adding 'display_value' to formula
         column_values dicts.
@@ -1643,8 +1644,18 @@ class MondayClient:
         item_ids = list(item_cv_map.keys())
         enriched_count = 0
 
+        # Rate limit: 10,000 formula values/min.
+        # Each batch requests batch_size × len(col_group) values.
+        # Calculate inter-batch delay to stay safely under the limit.
+        rate_limit_per_min = 10_000
+        # Use 80% of the budget to leave headroom
+        safe_rate = rate_limit_per_min * 0.8
+
         for col_group in col_groups:
             col_ids_str = ", ".join(f'"{cid}"' for cid in col_group)
+            values_per_batch = batch_size * len(col_group)
+            # Seconds to wait between batches to respect rate limit
+            batch_delay = (values_per_batch / safe_rate) * 60
 
             for i in range(0, len(item_ids), batch_size):
                 batch_ids = item_ids[i : i + batch_size]
@@ -1691,6 +1702,9 @@ class MondayClient:
                         enrich_value = cv.get("value")
                         if enrich_value and not ref.get("value"):
                             ref["value"] = enrich_value
+
+                # Delay between batches to stay within rate limit
+                await asyncio.sleep(batch_delay)
 
         logger.info(f"Formula enrichment: {enriched_count} values populated")
 
