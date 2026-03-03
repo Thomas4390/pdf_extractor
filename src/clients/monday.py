@@ -1496,9 +1496,6 @@ class MondayClient:
                                             title
                                             type
                                         }}
-                                        ... on FormulaValue {{
-                                            display_value
-                                        }}
                                     }}
                                 }}
                             }}
@@ -1526,9 +1523,6 @@ class MondayClient:
                                     column {{
                                         title
                                         type
-                                    }}
-                                    ... on FormulaValue {{
-                                        display_value
                                     }}
                                 }}
                             }}
@@ -1563,32 +1557,23 @@ class MondayClient:
             if not cursor:
                 break
 
-        # Check if FormulaValue fragment in the main query already provided
-        # display_value for formula columns.  Only fall back to the separate
-        # enrichment pass when values are still missing.
-        missing = self._count_missing_formula_display_values(all_items)
-        if missing > 0:
-            logger.info(
-                f"Formula enrichment: {missing} display_value(s) still missing "
-                "after main query — running fallback enrichment pass"
-            )
-            try:
-                await self._enrich_formula_columns(all_items)
-                remaining = self._count_missing_formula_display_values(all_items)
-                if remaining > 0:
-                    logger.warning(
-                        f"Formula enrichment partial: {remaining} display_value(s) "
-                        "still missing after fallback"
-                    )
-                else:
-                    logger.info("Formula enrichment fallback: all values populated")
-            except Exception as e:
-                logger.warning(f"Formula enrichment fallback failed (non-fatal): {e}")
-        else:
-            logger.info(
-                "Formula display_value already populated from main query — "
-                "skipping fallback enrichment"
-            )
+        # Enrich formula columns with display_value via a separate batched
+        # query (FormulaValue fragment is rate-limited: 10k values/min, max 5
+        # formula cols per request).  _enrich_formula_columns handles retries
+        # and rate-limit back-off internally.  Non-fatal: if enrichment fails
+        # the formula columns will be None and downstream code warns the user.
+        try:
+            await self._enrich_formula_columns(all_items)
+            remaining = self._count_missing_formula_display_values(all_items)
+            if remaining > 0:
+                logger.warning(
+                    f"Formula enrichment partial: {remaining} display_value(s) "
+                    "still missing after enrichment"
+                )
+            else:
+                logger.info("Formula enrichment: all display_value(s) populated")
+        except Exception as e:
+            logger.warning(f"Formula enrichment failed (non-fatal): {e}")
 
         return all_items
 
