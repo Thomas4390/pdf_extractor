@@ -1149,15 +1149,48 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     st.session_state.reconciliation_board_id = board_id
 
     # --- Auto-load sales data on first visit ---
+    # Two-step load: fetch board data fast (no formula enrichment), then
+    # enrich formula columns only for items whose # de Police appears in
+    # the historical data.  This avoids the slow full-board FormulaValue
+    # pass which is rate-limited to 10k values/min.
     if not st.session_state.reconciliation_sales_loaded:
         with st.spinner("Chargement des données Ventes/Production..."):
             try:
                 pipeline = get_pipeline()
-                items = run_async(
-                    pipeline.monday.extract_board_data(int(board_id))
+                bid = int(board_id)
+
+                # Step 1: fast load without formula enrichment
+                all_items = run_async(
+                    pipeline.monday.extract_board_data(
+                        bid, skip_formula_enrichment=True,
+                    )
                 )
+
+                # Step 2: find which items match historical police numbers
+                hist_police = set(
+                    str(v).strip()
+                    for v in df.get("# de Police", pd.Series(dtype=str))
+                    if pd.notna(v) and str(v).strip()
+                )
+
+                matched_items = []
+                for item in all_items:
+                    for cv in item.get("column_values", []):
+                        if (
+                            cv.get("column", {}).get("title") == "# de Police"
+                            and str(cv.get("text", "")).strip() in hist_police
+                        ):
+                            matched_items.append(item)
+                            break
+
+                # Step 3: enrich formulas only for matched items
+                if matched_items:
+                    run_async(
+                        pipeline.monday.enrich_formula_columns(matched_items)
+                    )
+
                 sales_df = pipeline.monday.board_items_to_dataframe(
-                    items, include_item_id=True
+                    all_items, include_item_id=True,
                 )
                 st.session_state.reconciliation_sales_df = sales_df
                 st.session_state.reconciliation_sales_loaded = True

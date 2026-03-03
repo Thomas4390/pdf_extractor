@@ -1531,6 +1531,7 @@ class MondayClient:
         board_id: int,
         group_id: Optional[str] = None,
         limit: int = 500,
+        skip_formula_enrichment: bool = False,
     ) -> list[dict]:
         """
         Extract all items from a board with pagination.
@@ -1539,6 +1540,9 @@ class MondayClient:
             board_id: Board ID to extract from
             group_id: Optional group ID to filter by
             limit: Items per page (max 500)
+            skip_formula_enrichment: If True, skip the slow FormulaValue
+                enrichment pass.  Callers can later call
+                ``enrich_formula_columns()`` on a subset of items.
 
         Returns:
             List of item dictionaries with column values
@@ -1639,18 +1643,19 @@ class MondayClient:
         # formula cols per request).  _enrich_formula_columns handles retries
         # and rate-limit back-off internally.  Non-fatal: if enrichment fails
         # the formula columns will be None and downstream code warns the user.
-        try:
-            await self._enrich_formula_columns(all_items)
-            remaining = self._count_missing_formula_display_values(all_items)
-            if remaining > 0:
-                logger.warning(
-                    f"Formula enrichment partial: {remaining} display_value(s) "
-                    "still missing after enrichment"
-                )
-            else:
-                logger.info("Formula enrichment: all display_value(s) populated")
-        except Exception as e:
-            logger.warning(f"Formula enrichment failed (non-fatal): {e}")
+        if not skip_formula_enrichment:
+            try:
+                await self._enrich_formula_columns(all_items)
+                remaining = self._count_missing_formula_display_values(all_items)
+                if remaining > 0:
+                    logger.warning(
+                        f"Formula enrichment partial: {remaining} display_value(s) "
+                        "still missing after enrichment"
+                    )
+                else:
+                    logger.info("Formula enrichment: all display_value(s) populated")
+            except Exception as e:
+                logger.warning(f"Formula enrichment failed (non-fatal): {e}")
 
         return all_items
 
@@ -1667,6 +1672,22 @@ class MondayClient:
                     if cv.get("display_value") is None:
                         missing += 1
         return missing
+
+    async def enrich_formula_columns(self, items: list[dict]) -> None:
+        """Public wrapper: enrich formula display_values for a subset of items.
+
+        Use this after calling ``extract_board_data(skip_formula_enrichment=True)``
+        to selectively enrich only the items you need (e.g. matched police numbers).
+
+        Mutates *items* in-place.  Non-fatal: logs a warning on partial results.
+        """
+        await self._enrich_formula_columns(items)
+        remaining = self._count_missing_formula_display_values(items)
+        if remaining > 0:
+            logger.warning(
+                f"Formula enrichment partial: {remaining} display_value(s) "
+                "still missing after enrichment"
+            )
 
     # Shared timestamp tracking the last formula enrichment request across
     # all MondayClient instances.  Used to enforce a global cooldown so
