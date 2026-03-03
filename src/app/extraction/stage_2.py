@@ -1310,13 +1310,264 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
                 for w in overwrite_warnings:
                     st.markdown(f"- {w}")
 
+    # =================================================================
+    # UPLOAD SECTION — dual-board upload directly from reconciliation
+    # =================================================================
+    st.markdown("---")
+
+    recon_upload_result = st.session_state.get("_recon_upload_result")
+
+    if recon_upload_result is None:
+        # --- Upload summary ---
+        from src.utils.aggregator import SOURCE_BOARDS
+        vp_config = SOURCE_BOARDS.get("vente_production")
+        sales_board_name = vp_config.display_name if vp_config else "Ventes/Production"
+        hist_board_name = st.session_state._current_board_name or "Paiement Historique"
+
+        dup_count = st.session_state.get('duplicate_count', 0)
+        has_duplicates = '_is_duplicate' in df.columns and dup_count > 0
+        upload_count = len(df) - dup_count if has_duplicates else len(df)
+
+        st.markdown("### Upload vers Monday.com")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**Board 1 — {hist_board_name}**")
+            st.markdown(f"- {upload_count} nouvelles lignes")
+            if has_duplicates:
+                st.caption(f"({dup_count} doublon(s) exclus)")
+            hist_passed = result.get_passed_hist_updates()
+            if hist_passed:
+                st.markdown(f"- {len(hist_passed)} lignes → Conseiller + Vérifié")
+
+        with col2:
+            st.markdown(f"**Board 2 — {sales_board_name}**")
+            sales_updates = result.get_sales_updates()
+            recu_fields: set[str] = set()
+            for fields in sales_updates.values():
+                recu_fields.update(fields.keys())
+            st.markdown(
+                f"- {len(sales_updates)} polices → "
+                f"{', '.join(sorted(recu_fields)) or 'Reçu'}"
+            )
+            st.markdown(f"- {result.passed} correspondances vérifiées")
+            if result.flagged > 0:
+                st.markdown(f"- {result.flagged} écarts (non écrits)")
+
+        # --- Buttons ---
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        with btn_col2:
+            if st.button(
+                "Uploader les 2 boards",
+                type="primary",
+                key="recon_upload_btn",
+                use_container_width=True,
+            ):
+                _execute_recon_upload(df, result)
+
+    else:
+        # --- Display upload result ---
+        _render_recon_upload_result(recon_upload_result)
+
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("Nouveau pipeline", key="recon_new_pipeline_btn", use_container_width=True):
+                reset_pipeline()
+                st.rerun()
+        with btn_col2:
+            board_id = st.session_state.selected_board_id
+            st.link_button(
+                "Ouvrir Monday.com",
+                f"https://monday.com/boards/{board_id}",
+                use_container_width=True,
+            )
+
     # Reload button at the bottom, compact
     st.markdown("---")
     if st.button("Recharger Ventes/Production", key="recon_reload_btn"):
         st.session_state.reconciliation_sales_loaded = False
         st.session_state.reconciliation_sales_df = None
         st.session_state.reconciliation_result = None
+        st.session_state._recon_upload_result = None
         st.rerun()
+
+
+def _execute_recon_upload(df: pd.DataFrame, recon_result) -> None:
+    """Execute dual-board upload from the reconciliation tab.
+
+    1. Upload new historical items to Paiement Historique.
+    2. Writeback Reçu 1/2/3 on Ventes/Production.
+    3. Writeback Conseiller + Vérifié on newly uploaded Paiement Historique items.
+    """
+    from src.app.extraction.stage_3 import _execute_reconciliation_writeback
+
+    pipeline = get_pipeline()
+    board_id = st.session_state.selected_board_id
+
+    # Filter out duplicates
+    upload_df = df
+    if '_is_duplicate' in df.columns:
+        upload_df = df[~df['_is_duplicate']].copy()
+
+    # Get unique groups
+    if '_target_group' in upload_df.columns:
+        unique_groups = upload_df['_target_group'].unique().tolist()
+    else:
+        unique_groups = ["Data"]
+
+    total_items = len(upload_df)
+    if total_items == 0:
+        st.warning("Aucune donnée à uploader.")
+        return
+
+    progress_bar = st.progress(0, text="Board 1/2 — Paiement Historique: démarrage...")
+    status_text = st.empty()
+
+    items_uploaded = 0
+    items_failed = 0
+    all_errors: list[str] = []
+    all_item_ids: list[str] = []
+    items_processed = 0
+
+    try:
+        # --- Board 1: Upload new historical items ---
+        for group_idx, group_name in enumerate(unique_groups):
+            status_text.markdown(
+                f"**Board 1/2** — Groupe {group_idx + 1}/{len(unique_groups)}: {group_name}"
+            )
+
+            if '_target_group' in upload_df.columns:
+                group_df = upload_df[upload_df['_target_group'] == group_name].copy()
+            else:
+                group_df = upload_df.copy()
+
+            export_df = group_df.drop(
+                columns=[c for c in group_df.columns if c.startswith('_')],
+                errors='ignore',
+            )
+
+            try:
+                group_result = run_async(
+                    pipeline.monday.get_or_create_group(board_id, str(group_name))
+                )
+                group_id = group_result.id if group_result.success else None
+                if not group_id:
+                    raise Exception(f"Impossible de créer le groupe: {group_result.error}")
+
+                def on_progress(
+                    current: int, total: int,
+                    _offset=items_processed, _label=group_name,
+                ) -> None:
+                    overall = (_offset + current) / total_items
+                    progress_bar.progress(
+                        min(overall, 0.99),
+                        text=f"Board 1/2 — {_label} ({_offset + current}/{total_items})",
+                    )
+
+                result = run_async(
+                    pipeline.monday.upload_dataframe(
+                        df=export_df,
+                        board_id=board_id,
+                        group_id=group_id,
+                        progress_callback=on_progress,
+                    )
+                )
+
+                items_uploaded += result.success
+                items_failed += result.failed
+                all_errors.extend(result.errors)
+                all_item_ids.extend(result.item_ids)
+                items_processed += len(export_df)
+
+            except Exception as e:
+                items_failed += len(export_df)
+                items_processed += len(export_df)
+                all_errors.append(f"Groupe {group_name}: {e}")
+
+        progress_bar.progress(1.0, text="Board 1/2 — Paiement Historique: terminé!")
+
+        # Store partial result so stage_3 writeback can append to it
+        st.session_state.upload_result = {
+            "total": total_items,
+            "success": items_uploaded,
+            "failed": items_failed,
+            "errors": all_errors,
+            "groups": len(unique_groups),
+            "item_ids": all_item_ids,
+        }
+
+        # --- Board 2: Reconciliation writeback ---
+        _execute_reconciliation_writeback(
+            pipeline, board_id, recon_result, all_item_ids, df,
+            progress_bar, status_text,
+        )
+
+        st.session_state._recon_upload_result = st.session_state.upload_result
+
+    except Exception as e:
+        st.error(f"Échec de l'upload: {e}")
+        st.session_state._recon_upload_result = {
+            "total": total_items,
+            "success": items_uploaded,
+            "failed": items_failed + (total_items - items_processed),
+            "errors": all_errors + [str(e)],
+            "groups": 0,
+        }
+
+    finally:
+        progress_bar.empty()
+        status_text.empty()
+        st.rerun()
+
+
+def _render_recon_upload_result(result: dict) -> None:
+    """Display dual-board upload result inside the reconciliation tab."""
+    total = result.get("total", 0)
+    success = result.get("success", 0)
+    failed = result.get("failed", 0)
+    groups = result.get("groups", 1)
+    recon_wb = result.get("reconciliation_writeback")
+
+    st.markdown("### Résultat de l'upload")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        board_name = st.session_state._current_board_name or "Paiement Historique"
+        st.markdown(f"**Board 1 — {board_name}**")
+        if failed == 0:
+            st.success(f"{success}/{total} lignes uploadées dans {groups} groupe(s)")
+        else:
+            st.warning(f"{success}/{total} uploadées. {failed} en erreur.")
+
+        if recon_wb:
+            hist_updated = recon_wb.get("hist_updated", 0)
+            if hist_updated > 0:
+                st.success(f"{hist_updated} lignes → Conseiller + Vérifié")
+
+    with col2:
+        from src.utils.aggregator import SOURCE_BOARDS
+        vp_config = SOURCE_BOARDS.get("vente_production")
+        sales_name = vp_config.display_name if vp_config else "Ventes/Production"
+
+        st.markdown(f"**Board 2 — {sales_name}**")
+        if recon_wb:
+            sales_updated = recon_wb.get("sales_updated", 0)
+            if sales_updated > 0:
+                st.success(f"{sales_updated} polices → Reçu mis à jour")
+            else:
+                st.info("Aucune mise à jour")
+        else:
+            st.info("Writeback non exécuté")
+
+    # Errors
+    all_errors = result.get("errors", [])
+    wb_errors = recon_wb.get("wb_error_details", []) if recon_wb else []
+    total_errors = all_errors + wb_errors
+    if total_errors:
+        with st.expander(f"Erreurs ({len(total_errors)})"):
+            for error in total_errors[:10]:
+                st.error(error)
 
 
 def _render_actions_tab(df: pd.DataFrame) -> None:

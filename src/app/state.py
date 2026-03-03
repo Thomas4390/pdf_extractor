@@ -212,7 +212,7 @@ def reset_pipeline() -> None:
         'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
         'reconciliation_result', 'reconciliation_sales_df',
         'reconciliation_sales_loaded', 'reconciliation_board_id',
-        'reconciliation_enabled',
+        'reconciliation_enabled', '_recon_upload_result',
     ]
     for key in keys_to_reset:
         if key == 'stage':
