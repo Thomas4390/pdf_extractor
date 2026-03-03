@@ -96,6 +96,7 @@ class UploadResult:
     failed: int = 0
     errors: list[str] = field(default_factory=list)
     item_ids: list[str] = field(default_factory=list)
+    index_to_item_id: dict[int, str] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -139,9 +140,9 @@ class MondayClient:
         'Profitable': ColumnType.STATUS,
         'Advisor_Status': ColumnType.STATUS,
 
-        # Checkbox columns
-        'Verifié': ColumnType.CHECKBOX,
-        'Complet': ColumnType.CHECKBOX,
+        # Status label columns
+        'Verifié': ColumnType.STATUS,
+        'Complet': ColumnType.STATUS,
 
         # Date columns
         'Date': ColumnType.DATE,
@@ -1502,6 +1503,7 @@ class MondayClient:
                 return create_result
 
         # Execute uploads
+        df_indices = list(df.index)
         tasks = [
             upload_row(idx, row)
             for idx, row in df.iterrows()
@@ -1509,12 +1511,13 @@ class MondayClient:
 
         create_results = await asyncio.gather(*tasks)
 
-        # Aggregate results
-        for create_result in create_results:
+        # Aggregate results — zip with original DataFrame indices
+        for df_idx, create_result in zip(df_indices, create_results):
             if create_result.success:
                 result.success += 1
                 if create_result.id:
                     result.item_ids.append(create_result.id)
+                    result.index_to_item_id[df_idx] = create_result.id
             else:
                 result.failed += 1
                 if create_result.error:

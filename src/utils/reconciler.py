@@ -128,6 +128,25 @@ class ReconciliationResult:
                     results.append((idx, m.conseiller))
         return results
 
+    def get_all_hist_updates(self) -> list[tuple[int, Optional[str], bool]]:
+        """Get historical indices and advisors for all matched items.
+
+        Returns all matches (PASSED, FLAGGED, UNCLASSIFIED) — not NOT_FOUND —
+        so the writeback can write Conseiller for all found items and
+        Verifié/Pas Verifié labels.
+
+        Returns:
+            List of (hist_index, conseiller, is_passed) tuples.
+        """
+        results = []
+        for m in self.matches:
+            if m.status == ReconciliationStatus.NOT_FOUND:
+                continue
+            is_passed = m.status == ReconciliationStatus.PASSED
+            for idx in m.hist_indices:
+                results.append((idx, m.conseiller, is_passed))
+        return results
+
     def to_display_dataframe(self) -> pd.DataFrame:
         """Convert matches to a DataFrame for UI display."""
         rows = []
@@ -277,13 +296,13 @@ class ReconciliationResult:
             if m.status == ReconciliationStatus.PASSED:
                 passed_indices.update(m.hist_indices)
 
-        # Add Verifié and update Conseiller
-        hist_paye["Verifié"] = False
+        # Add Verifié labels and update Conseiller
+        hist_paye["Verifié"] = "Pas Verifié"
         for idx in hist_paye.index:
             if idx in conseiller_lookup and conseiller_lookup[idx]:
                 hist_paye.at[idx, "Conseiller"] = conseiller_lookup[idx]
             if idx in passed_indices:
-                hist_paye.at[idx, "Verifié"] = True
+                hist_paye.at[idx, "Verifié"] = "Verifié"
 
         # Ensure Conseiller column exists
         if "Conseiller" not in hist_paye.columns:

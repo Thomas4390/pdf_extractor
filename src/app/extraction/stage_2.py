@@ -1260,8 +1260,8 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
         st.subheader("Paiement Historique — Mise à jour Conseiller / Vérifié")
 
         def _highlight_verified(row):
-            verified = row.get("Verifié", False)
-            if verified is True:
+            verified = row.get("Verifié", "")
+            if verified == "Verifié":
                 return ["background-color: rgba(0, 200, 83, 0.1)"] * len(row)
             return [""] * len(row)
 
@@ -1427,6 +1427,7 @@ def _execute_recon_upload(df: pd.DataFrame, recon_result) -> None:
     items_failed = 0
     all_errors: list[str] = []
     all_item_ids: list[str] = []
+    all_index_to_item_id: dict[int, str] = {}
     items_processed = 0
 
     try:
@@ -1477,6 +1478,7 @@ def _execute_recon_upload(df: pd.DataFrame, recon_result) -> None:
                 items_failed += result.failed
                 all_errors.extend(result.errors)
                 all_item_ids.extend(result.item_ids)
+                all_index_to_item_id.update(result.index_to_item_id)
                 items_processed += len(export_df)
 
             except Exception as e:
@@ -1498,7 +1500,7 @@ def _execute_recon_upload(df: pd.DataFrame, recon_result) -> None:
 
         # --- Board 2: Reconciliation writeback ---
         _execute_reconciliation_writeback(
-            pipeline, board_id, recon_result, all_item_ids, df,
+            pipeline, board_id, recon_result, all_index_to_item_id, df,
             progress_bar, status_text,
         )
 

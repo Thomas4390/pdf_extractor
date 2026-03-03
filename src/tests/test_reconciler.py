@@ -768,14 +768,14 @@ def test_to_hist_view_dataframe():
                 "Verifié", "Reçu", "Texte", "Statut"]:
         assert col in view.columns, f"Missing column: {col}"
 
-    # POL001 passed → Verifié = True, Conseiller from sales
+    # POL001 passed → Verifié = "Verifié", Conseiller from sales
     row_pol001 = view[view["# de Police"] == "POL001"].iloc[0]
-    assert row_pol001["Verifié"] == True
+    assert row_pol001["Verifié"] == "Verifié"
     assert row_pol001["Conseiller"] == "Marie Tremblay"
 
-    # POL002 flagged → Verifié = False, but Conseiller still filled from sales
+    # POL002 flagged → Verifié = "Pas Verifié", but Conseiller still filled from sales
     row_pol002 = view[view["# de Police"] == "POL002"].iloc[0]
-    assert row_pol002["Verifié"] == False
+    assert row_pol002["Verifié"] == "Pas Verifié"
     assert row_pol002["Conseiller"] == "Jean Dupont"
 
 
@@ -928,6 +928,77 @@ def test_reconcile_none_reference_allow_passed():
     assert updates["X1"]["Reçu 2"] == 50.0
 
 
+def test_get_all_hist_updates():
+    """Test get_all_hist_updates returns all found matches with is_passed flag."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 100.0,
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL002",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 999.0,  # Huge deviation → Flagged
+            "Statut": "Payé",
+        },
+        {
+            "# de Police": "POL999",
+            "Compagnie": "UV Inc",
+            "Texte": "Commission test",
+            "Reçu": 50.0,
+            "Statut": "Payé",
+        },
+    ])
+
+    sales_df = pd.DataFrame([
+        {
+            "# de Police": "POL001",
+            "Com": 100.0,
+            "Boni": None,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "A1",
+            "Conseiller": "Marie",
+        },
+        {
+            "# de Police": "POL002",
+            "Com": 50.0,
+            "Boni": None,
+            "Sur-Com": None,
+            "PA": 1000.0,
+            "item_id": "A2",
+            "Conseiller": "Jean",
+        },
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    all_updates = result.get_all_hist_updates()
+
+    # POL001 (passed) + POL002 (flagged) = 2 entries, POL999 (not_found) excluded
+    assert len(all_updates) == 2
+
+    # POL001: index 0, conseiller Marie, is_passed=True
+    idx_0 = [u for u in all_updates if u[0] == 0]
+    assert len(idx_0) == 1
+    assert idx_0[0] == (0, "Marie", True)
+
+    # POL002: index 1, conseiller Jean, is_passed=False
+    idx_1 = [u for u in all_updates if u[0] == 1]
+    assert len(idx_1) == 1
+    assert idx_1[0] == (1, "Jean", False)
+
+    # get_passed_hist_updates should only return POL001
+    passed = result.get_passed_hist_updates()
+    assert len(passed) == 1
+    assert passed[0] == (0, "Marie")
+
+
 def test_reconcile_mixed_compagnie_same_police():
     """Same police, different Compagnie text — should still group by (police, classification)."""
     r = Reconciler()
@@ -994,6 +1065,7 @@ def main():
         test_reconcile_new_format_uv_multi_police,
         test_reconcile_none_reference_default_flagged,
         test_reconcile_none_reference_allow_passed,
+        test_get_all_hist_updates,
         test_reconcile_mixed_compagnie_same_police,
     ]
 

@@ -191,6 +191,7 @@ def execute_upload(df: pd.DataFrame) -> None:
         items_failed = 0
         all_errors = []
         all_item_ids = []
+        all_index_to_item_id: dict[int, str] = {}
 
         # Track items processed so far for progress display
         items_processed_before_group = 0
@@ -242,6 +243,7 @@ def execute_upload(df: pd.DataFrame) -> None:
                 items_failed += result.failed
                 all_errors.extend(result.errors)
                 all_item_ids.extend(result.item_ids)
+                all_index_to_item_id.update(result.index_to_item_id)
 
                 items_processed_before_group += len(export_df)
 
@@ -267,7 +269,7 @@ def execute_upload(df: pd.DataFrame) -> None:
         recon_result = st.session_state.get("reconciliation_result")
         if recon_result and (recon_result.passed > 0):
             _execute_reconciliation_writeback(
-                pipeline, board_id, recon_result, all_item_ids, df,
+                pipeline, board_id, recon_result, all_index_to_item_id, df,
                 progress_bar, status_text,
             )
 
@@ -359,14 +361,14 @@ def _execute_reconciliation_writeback(
     pipeline,
     hist_board_id: int,
     recon_result,
-    hist_item_ids: list[str],
+    index_to_item_id: dict[int, str],
     hist_df: pd.DataFrame,
     progress_bar,
     status_text,
 ) -> None:
     """Execute cross-board writeback after successful upload.
 
-    Part A: Update Reçu 1/2/3 on Ventes/Production board.
+    Part A: Update Reçu 1/2/3 + Statut + Complet on Ventes/Production board.
     Part B: Update Conseiller + Vérifié on Paiement Historique board.
     """
     sales_board_id = st.session_state.get("reconciliation_board_id")
@@ -374,7 +376,7 @@ def _execute_reconciliation_writeback(
         return
 
     sales_updates = recon_result.get_sales_updates()
-    hist_updates = recon_result.get_passed_hist_updates()
+    hist_updates = recon_result.get_all_hist_updates()
 
     if not sales_updates and not hist_updates:
         return
@@ -389,14 +391,24 @@ def _execute_reconciliation_writeback(
     total_ops = len(sales_updates) + len(hist_updates)
     ops_done = 0
 
-    # --- Part A: Update Ventes/Production (Reçu 1/2/3) ---
+    # --- Part A: Update Ventes/Production (Reçu 1/2/3 + Statut + Complet) ---
     if sales_updates:
         try:
             col_id_map, _ = run_async(
                 pipeline.monday.get_or_create_columns(
-                    int(sales_board_id), ["Reçu 1", "Reçu 2", "Reçu 3"]
+                    int(sales_board_id),
+                    ["Reçu 1", "Reçu 2", "Reçu 3", "Statut", "Complet"],
                 )
             )
+
+            # Build sales lookup for existing values
+            sales_df = st.session_state.get("reconciliation_sales_df")
+            sales_by_item: dict[str, pd.Series] = {}
+            if sales_df is not None and "item_id" in sales_df.columns:
+                for _, row in sales_df.iterrows():
+                    iid = str(row.get("item_id", "")).strip()
+                    if iid:
+                        sales_by_item[iid] = row
 
             for item_id, fields in sales_updates.items():
                 try:
@@ -405,6 +417,52 @@ def _execute_reconciliation_writeback(
                         col_id = col_id_map.get(field_name)
                         if col_id:
                             column_values[col_id] = str(value)
+
+                    # --- Statut: "En vigueur" if Reçu 1 > 0 ---
+                    recu_1_val = fields.get("Reçu 1")
+                    if recu_1_val is not None and recu_1_val > 0:
+                        statut_col_id = col_id_map.get("Statut")
+                        if statut_col_id:
+                            column_values[statut_col_id] = {"label": "En vigueur"}
+
+                    # --- Complet: label based on Total Reçu vs Total ---
+                    sales_row = sales_by_item.get(str(item_id))
+                    if sales_row is not None:
+                        def _to_float(v):
+                            if v is None:
+                                return 0.0
+                            try:
+                                f = float(v)
+                                return f if f == f else 0.0
+                            except (ValueError, TypeError):
+                                return 0.0
+
+                        # Compute total_recu: new values override existing
+                        r1 = fields.get("Reçu 1")
+                        if r1 is None:
+                            r1 = _to_float(sales_row.get("Reçu 1"))
+                        r2 = fields.get("Reçu 2")
+                        if r2 is None:
+                            r2 = _to_float(sales_row.get("Reçu 2"))
+                        r3 = fields.get("Reçu 3")
+                        if r3 is None:
+                            r3 = _to_float(sales_row.get("Reçu 3"))
+
+                        total_recu = r1 + r2 + r3
+                        total = _to_float(sales_row.get("Total"))
+
+                        if total and total > 0:
+                            ecart = abs(total_recu - total) / total
+                            if ecart <= 0.10:
+                                complet_label = "Complet"
+                            elif r3 == 0:
+                                complet_label = "Attente"
+                            else:
+                                complet_label = "Incomplet"
+
+                            complet_col_id = col_id_map.get("Complet")
+                            if complet_col_id:
+                                column_values[complet_col_id] = {"label": complet_label}
 
                     if column_values:
                         run_async(
@@ -432,7 +490,7 @@ def _execute_reconciliation_writeback(
             wb_errors.append(f"Sales columns: {e}")
 
     # --- Part B: Update Paiement Historique (Conseiller + Vérifié) ---
-    if hist_updates and hist_item_ids:
+    if hist_updates and index_to_item_id:
         try:
             col_id_map, col_type_map = run_async(
                 pipeline.monday.get_or_create_columns(
@@ -443,18 +501,7 @@ def _execute_reconciliation_writeback(
             conseiller_col_id = col_id_map.get("Conseiller")
             verifie_col_id = col_id_map.get("Verifié")
 
-            # Build index → item_id mapping
-            filtered_df = hist_df
-            if '_is_duplicate' in hist_df.columns:
-                filtered_df = hist_df[~hist_df['_is_duplicate']]
-
-            filtered_indices = list(filtered_df.index)
-            index_to_item_id = {}
-            for i, idx in enumerate(filtered_indices):
-                if i < len(hist_item_ids):
-                    index_to_item_id[idx] = hist_item_ids[i]
-
-            for hist_index, conseiller in hist_updates:
+            for hist_index, conseiller, is_passed in hist_updates:
                 try:
                     hist_item_id = index_to_item_id.get(hist_index)
 
@@ -464,9 +511,12 @@ def _execute_reconciliation_writeback(
 
                     column_values = {}
 
+                    # Verifié: STATUS label
                     if verifie_col_id:
-                        column_values[verifie_col_id] = {"checked": "true"}
+                        label = "Verifié" if is_passed else "Pas Verifié"
+                        column_values[verifie_col_id] = {"label": label}
 
+                    # Conseiller: write for all found matches
                     if conseiller and conseiller_col_id:
                         col_type = col_type_map.get("Conseiller", "")
                         if col_type == "dropdown":
