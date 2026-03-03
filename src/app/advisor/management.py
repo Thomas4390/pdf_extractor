@@ -187,6 +187,10 @@ def _render_add_advisor_form(matcher) -> None:
                         st.session_state.advisor_matcher = None
                         st.session_state._advisor_toast_message = f"✅ Conseiller ajouté: {advisor.display_name_compact}"
 
+                        # Sync advisor name to Monday.com "Conseiller" dropdowns
+                        full_name = f"{new_first_name} {new_last_name}".strip().title()
+                        _sync_advisor_to_monday_dropdowns(full_name)
+
                         # Auto-provision Monday.com boards for "New" advisors
                         if new_status == "New":
                             _try_provision_advisor(advisor)
@@ -378,6 +382,64 @@ def _render_matching_test(matcher) -> None:
             st.success(f"✅ Correspondance trouvée: **{result}**")
         else:
             st.warning(f"⚠️ Aucune correspondance pour: \"{test_name}\"")
+
+
+def _sync_advisor_to_monday_dropdowns(full_name: str) -> None:
+    """Add an advisor name to the 'Conseiller' dropdown on Monday.com boards.
+
+    Creates the label on both SALES_PRODUCTION and HISTORICAL_PAYMENTS boards.
+    Non-blocking: logs a warning on failure so advisor creation is never interrupted.
+    """
+    import asyncio
+    import logging
+
+    try:
+        from src.clients.monday import MondayClient, get_board_id_for_type
+        from src.utils.data_unifier import BoardType
+
+        api_key = st.session_state.get("monday_api_key")
+        if not api_key:
+            return
+
+        client = MondayClient(api_key=api_key)
+
+        board_types = [BoardType.SALES_PRODUCTION, BoardType.HISTORICAL_PAYMENTS]
+        for board_type in board_types:
+            board_id = get_board_id_for_type(board_type)
+            if not board_id:
+                logging.debug(
+                    "No board ID configured for %s — skipping dropdown sync",
+                    board_type.value,
+                )
+                continue
+
+            # Find the "Conseiller" column
+            columns = asyncio.run(client.list_columns(board_id))
+            column_id = None
+            for col in columns:
+                if col["title"] == "Conseiller":
+                    column_id = col["id"]
+                    break
+
+            if not column_id:
+                logging.warning(
+                    "Column 'Conseiller' not found on board %s (%s)",
+                    board_id, board_type.value,
+                )
+                continue
+
+            added = asyncio.run(
+                client.ensure_dropdown_labels(board_id, column_id, [full_name])
+            )
+            if added:
+                logging.info(
+                    "Added '%s' to Conseiller dropdown on board %s (%s)",
+                    full_name, board_id, board_type.value,
+                )
+
+    except Exception as e:
+        logging.warning("Dropdown sync failed (non-blocking): %s", e)
+        st.warning(f"⚠️ Synchronisation dropdown Conseiller échouée: {e}")
 
 
 def _try_provision_advisor(advisor) -> None:

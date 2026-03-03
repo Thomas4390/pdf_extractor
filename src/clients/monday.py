@@ -1193,6 +1193,83 @@ class MondayClient:
             )
             return CreateResult(success=False, error=str(e))
 
+    async def delete_item(self, item_id: str) -> bool:
+        """Delete an item from a board.
+
+        Args:
+            item_id: ID of the item to delete.
+
+        Returns:
+            True if successful.
+        """
+        mutation = f"mutation {{ delete_item(item_id: {item_id}) {{ id }} }}"
+        await self._execute_query(mutation)
+        return True
+
+    async def ensure_dropdown_labels(
+        self,
+        board_id: int,
+        column_id: str,
+        labels: list[str],
+    ) -> list[str]:
+        """Add missing labels to a dropdown column.
+
+        Since Monday.com has no direct API to add dropdown labels, this works
+        by creating a temporary item, writing each new label with
+        ``create_labels_if_missing=True``, then deleting the temp item.
+
+        Args:
+            board_id: Board containing the dropdown column.
+            column_id: Column ID of the dropdown.
+            labels: Label names to ensure exist.
+
+        Returns:
+            List of labels that were actually added (i.e. were missing).
+        """
+        existing = await self.get_dropdown_label_map(board_id, column_id)
+        missing = [l for l in labels if l not in existing]
+
+        if not missing:
+            logger.info(
+                "ensure_dropdown_labels: all labels already present on "
+                "board %s column %s", board_id, column_id,
+            )
+            return []
+
+        # Create a temporary item to seed labels
+        temp = await self.create_item(
+            board_id, "__label_seed__", create_labels_if_missing=True,
+        )
+        if not temp.success or not temp.id:
+            raise MondayError(
+                f"Failed to create temp item on board {board_id}: {temp.error}"
+            )
+
+        try:
+            for label in missing:
+                col_values = {column_id: {"labels": [label]}}
+                await self.update_item_column_values(
+                    item_id=temp.id,
+                    board_id=board_id,
+                    column_values=col_values,
+                    create_labels_if_missing=True,
+                )
+        finally:
+            # Always clean up the temporary item
+            try:
+                await self.delete_item(temp.id)
+            except Exception:
+                logger.warning(
+                    "Failed to delete temp item %s on board %s",
+                    temp.id, board_id,
+                )
+
+        logger.info(
+            "ensure_dropdown_labels: added %s to board %s column %s",
+            missing, board_id, column_id,
+        )
+        return missing
+
     # -------------------------------------------------------------------------
     # Batch upload
     # -------------------------------------------------------------------------
@@ -1591,12 +1668,17 @@ class MondayClient:
                         missing += 1
         return missing
 
+    # Shared timestamp tracking the last formula enrichment request across
+    # all MondayClient instances.  Used to enforce a global cooldown so
+    # back-to-back board loads don't exhaust the 10k values/min budget.
+    _last_formula_request_time: float = 0.0
+
     async def _enrich_formula_columns(
         self,
         items: list[dict],
-        batch_size: int = 50,
+        batch_size: int = 25,
         max_formula_cols_per_query: int = 5,
-        max_retries: int = 5,
+        max_retries: int = 8,
     ) -> None:
         """Fetch display_value for formula columns in small batches.
 
@@ -1605,6 +1687,11 @@ class MondayClient:
         method fetches it separately in small item batches, splitting
         formula columns into groups of 5, with inter-batch delays to
         stay within the rate limit.
+
+        The rate limit budget is **global** (shared across boards), so
+        this method uses a conservative 50% budget utilisation and a
+        class-level timestamp to enforce a cooldown between successive
+        board enrichments.
 
         Mutates items in-place by adding 'display_value' to formula
         column_values dicts.
@@ -1625,6 +1712,19 @@ class MondayClient:
             f"Enriching {len(formula_col_ids)} formula column(s) "
             f"for {len(items)} items"
         )
+
+        # --- Global cooldown ---
+        # If another board was enriched recently, wait until enough budget
+        # has regenerated (at least 15 s between enrichment runs).
+        now = time.monotonic()
+        elapsed = now - MondayClient._last_formula_request_time
+        cooldown = 15.0
+        if elapsed < cooldown:
+            wait = cooldown - elapsed
+            logger.info(
+                f"Formula enrichment: global cooldown — waiting {wait:.1f}s"
+            )
+            await asyncio.sleep(wait)
 
         # Build item_id → {col_id → col_val reference} map
         item_cv_map: dict[str, dict[str, dict]] = {}
@@ -1648,14 +1748,14 @@ class MondayClient:
         # Each batch requests batch_size × len(col_group) values.
         # Calculate inter-batch delay to stay safely under the limit.
         rate_limit_per_min = 10_000
-        # Use 80% of the budget to leave headroom
-        safe_rate = rate_limit_per_min * 0.8
+        # Use 50% of the budget to leave headroom for back-to-back boards
+        safe_rate = rate_limit_per_min * 0.5
 
         for col_group in col_groups:
             col_ids_str = ", ".join(f'"{cid}"' for cid in col_group)
             values_per_batch = batch_size * len(col_group)
             # Seconds to wait between batches to respect rate limit
-            batch_delay = (values_per_batch / safe_rate) * 60
+            batch_delay = max((values_per_batch / safe_rate) * 60, 1.0)
 
             for i in range(0, len(item_ids), batch_size):
                 batch_ids = item_ids[i : i + batch_size]
@@ -1680,6 +1780,8 @@ class MondayClient:
                 result = await self._execute_query_with_formula_retry(
                     query, max_retries=max_retries
                 )
+                MondayClient._last_formula_request_time = time.monotonic()
+
                 if result is None:
                     continue  # Batch failed after retries, skip
 
@@ -1727,12 +1829,17 @@ class MondayClient:
                     for err in (e.errors if isinstance(e.errors, list) else [])
                 )
                 if is_rate_limit:
-                    retry_secs = 1
+                    # Monday sometimes returns retry_in_seconds=1 which is
+                    # too aggressive — enforce a minimum of 5s and add
+                    # exponential back-off to avoid hammering a depleted
+                    # budget.
+                    api_retry_secs = 1
                     for err in (e.errors if isinstance(e.errors, list) else []):
-                        retry_secs = max(
-                            retry_secs,
+                        api_retry_secs = max(
+                            api_retry_secs,
                             err.get("extensions", {}).get("retry_in_seconds", 1),
                         )
+                    retry_secs = max(api_retry_secs, 5 * (2 ** attempt))
                     logger.warning(
                         f"Formula rate limit (attempt {attempt + 1}/{max_retries}). "
                         f"Retrying in {retry_secs}s..."
