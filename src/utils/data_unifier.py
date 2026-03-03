@@ -555,12 +555,25 @@ class DataUnifier:
                 on_commission = None
 
             # Construire le texte
+            # Classifier par taux_boni (plus fiable que type_commission du VLM)
+            if bonus_rate_pct is not None:
+                if bonus_rate_pct == 0.0:
+                    category_label = "Commission"
+                elif bonus_rate_pct == 175.0:
+                    category_label = "Boni"
+                elif bonus_rate_pct == 75.0:
+                    category_label = "Sur-Com"
+                else:
+                    category_label = act.type_commission or f"Taux boni {bonus_rate_pct}%"
+            else:
+                category_label = act.type_commission or ""
+
             sharing_rate_str = f"{int(sharing_rate)}%" if sharing_rate else "?"
             commission_rate_str = f"{int(commission_rate)}%" if commission_rate else "?"
+            boni_rate_str = f"{int(bonus_rate_pct)}%" if bonus_rate_pct is not None else "?"
             protection_str = act.protection or "N/A"
-            type_com_str = act.type_commission or ""
             surcom_label = " [Sur-Com]" if is_surcom_line else ""
-            texte = f"{protection_str} | {type_com_str} (Partage: {sharing_rate_str}, Com: {commission_rate_str}){surcom_label}"
+            texte = f"{protection_str} | {category_label} (Partage: {sharing_rate_str}, Com: {commission_rate_str}, Boni: {boni_rate_str}){surcom_label}"
 
             # Déterminer le statut basé sur la PA
             if premium is not None:
