@@ -1496,6 +1496,9 @@ class MondayClient:
                                             title
                                             type
                                         }}
+                                        ... on FormulaValue {{
+                                            display_value
+                                        }}
                                     }}
                                 }}
                             }}
@@ -1523,6 +1526,9 @@ class MondayClient:
                                     column {{
                                         title
                                         type
+                                    }}
+                                    ... on FormulaValue {{
+                                        display_value
                                     }}
                                 }}
                             }}
@@ -1557,14 +1563,48 @@ class MondayClient:
             if not cursor:
                 break
 
-        # Enrich formula columns with display_value (separate rate-limited query).
-        # Non-fatal: if enrichment fails, formula columns will be None.
-        try:
-            await self._enrich_formula_columns(all_items)
-        except Exception as e:
-            logger.warning(f"Formula enrichment failed (non-fatal): {e}")
+        # Check if FormulaValue fragment in the main query already provided
+        # display_value for formula columns.  Only fall back to the separate
+        # enrichment pass when values are still missing.
+        missing = self._count_missing_formula_display_values(all_items)
+        if missing > 0:
+            logger.info(
+                f"Formula enrichment: {missing} display_value(s) still missing "
+                "after main query — running fallback enrichment pass"
+            )
+            try:
+                await self._enrich_formula_columns(all_items)
+                remaining = self._count_missing_formula_display_values(all_items)
+                if remaining > 0:
+                    logger.warning(
+                        f"Formula enrichment partial: {remaining} display_value(s) "
+                        "still missing after fallback"
+                    )
+                else:
+                    logger.info("Formula enrichment fallback: all values populated")
+            except Exception as e:
+                logger.warning(f"Formula enrichment fallback failed (non-fatal): {e}")
+        else:
+            logger.info(
+                "Formula display_value already populated from main query — "
+                "skipping fallback enrichment"
+            )
 
         return all_items
+
+    @staticmethod
+    def _count_missing_formula_display_values(items: list[dict]) -> int:
+        """Count formula column_values that lack a display_value.
+
+        Returns 0 when there are no formula columns or all have display_value.
+        """
+        missing = 0
+        for item in items:
+            for cv in item.get("column_values", []):
+                if cv.get("column", {}).get("type") == "formula":
+                    if cv.get("display_value") is None:
+                        missing += 1
+        return missing
 
     async def _enrich_formula_columns(
         self,

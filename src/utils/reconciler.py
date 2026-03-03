@@ -14,12 +14,15 @@ Key behavior:
 - Each aggregated group produces one ReconciliationMatch.
 """
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class ReconciliationStatus(StrEnum):
@@ -394,6 +397,16 @@ class Reconciler:
                 police = str(row.get("# de Police", "")).strip()
                 if police:
                     sales_lookup[police] = row
+
+        # Warn if formula columns are entirely null in the sales DataFrame
+        for _fc in ("Com", "Boni", "Sur-Com"):
+            if _fc in sales_df.columns and sales_df[_fc].dropna().empty:
+                logger.warning(
+                    "Reconciler: sales column '%s' is entirely null — "
+                    "formula extraction from Monday.com likely failed. "
+                    "All related écarts will be None.",
+                    _fc,
+                )
 
         # --- Phase 1: Classify each row and group by (police, classification) ---
         # Key: (police_number, recu_field or "NOT_FOUND" or "UNCLASSIFIED")

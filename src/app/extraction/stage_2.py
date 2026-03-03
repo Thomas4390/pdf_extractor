@@ -1168,6 +1168,19 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
 
     sales_df = st.session_state.reconciliation_sales_df
 
+    # --- Warn if formula columns (Com, Boni, Sur-Com) are all null ---
+    _formula_cols = ["Com", "Boni", "Sur-Com"]
+    _empty_formula_cols = [
+        c for c in _formula_cols
+        if c in sales_df.columns and sales_df[c].dropna().empty
+    ]
+    if _empty_formula_cols:
+        st.warning(
+            f"⚠️ Les colonnes formule **{', '.join(_empty_formula_cols)}** sont "
+            "entièrement vides dans Ventes/Production. L'extraction des formules "
+            "Monday.com a probablement échoué — les écarts seront marqués « — »."
+        )
+
     # --- Run reconciliation ---
     reconciler = Reconciler()
     result = reconciler.reconcile(df, sales_df)

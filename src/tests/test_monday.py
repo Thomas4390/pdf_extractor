@@ -466,6 +466,97 @@ async def run_api_tests():
     return passed == len(tests)
 
 
+async def test_api_formula_extraction():
+    """Test formula column extraction from the Ventes/Production board.
+
+    Connects to the real board (ID 9423464449), extracts data, and verifies
+    that formula columns (Com, Boni, Sur-Com) have non-null display_value.
+    """
+    BOARD_ID = 9423464449
+    FORMULA_COLS = ["Com", "Boni", "Sur-Com"]
+
+    print(f"\n[API] Testing formula extraction on board {BOARD_ID}...")
+
+    api_key = os.getenv("MONDAY_API_KEY")
+    if not api_key:
+        print("  Skipping - MONDAY_API_KEY not set")
+        return True
+
+    try:
+        client = get_monday_client()
+        items = await client.extract_board_data(BOARD_ID)
+        print(f"  Fetched {len(items)} items")
+
+        if not items:
+            print("  WARNING: No items found on board")
+            return False
+
+        # Check raw display_value on formula columns
+        formula_stats: dict[str, dict[str, int]] = {}
+        for item in items:
+            for cv in item.get("column_values", []):
+                col_title = cv.get("column", {}).get("title", "")
+                col_type = cv.get("column", {}).get("type", "")
+                if col_type == "formula":
+                    if col_title not in formula_stats:
+                        formula_stats[col_title] = {"total": 0, "has_display": 0, "has_text": 0}
+                    formula_stats[col_title]["total"] += 1
+                    if cv.get("display_value") is not None:
+                        formula_stats[col_title]["has_display"] += 1
+                    if cv.get("text"):
+                        formula_stats[col_title]["has_text"] += 1
+
+        print("\n  Raw formula column stats:")
+        for col_name, stats in sorted(formula_stats.items()):
+            pct = (stats["has_display"] / stats["total"] * 100) if stats["total"] else 0
+            print(
+                f"    {col_name}: {stats['has_display']}/{stats['total']} "
+                f"display_value ({pct:.0f}%), "
+                f"{stats['has_text']}/{stats['total']} text"
+            )
+
+        # Show first 3 items' formula values as samples
+        print("\n  Sample formula values (first 3 items):")
+        for item in items[:3]:
+            print(f"    Item {item['id']} ({item['name'][:30]}):")
+            for cv in item.get("column_values", []):
+                if cv.get("column", {}).get("type") == "formula":
+                    title = cv["column"]["title"]
+                    print(
+                        f"      {title}: display_value={cv.get('display_value')!r}, "
+                        f"text={cv.get('text')!r}, value={cv.get('value')!r}"
+                    )
+
+        # Convert to DataFrame and check parsed values
+        df = client.board_items_to_dataframe(items)
+        print(f"\n  DataFrame: {len(df)} rows, {len(df.columns)} columns")
+
+        ok = True
+        for col in FORMULA_COLS:
+            if col not in df.columns:
+                print(f"  WARNING: Column '{col}' not in DataFrame")
+                ok = False
+                continue
+            non_null = df[col].dropna()
+            print(f"    {col}: {len(non_null)}/{len(df)} non-null values")
+            if non_null.empty:
+                print(f"    FAIL: '{col}' is entirely null!")
+                ok = False
+            else:
+                print(f"    Sample values: {non_null.head(5).tolist()}")
+
+        if ok:
+            print("\n  Formula extraction: PASSED")
+        else:
+            print("\n  Formula extraction: FAILED — some columns are empty")
+
+        return ok
+
+    except MondayError as e:
+        print(f"  Error: {e}")
+        return False
+
+
 async def main():
     """Main entry point."""
     command = sys.argv[1].lower() if len(sys.argv) > 1 else "mock"
@@ -478,12 +569,14 @@ async def main():
         await test_api_list_columns()
     elif command == "groups":
         await test_api_list_groups()
+    elif command == "formula":
+        await test_api_formula_extraction()
     elif command == "all":
         run_mock_tests()
         await run_api_tests()
     else:
         print(f"Unknown command: {command}")
-        print("Usage: python -m src.tests.test_monday [mock|boards|columns|groups|all]")
+        print("Usage: python -m src.tests.test_monday [mock|boards|columns|groups|formula|all]")
         sys.exit(1)
 
 
