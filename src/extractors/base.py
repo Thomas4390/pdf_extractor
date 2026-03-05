@@ -220,6 +220,11 @@ class BaseExtractor(ABC, Generic[T]):
                         f"[merge] '{key}': chunk {chunk_idx} added {len(value)} items "
                         f"({before} → {len(merged[key])})"
                     )
+                elif value is not None and key in merged and merged[key] is not None and value != merged[key]:
+                    logger.warning(
+                        "[merge] Scalar '%s' conflict: keeping '%s' from chunk 0, ignoring '%s' from chunk %d",
+                        key, merged[key], value, chunk_idx,
+                    )
 
         # Log summary of merged list fields
         list_summary = {
@@ -327,6 +332,12 @@ class BaseExtractor(ABC, Generic[T]):
                     chunk_results.append(raw)
 
                 merged = self._merge_chunked_results(chunk_results)
+                logger.warning(
+                    "[%s] Chunked extraction: Pydantic validation retries are not "
+                    "available for chunked extractions. If validation fails, consider "
+                    "reducing the number of pages or adjusting MAX_PAGES_PER_CHUNK.",
+                    self.document_type,
+                )
                 result = self.model_class(**merged)
             else:
                 result = await self.client.validate_and_extract(

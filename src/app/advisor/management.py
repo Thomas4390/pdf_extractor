@@ -27,11 +27,9 @@ def render_advisor_management_tab() -> None:
     required_methods = ['find_advisor', 'update_advisor', 'delete_advisor']
     if (st.session_state.get("advisor_matcher") is None or
         not all(hasattr(st.session_state.advisor_matcher, m) for m in required_methods)):
-        # Reset both the module-level singleton and class-level singleton
-        from src.utils import advisor_matcher as am_module
+        # Reset the singleton
         from src.utils.advisor_matcher import AdvisorMatcher
-        am_module._matcher_instance = None
-        AdvisorMatcher._instance = None
+        AdvisorMatcher.reset_instance()
         st.session_state.advisor_matcher = get_advisor_matcher()
 
     matcher = st.session_state.advisor_matcher
@@ -66,11 +64,9 @@ def render_advisor_management_tab() -> None:
 
         # Retry button
         if st.button("🔄 Réessayer la connexion", type="primary"):
-            # Force reset all singletons
-            from src.utils import advisor_matcher as am_module
+            # Force reset singleton
             from src.utils.advisor_matcher import AdvisorMatcher
-            am_module._matcher_instance = None
-            AdvisorMatcher._instance = None
+            AdvisorMatcher.reset_instance()
             st.session_state.advisor_matcher = None
             st.rerun()
         return
@@ -182,8 +178,8 @@ def _render_add_advisor_form(matcher) -> None:
                     try:
                         advisor = matcher.add_advisor(new_first_name, new_last_name, variations, new_status, email=new_email or None)
                         # Reset matcher to get fresh data
-                        from src.utils import advisor_matcher as am_module
-                        am_module._matcher_instance = None
+                        from src.utils.advisor_matcher import AdvisorMatcher
+                        AdvisorMatcher.reset_instance()
                         st.session_state.advisor_matcher = None
                         st.session_state._advisor_toast_message = f"✅ Conseiller ajouté: {advisor.display_name_compact}"
 
@@ -283,8 +279,8 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                             advisor_name = f"{advisor.first_name} {advisor.last_name}"
                             matcher.delete_advisor(advisor)
                             # Reset singleton and session state
-                            from src.utils import advisor_matcher as am_module
-                            am_module._matcher_instance = None
+                            from src.utils.advisor_matcher import AdvisorMatcher
+                            AdvisorMatcher.reset_instance()
                             st.session_state.advisor_matcher = None
                             st.session_state._advisor_toast_message = f"✅ Conseiller supprimé: {advisor_name}"
                             st.rerun()
@@ -352,8 +348,8 @@ def _render_advisors_list(advisors: list, matcher) -> None:
                                     email=new_email
                                 )
                                 # Reset singleton and session state
-                                from src.utils import advisor_matcher as am_module
-                                am_module._matcher_instance = None
+                                from src.utils.advisor_matcher import AdvisorMatcher
+                                AdvisorMatcher.reset_instance()
                                 st.session_state.advisor_matcher = None
                                 del st.session_state[f'editing_advisor_{advisor_id}']
                                 st.session_state._advisor_toast_message = f"✅ Conseiller mis à jour: {new_first} {new_last}"

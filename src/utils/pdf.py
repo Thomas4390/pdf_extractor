@@ -40,9 +40,6 @@ def pdf_to_images(
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-    doc = fitz.open(pdf_path)
-    images: list[bytes] = []
-
     if image_format not in ("jpeg", "png"):
         raise ValueError(
             f"Unsupported image_format '{image_format}'. Must be 'jpeg' or 'png'."
@@ -53,6 +50,8 @@ def pdf_to_images(
     else:
         mime_type = "image/png"
 
+    images: list[bytes] = []
+    doc = fitz.open(pdf_path)
     try:
         # Calculate zoom factor to achieve target DPI
         # PDF default is 72 DPI

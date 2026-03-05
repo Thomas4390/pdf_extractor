@@ -12,7 +12,9 @@ Features:
 """
 
 import asyncio
+import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -32,6 +34,7 @@ from .extractors import (
 )
 from .utils.advisor_matcher import get_advisor_matcher
 from .utils.data_unifier import BoardType, DataUnifier
+from .utils.model_registry import get_model_config
 
 # =============================================================================
 # CONFIGURATION
@@ -265,11 +268,10 @@ class Pipeline:
             ValueError: If source cannot be determined
         """
         path_str = str(pdf_path).lower()
-        filename = Path(pdf_path).name.lower()
 
-        # Check patterns in order (more specific first)
+        # Check patterns against full path (more specific patterns first)
         for pattern, source in self.SOURCE_PATTERNS.items():
-            if pattern in path_str or pattern in filename:
+            if pattern in path_str:
                 return source
 
         raise ValueError(
@@ -299,7 +301,6 @@ class Pipeline:
         Returns:
             PipelineResult with DataFrame and metadata
         """
-        import time
         start_time = time.time()
 
         pdf_path = Path(pdf_path)
@@ -349,7 +350,6 @@ class Pipeline:
 
                 # Step 3: Capture usage stats from extractor's client
                 usage_stats = None
-                from .utils.model_registry import get_model_config
                 model_config = get_model_config(source_type.value)
 
                 if hasattr(extractor, 'client') and extractor.client:
@@ -413,7 +413,13 @@ class Pipeline:
                     was_cached=was_cached,
                 )
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Unexpected error processing %s", pdf_path
+                )
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 return PipelineResult(
                     pdf_path=str(pdf_path),
@@ -448,7 +454,6 @@ class Pipeline:
         Returns:
             BatchResult with all results and statistics
         """
-        import time
         start_time = time.time()
 
         batch_result = BatchResult()
@@ -484,7 +489,8 @@ class Pipeline:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> BatchResult:
         """Synchronous wrapper for process_batch."""
-        return asyncio.run(
+        from .app.utils.async_helpers import run_async
+        return run_async(
             self.process_batch(
                 pdf_paths=pdf_paths,
                 source=source,
@@ -561,7 +567,8 @@ class Pipeline:
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> UploadResult:
         """Synchronous wrapper for upload_to_monday."""
-        return asyncio.run(
+        from .app.utils.async_helpers import run_async
+        return run_async(
             self.upload_to_monday(
                 result=result,
                 board_id=board_id,
@@ -669,4 +676,5 @@ def extract_pdf_sync(
     source: Optional[str] = None,
 ) -> pd.DataFrame:
     """Synchronous wrapper for extract_pdf."""
-    return asyncio.run(extract_pdf(pdf_path, source=source))
+    from .app.utils.async_helpers import run_async
+    return run_async(extract_pdf(pdf_path, source=source))

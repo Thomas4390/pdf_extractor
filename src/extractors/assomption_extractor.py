@@ -6,6 +6,7 @@ using vision language models. Merges data from commission pages (page 3)
 with bonus pages (page 5) based on policy number.
 """
 
+from functools import cached_property
 from pathlib import Path
 
 from ..models.assomption import AssomptionReport
@@ -41,7 +42,7 @@ class AssomptionExtractor(BaseExtractor[AssomptionReport]):
     def model_class(self) -> type[AssomptionReport]:
         return AssomptionReport
 
-    @property
+    @cached_property
     def _prompt_config(self):
         """Get prompt configuration from YAML file."""
         return load_prompts(self.source_name)

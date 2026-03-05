@@ -112,11 +112,22 @@ class ReconciliationResult:
             ):
                 if m.sales_item_id not in updates:
                     updates[m.sales_item_id] = {}
+                if m.classification.recu_field in updates[m.sales_item_id]:
+                    logger.warning(
+                        "get_sales_updates: collision on item_id=%s field=%s — "
+                        "overwriting %.2f with %.2f",
+                        m.sales_item_id, m.classification.recu_field,
+                        updates[m.sales_item_id][m.classification.recu_field],
+                        m.recu_amount,
+                    )
                 updates[m.sales_item_id][m.classification.recu_field] = m.recu_amount
         return updates
 
     def get_passed_hist_updates(self) -> list[tuple[int, Optional[str]]]:
         """Get historical indices and advisors for lines that passed.
+
+        Note: For display/preview counts only. The actual writeback uses
+        get_all_hist_updates() which includes FLAGGED and UNCLASSIFIED lines.
 
         Returns:
             List of (hist_index, conseiller) tuples — one per original row.
@@ -194,6 +205,11 @@ class ReconciliationResult:
             for _, row in sales_df.iterrows():
                 police = str(row.get("# de Police", "")).strip()
                 if police:
+                    if police in sales_lookup:
+                        logger.warning(
+                            "Reconciler: duplicate police '%s' in sales view — using last row",
+                            police,
+                        )
                     sales_lookup[police] = row
 
         # Group matches by police_number
@@ -296,6 +312,10 @@ class ReconciliationResult:
             if m.status == ReconciliationStatus.PASSED:
                 passed_indices.update(m.hist_indices)
 
+        # Ensure Conseiller column exists before mutations
+        if "Conseiller" not in hist_paye.columns:
+            hist_paye["Conseiller"] = ""
+
         # Add Verifié labels and update Conseiller
         hist_paye["Verifié"] = "Pas Verifié"
         for idx in hist_paye.index:
@@ -303,10 +323,6 @@ class ReconciliationResult:
                 hist_paye.at[idx, "Conseiller"] = conseiller_lookup[idx]
             if idx in passed_indices:
                 hist_paye.at[idx, "Verifié"] = "Verifié"
-
-        # Ensure Conseiller column exists
-        if "Conseiller" not in hist_paye.columns:
-            hist_paye["Conseiller"] = ""
 
         # Select and order columns
         output_cols = [
@@ -490,6 +506,11 @@ class Reconciler:
             for _, row in sales_df.iterrows():
                 police = str(row.get("# de Police", "")).strip()
                 if police:
+                    if police in sales_lookup:
+                        logger.warning(
+                            "Reconciler: duplicate police '%s' in sales board — using last row",
+                            police,
+                        )
                     sales_lookup[police] = row
 
         # Warn if formula columns are entirely null in the sales DataFrame

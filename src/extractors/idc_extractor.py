@@ -5,6 +5,7 @@ Extracts proposition data from IDC "Rapport des propositions soumises"
 PDF reports using vision language models.
 """
 
+from functools import cached_property
 from pathlib import Path
 
 from ..models.idc import IDCReport
@@ -37,7 +38,7 @@ class IDCExtractor(BaseExtractor[IDCReport]):
     def model_class(self) -> type[IDCReport]:
         return IDCReport
 
-    @property
+    @cached_property
     def _prompt_config(self):
         """Get prompt configuration from YAML file."""
         return load_prompts(self.source_name)

@@ -81,6 +81,13 @@ def rename_board_for_advisor(
         'Jean - Some Board'
     """
     if " - " in original_name:
+        if template_first_name:
+            current_prefix = original_name.split(" - ")[0].strip()
+            if current_prefix.lower() != template_first_name.lower():
+                logger.warning(
+                    "Board '%s' prefix '%s' doesn't match expected template '%s'",
+                    original_name, current_prefix, template_first_name,
+                )
         suffix = original_name.split(" - ", 1)[1]
         return f"{advisor_first_name} - {suffix}"
     # If no " - " separator, prefix the advisor name
@@ -110,7 +117,7 @@ def load_provisioning_config() -> Optional[ProvisioningConfig]:
     Returns:
         ProvisioningConfig if all required values are present, None otherwise
     """
-    from src.app.state import get_secret
+    from src.utils.advisor_matcher import get_secret
 
     workspace_id = get_secret("MONDAY_WORKSPACE_ID")
     conseillers_folder_id = get_secret("MONDAY_CONSEILLERS_FOLDER_ID")
@@ -297,7 +304,7 @@ def ensure_next_month_groups() -> NextMonthGroupsResult:
         return result
 
     # Get Monday client
-    from src.app.state import get_secret
+    from src.utils.advisor_matcher import get_secret
     api_key = get_secret("MONDAY_API_KEY")
     if not api_key:
         result.errors.append("MONDAY_API_KEY not available")
@@ -390,7 +397,7 @@ def rename_boards_in_advisor_folders(
     if not config:
         raise RuntimeError("Provisioning config not available")
 
-    from src.app.state import get_secret
+    from src.utils.advisor_matcher import get_secret
     api_key = get_secret("MONDAY_API_KEY")
     if not api_key:
         raise RuntimeError("MONDAY_API_KEY not available")
@@ -588,6 +595,18 @@ class AdvisorBoardProvisioner:
         else:
             step3.status = "error"
             step3.message = "Aucun board dupliqué"
+            result.steps.append(ProvisioningStep(
+                name="Configure boards", status="skipped",
+                message="Skipped — no boards were duplicated"
+            ))
+            result.steps.append(ProvisioningStep(
+                name="Set permissions", status="skipped",
+                message="Skipped — no boards were duplicated"
+            ))
+            result.steps.append(ProvisioningStep(
+                name="Update settings", status="skipped",
+                message="Skipped — no boards were duplicated"
+            ))
             return result
 
         # Step 4: Clean up groups

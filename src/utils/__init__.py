@@ -5,6 +5,8 @@ from .advisor_matcher import (
     AdvisorMatcher,
     get_advisor_matcher,
     normalize_advisor_name,
+    normalize_advisor_name_full,
+    normalize_advisor_name_full_or_original,
     normalize_advisor_name_or_original,
 )
 from .batch import (
@@ -76,6 +78,8 @@ __all__ = [
     "AdvisorMatcher",
     "get_advisor_matcher",
     "normalize_advisor_name",
+    "normalize_advisor_name_full",
+    "normalize_advisor_name_full_or_original",
     "normalize_advisor_name_or_original",
     # Data unification
     "BoardType",

@@ -124,6 +124,19 @@ class DataUnifier:
     DEFAULT_BONUS_RATE = 1.75        # 175%
     DEFAULT_ON_COMMISSION_RATE = 0.75  # 75%
 
+    # Sub-advisors excluded from advisor assignment (business rule)
+    _EXCLUDED_SUB_ADVISORS = {'achraf'}
+
+    @staticmethod
+    def _col_index_to_letter(idx: int) -> str:
+        """Convert a 0-based column index to Excel-style letter(s) (A, B, ..., Z, AA, AB, ...)."""
+        result = ""
+        idx += 1  # 1-based
+        while idx:
+            idx, rem = divmod(idx - 1, 26)
+            result = chr(65 + rem) + result
+        return result
+
     def __init__(self, advisor_matcher=None, auto_load_matcher: bool = True):
         """
         Initialise le DataUnifier.
@@ -347,7 +360,7 @@ class DataUnifier:
             # Dernier recours: laisser pandas deviner
             return pd.to_datetime(date_str).strftime('%Y-%m-%d')
 
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, OverflowError):
             return None
 
     # Mots-clés corporatifs pour la détection UV Inc
@@ -366,8 +379,8 @@ class DataUnifier:
         name = str(advisor_name).strip()
         if not name:
             return False
-        # Signal 1: présence de chiffres
-        if re.search(r'\d', name):
+        # Signal 1: nom commençant par un chiffre (ex: "9491-1377 QUEBEC INC")
+        if re.match(r'^\d', name):
             return True
         # Signal 2: mot-clé corporatif
         words = set(name.upper().split())
@@ -447,8 +460,8 @@ class DataUnifier:
         if re.search(r'\d', name_part):
             return None
 
-        # Exclure si le nom contient "Achraf"
-        if 'achraf' in name_part.lower():
+        # Exclure les sous-conseillers exclus
+        if name_part.lower() in self._EXCLUDED_SUB_ADVISORS:
             return None
 
         # Retourner en title case
@@ -532,7 +545,7 @@ class DataUnifier:
             premium = self._decimal_to_float(act.montant_base)
             commission_base = self._decimal_to_float(act.resultat)
             remuneration = self._decimal_to_float(act.remuneration)
-            bonus_rate = bonus_rate_pct / 100 if bonus_rate_pct else None
+            bonus_rate = bonus_rate_pct / 100 if bonus_rate_pct is not None else None
             commission_rate = self._decimal_to_float(act.taux_commission)
 
             if is_surcom_line:
@@ -601,7 +614,7 @@ class DataUnifier:
                 'Date': self._format_date(report.date_rapport),
                 'Texte': texte,
                 '_Taux Partage': sharing_rate / 100 if sharing_rate else None,
-                '_Taux Boni': bonus_rate if bonus_rate else 0.0,
+                '_Taux Boni': bonus_rate if bonus_rate is not None else 0.0,
             }
             rows.append(row)
 
@@ -632,10 +645,12 @@ class DataUnifier:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
         # Phase 1: Identify policy numbers that have at least one nombre == 0.4
+        # Business rule: only keep polices where the broker has a 40% share (nombre=0.4).
+        # Polices with nombre=1.0 (100% share) are excluded by design.
         policies_with_04: set[str] = set()
         for prop in report.propositions:
             nombre_val = self._decimal_to_float(prop.nombre)
-            if nombre_val is not None and nombre_val == 0.4:
+            if nombre_val is not None and abs(nombre_val - 0.4) < 1e-9:
                 police_str = str(prop.police) if prop.police else ""
                 if police_str:
                     policies_with_04.add(police_str)
@@ -737,17 +752,13 @@ class DataUnifier:
                 client_name = fee.client_full_name
                 advisor_name = fee.advisor_name
                 policy_number = fee.policy_number or fee.account_number
-                # Use company_code from parsed data if available (overrides default)
-                company_name = fee.company_code if hasattr(fee, 'company_code') and fee.company_code else fee.company
             else:
                 # IDCTrailingFeeRaw - parser raw_client_data
                 client_name = self._parse_client_from_raw(fee.raw_client_data)
                 advisor_name = self._parse_advisor_from_raw(fee.raw_client_data)
                 policy_number = self._parse_policy_from_raw(fee.raw_client_data) or fee.account_number
-                # Try to extract company from raw_client_data
-                company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
 
-            # IDC Statement: Toujours utiliser "IDC" comme nom de compagnie
+            # IDC Statement: Always use "IDC" as company name
             company_name = 'IDC'
 
             # Convertir le montant des frais de suivi
@@ -999,11 +1010,11 @@ class DataUnifier:
                 'Statut': status,
                 'Conseiller': None,
                 'Verifié': None,
-                'PA': total_prime or None,
-                'Com': total_commission or None,
+                'PA': total_prime if total_prime is not None else None,
+                'Com': total_commission if total_commission is not None else None,
                 'Boni': None,
                 'Sur-Com': None,
-                'Reçu': total_commission or None,
+                'Reçu': total_commission if total_commission is not None else None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
                 '_police_count': len(comms),
@@ -1055,11 +1066,12 @@ class DataUnifier:
                 'Verifié': None,
                 'PA': None,
                 'Com': None,
-                'Boni': total_boni or None,
+                'Boni': total_boni if total_boni is not None else None,
                 'Sur-Com': None,
-                'Reçu': total_boni or None,
+                'Reçu': total_boni if total_boni is not None else None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
+                '_police_count': len(bonis),
             })
 
         return pd.DataFrame(rows)
@@ -1408,7 +1420,7 @@ class DataUnifier:
                     continue
 
                 col_idx = headers.index(column_name)
-                col_letter = chr(ord('A') + col_idx)
+                col_letter = self._col_index_to_letter(col_idx)
 
                 print(f"\n--- Processing: {ws.title} ---")
                 print(f"  Column '{column_name}' found at index {col_idx + 1} ({col_letter})")

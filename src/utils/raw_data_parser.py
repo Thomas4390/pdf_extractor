@@ -66,9 +66,9 @@ def normalize_company_name(company_name: str) -> Optional[str]:
     if name_lower in _COMPANY_NAME_MAPPING:
         return _COMPANY_NAME_MAPPING[name_lower]
 
-    for pattern, normalized in _COMPANY_NAME_MAPPING.items():
+    for pattern in sorted(_COMPANY_NAME_MAPPING, key=len, reverse=True):
         if pattern in name_lower:
-            return normalized
+            return _COMPANY_NAME_MAPPING[pattern]
 
     return name_str
 
@@ -160,7 +160,7 @@ def parse_raw_client_data(raw_data: str) -> ParsedClientData:
         if match:
             result.policy_date = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
-    # 4. Extract commission rate - multiple patterns
+    # 4. Extract commission rate as decimal (e.g., 0.75 for 75%)
     # Pattern: "boni X%", "_X%", "recu p X%", "recup X%"
     match = re.search(r"(?:boni|recu\s*p|recup|_)\s*(\d+)\s*%", raw_data, re.IGNORECASE)
     if match:
