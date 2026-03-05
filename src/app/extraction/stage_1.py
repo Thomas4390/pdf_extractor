@@ -211,9 +211,19 @@ def render_pdf_extraction_tab() -> None:
             board_options = {b['name']: b['id'] for b in sorted_boards}
             board_names = list(board_options.keys())
 
+            # Pre-select the environment's paiement_historique board
+            from src.utils.config import settings
+            env_board_id = settings.monday_board_paiement_historique
+            default_idx = 0
+            for idx, name in enumerate(board_names):
+                if board_options[name] == env_board_id:
+                    default_idx = idx
+                    break
+
             selected_name = st.selectbox(
                 "Board de destination",
                 options=board_names,
+                index=default_idx,
                 key="pdf_board_select"
             )
             st.session_state.selected_board_id = board_options[selected_name]
