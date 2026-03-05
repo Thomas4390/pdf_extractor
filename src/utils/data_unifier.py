@@ -642,10 +642,12 @@ class DataUnifier:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_SALES)
 
         # Phase 1: Identify policy numbers that have at least one nombre == 0.4
+        # Business rule: only keep polices where the broker has a 40% share (nombre=0.4).
+        # Polices with nombre=1.0 (100% share) are excluded by design.
         policies_with_04: set[str] = set()
         for prop in report.propositions:
             nombre_val = self._decimal_to_float(prop.nombre)
-            if nombre_val is not None and nombre_val == 0.4:
+            if nombre_val is not None and abs(nombre_val - 0.4) < 1e-9:
                 police_str = str(prop.police) if prop.police else ""
                 if police_str:
                     policies_with_04.add(police_str)
@@ -1066,6 +1068,7 @@ class DataUnifier:
                 'Reçu': total_boni or None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
+                '_police_count': len(bonis),
             })
 
         return pd.DataFrame(rows)

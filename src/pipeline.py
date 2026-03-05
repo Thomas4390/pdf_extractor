@@ -265,11 +265,10 @@ class Pipeline:
             ValueError: If source cannot be determined
         """
         path_str = str(pdf_path).lower()
-        filename = Path(pdf_path).name.lower()
 
-        # Check patterns in order (more specific first)
+        # Check patterns against full path (more specific patterns first)
         for pattern, source in self.SOURCE_PATTERNS.items():
-            if pattern in path_str or pattern in filename:
+            if pattern in path_str:
                 return source
 
         raise ValueError(
@@ -413,7 +412,13 @@ class Pipeline:
                     was_cached=was_cached,
                 )
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Unexpected error processing %s", pdf_path
+                )
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 return PipelineResult(
                     pdf_path=str(pdf_path),

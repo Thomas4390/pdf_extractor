@@ -4,6 +4,7 @@ UV Assurance remuneration report extractor.
 Uses Vision LLM to extract structured data from UV Assurance PDF reports.
 """
 
+from functools import cached_property
 from pathlib import Path
 
 from ..models.uv import UVReport
@@ -33,7 +34,7 @@ class UVExtractor(BaseExtractor[UVReport]):
     def model_class(self) -> type[UVReport]:
         return UVReport
 
-    @property
+    @cached_property
     def _prompt_config(self):
         """Get prompt configuration from YAML file."""
         return load_prompts(self.source_name)

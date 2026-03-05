@@ -309,6 +309,10 @@ class ReconciliationResult:
             if m.status == ReconciliationStatus.PASSED:
                 passed_indices.update(m.hist_indices)
 
+        # Ensure Conseiller column exists before mutations
+        if "Conseiller" not in hist_paye.columns:
+            hist_paye["Conseiller"] = ""
+
         # Add Verifié labels and update Conseiller
         hist_paye["Verifié"] = "Pas Verifié"
         for idx in hist_paye.index:
@@ -316,10 +320,6 @@ class ReconciliationResult:
                 hist_paye.at[idx, "Conseiller"] = conseiller_lookup[idx]
             if idx in passed_indices:
                 hist_paye.at[idx, "Verifié"] = "Verifié"
-
-        # Ensure Conseiller column exists
-        if "Conseiller" not in hist_paye.columns:
-            hist_paye["Conseiller"] = ""
 
         # Select and order columns
         output_cols = [

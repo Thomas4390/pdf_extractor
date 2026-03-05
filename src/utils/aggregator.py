@@ -409,16 +409,6 @@ def _build_source_boards() -> dict[str, SourceBoardConfig]:
 
 
 # Module-level access — lazily built from config
-_source_boards_cache: dict[str, SourceBoardConfig] | None = None
-
-
-def _get_source_boards() -> dict[str, SourceBoardConfig]:
-    global _source_boards_cache
-    if _source_boards_cache is None:
-        _source_boards_cache = _build_source_boards()
-    return _source_boards_cache
-
-
 # Keep backward-compatible module-level name via property-like access
 class _SourceBoardsProxy(dict):
     """Lazy proxy that builds SOURCE_BOARDS on first access."""
@@ -456,6 +446,14 @@ class _SourceBoardsProxy(dict):
     def get(self, key, default=None):
         self._ensure_built()
         return super().get(key, default)
+
+    def __len__(self):
+        self._ensure_built()
+        return super().__len__()
+
+    def __bool__(self):
+        self._ensure_built()
+        return super().__bool__()
 
 
 SOURCE_BOARDS = _SourceBoardsProxy()

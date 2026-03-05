@@ -10,6 +10,7 @@ Supports two extraction modes:
 """
 
 import logging
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -58,12 +59,7 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
         # Use parsed model by default since we use direct prompts
         return IDCStatementReportParsed
 
-    @property
-    def extraction_mode(self) -> ExtractionMode:
-        """Get extraction mode from model registry."""
-        return get_model_config(self.document_type).mode
-
-    @property
+    @cached_property
     def _prompt_config(self):
         """Get prompt configuration from YAML file."""
         return load_prompts(self.source_name)
@@ -241,24 +237,16 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
 async def extract_idc_statement_report(
     pdf_path: str | Path,
     force_refresh: bool = False,
-    raw: bool = False,
-) -> IDCStatementReport | IDCStatementReportParsed:
+) -> IDCStatementReportParsed:
     """
     Convenience function to extract an IDC Statement report.
 
     Args:
         pdf_path: Path to the IDC Statement PDF
         force_refresh: If True, ignore cache
-        raw: If True, use RAW extraction (copies raw_client_data without parsing).
-             Default is DIRECT mode with parsed fields.
 
     Returns:
-        IDCStatementReportParsed by default (with parsed fields)
-        IDCStatementReport if raw=True (with raw_client_data only)
+        Validated IDCStatementReportParsed instance
     """
     extractor = IDCStatementExtractor()
-    if raw:
-        # Use raw prompts - not implemented yet, use extract_direct for now
-        # TODO: Add extract_raw_mode() method if needed
-        return await extractor.extract(pdf_path, force_refresh=force_refresh)
     return await extractor.extract(pdf_path, force_refresh=force_refresh)
