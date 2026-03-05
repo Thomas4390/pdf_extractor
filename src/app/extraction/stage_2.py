@@ -1148,6 +1148,15 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
 
     st.session_state.reconciliation_board_id = board_id
 
+    # Resolve real board name from loaded boards list
+    _boards = st.session_state.get("monday_boards") or []
+    _real_name = None
+    for _b in _boards:
+        if str(_b.get("id")) == str(board_id):
+            _real_name = _b["name"]
+            break
+    st.session_state.reconciliation_board_name = _real_name or vp_config.display_name
+
     # --- Auto-load sales data on first visit ---
     # Two-step load: fetch board data fast (no formula enrichment), then
     # enrich formula columns only for items whose # de Police appears in
@@ -1337,9 +1346,7 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
 
     if recon_upload_result is None:
         # --- Upload summary ---
-        from src.utils.aggregator import SOURCE_BOARDS
-        vp_config = SOURCE_BOARDS.get("vente_production")
-        sales_board_name = vp_config.display_name if vp_config else "Ventes/Production"
+        sales_board_name = st.session_state.get("reconciliation_board_name") or "Ventes/Production"
         hist_board_name = st.session_state._current_board_name or "Paiement Historique"
 
         dup_count = st.session_state.get('duplicate_count', 0)
@@ -1566,9 +1573,7 @@ def _render_recon_upload_result(result: dict) -> None:
                 st.success(f"{hist_updated} lignes → Conseiller + Vérifié")
 
     with col2:
-        from src.utils.aggregator import SOURCE_BOARDS
-        vp_config = SOURCE_BOARDS.get("vente_production")
-        sales_name = vp_config.display_name if vp_config else "Ventes/Production"
+        sales_name = st.session_state.get("reconciliation_board_name") or "Ventes/Production"
 
         st.markdown(f"**Board 2 — {sales_name}**")
         if recon_wb:

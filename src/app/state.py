@@ -178,6 +178,7 @@ def init_session_state() -> None:
         "reconciliation_sales_df": None,
         "reconciliation_sales_loaded": False,
         "reconciliation_board_id": None,
+        "reconciliation_board_name": None,
         "reconciliation_enabled": False,
 
         # Next-month group provisioning (per-session flag)
@@ -211,7 +212,7 @@ def reset_pipeline() -> None:
         'extraction_error', 'extraction_traceback',
         'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
         'reconciliation_result', 'reconciliation_sales_df',
-        'reconciliation_sales_loaded', 'reconciliation_board_id',
+        'reconciliation_sales_loaded', 'reconciliation_board_id', 'reconciliation_board_name',
         'reconciliation_enabled', '_recon_upload_result',
     ]
     for key in keys_to_reset:

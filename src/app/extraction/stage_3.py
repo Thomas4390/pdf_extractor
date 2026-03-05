@@ -81,9 +81,7 @@ def render_stage_3() -> None:
     recon_result = st.session_state.get("reconciliation_result") if has_recon else None
 
     if has_recon:
-        from src.utils.aggregator import SOURCE_BOARDS
-        vp_config = SOURCE_BOARDS.get("vente_production")
-        sales_board_name = vp_config.display_name if vp_config else "Ventes/Production"
+        sales_board_name = st.session_state.get("reconciliation_board_name") or "Ventes/Production"
 
         st.markdown("---")
         st.markdown("### Rapprochement — Upload vers 2 boards")
@@ -316,9 +314,7 @@ def render_upload_result(result: dict) -> None:
                 st.success(f"{hist_updated} lignes → Conseiller + Vérifié")
 
         with col2:
-            from src.utils.aggregator import SOURCE_BOARDS
-            vp_config = SOURCE_BOARDS.get("vente_production")
-            sales_name = vp_config.display_name if vp_config else "Ventes/Production"
+            sales_name = st.session_state.get("reconciliation_board_name") or "Ventes/Production"
 
             st.markdown(f"**Board 2 — {sales_name}**")
             sales_updated = recon_wb.get("sales_updated", 0)
