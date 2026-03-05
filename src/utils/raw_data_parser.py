@@ -66,9 +66,9 @@ def normalize_company_name(company_name: str) -> Optional[str]:
     if name_lower in _COMPANY_NAME_MAPPING:
         return _COMPANY_NAME_MAPPING[name_lower]
 
-    for pattern, normalized in _COMPANY_NAME_MAPPING.items():
+    for pattern in sorted(_COMPANY_NAME_MAPPING, key=len, reverse=True):
         if pattern in name_lower:
-            return normalized
+            return _COMPANY_NAME_MAPPING[pattern]
 
     return name_str
 

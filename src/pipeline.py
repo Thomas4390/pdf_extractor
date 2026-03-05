@@ -12,7 +12,9 @@ Features:
 """
 
 import asyncio
+import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -32,6 +34,7 @@ from .extractors import (
 )
 from .utils.advisor_matcher import get_advisor_matcher
 from .utils.data_unifier import BoardType, DataUnifier
+from .utils.model_registry import get_model_config
 
 # =============================================================================
 # CONFIGURATION
@@ -298,7 +301,6 @@ class Pipeline:
         Returns:
             PipelineResult with DataFrame and metadata
         """
-        import time
         start_time = time.time()
 
         pdf_path = Path(pdf_path)
@@ -348,7 +350,6 @@ class Pipeline:
 
                 # Step 3: Capture usage stats from extractor's client
                 usage_stats = None
-                from .utils.model_registry import get_model_config
                 model_config = get_model_config(source_type.value)
 
                 if hasattr(extractor, 'client') and extractor.client:
@@ -453,7 +454,6 @@ class Pipeline:
         Returns:
             BatchResult with all results and statistics
         """
-        import time
         start_time = time.time()
 
         batch_result = BatchResult()

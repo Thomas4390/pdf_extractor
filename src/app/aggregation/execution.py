@@ -201,10 +201,13 @@ def filter_and_aggregate_data() -> None:
 
         # Aggregate by advisor (using config's advisor_column)
         # Returns tuple: (aggregated_df, list of unknown advisor names)
+        # Skip name normalization for sources using group titles as advisor
+        # (e.g., ae_tracker groups are month names like "Janvier 2026")
         aggregated_df, unknown_names = aggregate_by_advisor(
             df=filtered_df,
             value_column=config.aggregate_column,
             advisor_column=config.advisor_column,
+            normalize_names=not config.use_group_as_advisor,
         )
         aggregated_data[source_key] = aggregated_df
         # Ensure unknown_names is a list (defensive coding for edge cases)

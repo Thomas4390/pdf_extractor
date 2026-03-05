@@ -124,6 +124,9 @@ class DataUnifier:
     DEFAULT_BONUS_RATE = 1.75        # 175%
     DEFAULT_ON_COMMISSION_RATE = 0.75  # 75%
 
+    # Sub-advisors excluded from advisor assignment (business rule)
+    _EXCLUDED_SUB_ADVISORS = {'achraf'}
+
     @staticmethod
     def _col_index_to_letter(idx: int) -> str:
         """Convert a 0-based column index to Excel-style letter(s) (A, B, ..., Z, AA, AB, ...)."""
@@ -357,7 +360,7 @@ class DataUnifier:
             # Dernier recours: laisser pandas deviner
             return pd.to_datetime(date_str).strftime('%Y-%m-%d')
 
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, OverflowError):
             return None
 
     # Mots-clés corporatifs pour la détection UV Inc
@@ -376,8 +379,8 @@ class DataUnifier:
         name = str(advisor_name).strip()
         if not name:
             return False
-        # Signal 1: présence de chiffres
-        if re.search(r'\d', name):
+        # Signal 1: nom commençant par un chiffre (ex: "9491-1377 QUEBEC INC")
+        if re.match(r'^\d', name):
             return True
         # Signal 2: mot-clé corporatif
         words = set(name.upper().split())
@@ -457,8 +460,8 @@ class DataUnifier:
         if re.search(r'\d', name_part):
             return None
 
-        # Exclure si le nom contient "Achraf"
-        if 'achraf' in name_part.lower():
+        # Exclure les sous-conseillers exclus
+        if name_part.lower() in self._EXCLUDED_SUB_ADVISORS:
             return None
 
         # Retourner en title case
@@ -542,7 +545,7 @@ class DataUnifier:
             premium = self._decimal_to_float(act.montant_base)
             commission_base = self._decimal_to_float(act.resultat)
             remuneration = self._decimal_to_float(act.remuneration)
-            bonus_rate = bonus_rate_pct / 100 if bonus_rate_pct else None
+            bonus_rate = bonus_rate_pct / 100 if bonus_rate_pct is not None else None
             commission_rate = self._decimal_to_float(act.taux_commission)
 
             if is_surcom_line:
@@ -611,7 +614,7 @@ class DataUnifier:
                 'Date': self._format_date(report.date_rapport),
                 'Texte': texte,
                 '_Taux Partage': sharing_rate / 100 if sharing_rate else None,
-                '_Taux Boni': bonus_rate if bonus_rate else 0.0,
+                '_Taux Boni': bonus_rate if bonus_rate is not None else 0.0,
             }
             rows.append(row)
 
@@ -1007,11 +1010,11 @@ class DataUnifier:
                 'Statut': status,
                 'Conseiller': None,
                 'Verifié': None,
-                'PA': total_prime or None,
-                'Com': total_commission or None,
+                'PA': total_prime if total_prime is not None else None,
+                'Com': total_commission if total_commission is not None else None,
                 'Boni': None,
                 'Sur-Com': None,
-                'Reçu': total_commission or None,
+                'Reçu': total_commission if total_commission is not None else None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
                 '_police_count': len(comms),
@@ -1063,9 +1066,9 @@ class DataUnifier:
                 'Verifié': None,
                 'PA': None,
                 'Com': None,
-                'Boni': total_boni or None,
+                'Boni': total_boni if total_boni is not None else None,
                 'Sur-Com': None,
-                'Reçu': total_boni or None,
+                'Reçu': total_boni if total_boni is not None else None,
                 'Date': self._format_date(first.date_emission),
                 'Texte': texte,
                 '_police_count': len(bonis),

@@ -126,6 +126,9 @@ class ReconciliationResult:
     def get_passed_hist_updates(self) -> list[tuple[int, Optional[str]]]:
         """Get historical indices and advisors for lines that passed.
 
+        Note: For display/preview counts only. The actual writeback uses
+        get_all_hist_updates() which includes FLAGGED and UNCLASSIFIED lines.
+
         Returns:
             List of (hist_index, conseiller) tuples — one per original row.
         """

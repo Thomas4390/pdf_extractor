@@ -5,9 +5,12 @@ Defines which VLM/LLM model to use for each document type,
 and whether to use vision (images) or text extraction mode.
 """
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionMode(Enum):
@@ -193,9 +196,6 @@ def get_pages_for_extraction(
     Returns:
         List of 0-indexed page numbers to extract
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     config = get_model_config(document_type)
     page_config = config.page_config
 

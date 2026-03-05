@@ -58,7 +58,7 @@ class PeriodType(Enum):
 
 
 class DatePeriod(Enum):
-    """Available date filtering periods - month-based selection."""
+    """Legacy period enum — prefer FlexiblePeriod for new code."""
     MONTH_0 = 0   # Current month
     MONTH_1 = 1   # 1 month ago
     MONTH_2 = 2   # 2 months ago
@@ -125,8 +125,7 @@ class FlexiblePeriod:
         # Store reference date at creation time if not provided
         # This ensures consistent calculations even when the month changes
         if self.reference_date is None:
-            # Use object.__setattr__ for frozen-like behavior in dataclass
-            object.__setattr__(self, 'reference_date', date.today())
+            self.reference_date = date.today()
 
         # Validate non-negative offsets
         if self.months_ago < 0:
@@ -1053,6 +1052,7 @@ def combine_aggregations(
 
         config = SOURCE_BOARDS.get(source_key)
         if config is None:
+            logger.warning("combine_aggregations: unknown source_key '%s' — skipping", source_key)
             continue
 
         # Get the source's advisor column name

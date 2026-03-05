@@ -212,8 +212,8 @@ MONDAY_API_KEY=your_jwt_token     # Required for Monday.com operations
 
 ## VLM Configuration Defaults
 
-- Primary model: `qwen/qwen2.5-vl-72b-instruct`
-- Fallback model: `qwen/qwen3-vl-235b-a22b-instruct`
+- Primary model: `google/gemini-3-flash-preview`
+- Fallback model: `google/gemini-3-pro-preview`
 - Temperature: 0.1
 - Max retries: 1
 - Timeout: 120s

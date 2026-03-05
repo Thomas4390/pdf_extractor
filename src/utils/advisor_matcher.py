@@ -422,13 +422,12 @@ class AdvisorMatcher:
                 if var_normalized:
                     high_patterns.append(rf'\b{var_normalized}\b')
 
-            # Add first name only as high priority
-            high_patterns.append(rf'\b{first}\b')
-
-            # MEDIUM PRIORITY: Initial + Last name
+            # MEDIUM PRIORITY: Initial + Last name, first name only
             medium_patterns = [
                 rf'\b{first[0]}\.?\s+{last}\b',
                 rf'\b{last}\s*,?\s*{first[0]}\.?\b',
+                # First name only as medium priority (avoid false positives for common names)
+                rf'\b{first}\b',
             ]
 
             # LOW PRIORITY: Last name only
