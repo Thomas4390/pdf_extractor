@@ -46,10 +46,10 @@ _BOARD_IDS = {
         "data": 9142121714,
     },
     "test": {
-        "paiement_historique": 18394590607,
-        "vente_production": 18394590698,
-        "ae_tracker": 18394590956,
-        "data": 18394590851,
+        "paiement_historique": 18402778675,
+        "vente_production": 18402778690,
+        "ae_tracker": 18402778704,
+        "data": 18402778730,
     },
 }
 
