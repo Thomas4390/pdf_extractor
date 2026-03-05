@@ -191,7 +191,8 @@ class ReconciliationResult:
         Columns produced:
         # de Police | Compagnie | Conseiller | PA |
         Com | Reçu 1 | Écart 1 | Boni | Reçu 2 | Écart 2 |
-        Sur-Com | Reçu 3 | Écart 3 | Statut Rapp.
+        Sur-Com | Reçu 3 | Écart 3 | Total | Total Reçu | Écart Total |
+        Statut Rapp.
 
         Args:
             sales_df: Sales/production DataFrame from Monday.com.
@@ -230,10 +231,14 @@ class ReconciliationResult:
             com_ref = None
             boni_ref = None
             surcom_ref = None
+            total_ref = None
+            total_recu_ref = None
             if sales_row is not None:
                 com_ref = Reconciler._to_float(sales_row.get("Com"))
                 boni_ref = Reconciler._to_float(sales_row.get("Boni"))
                 surcom_ref = Reconciler._to_float(sales_row.get("Sur-Com"))
+                total_ref = Reconciler._to_float(sales_row.get("Total"))
+                total_recu_ref = Reconciler._to_float(sales_row.get("Total Reçu"))
                 if pa is None:
                     pa = Reconciler._to_float(sales_row.get("PA"))
 
@@ -259,6 +264,9 @@ class ReconciliationResult:
                     recu_3 = m.recu_amount
                     ecart_3 = m.ecart_pct
 
+            # Compute Total écart: Total (formula) vs Total Reçu (formula)
+            ecart_total = Reconciler._compute_ecart(total_recu_ref, total_ref)
+
             rows.append({
                 "# de Police": police,
                 "Compagnie": compagnie,
@@ -273,6 +281,9 @@ class ReconciliationResult:
                 "Sur-Com": surcom_ref,
                 "Reçu 3": recu_3,
                 "Écart 3": f"{ecart_3:.1f}%" if ecart_3 is not None else "—",
+                "Total": total_ref,
+                "Total Reçu": total_recu_ref,
+                "Écart Total": f"{ecart_total:.1f}%" if ecart_total is not None else "—",
                 "Statut Rapp.": worst_status.value,
             })
 
@@ -513,8 +524,10 @@ class Reconciler:
                         )
                     sales_lookup[police] = row
 
-        # Warn if formula columns are entirely null in the sales DataFrame
-        for _fc in ("Com", "Boni", "Sur-Com"):
+        # Warn if key columns are entirely null in the sales DataFrame
+        # Com is a regular numbers column; Boni, Sur-Com, Total, Total Reçu
+        # are formula columns that require FormulaValue enrichment.
+        for _fc in ("Com", "Boni", "Sur-Com", "Total", "Total Reçu"):
             if _fc in sales_df.columns and sales_df[_fc].dropna().empty:
                 logger.warning(
                     "Reconciler: sales column '%s' is entirely null — "

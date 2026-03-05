@@ -1184,10 +1184,25 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
                             break
 
                 # Step 3: enrich formulas only for matched items
+                # Formula columns (Boni, Sur-Com, Total, Total Reçu, etc.)
+                # return empty text/value in the standard query — only the
+                # FormulaValue display_value (via enrichment) has actual data.
+                enrichment_ok = False
                 if matched_items:
                     run_async(
                         pipeline.monday.enrich_formula_columns(matched_items)
                     )
+                    remaining = pipeline.monday._count_missing_formula_display_values(
+                        matched_items
+                    )
+                    enrichment_ok = remaining == 0
+                    if remaining > 0:
+                        st.warning(
+                            f"Enrichissement formules partiel : {remaining} "
+                            f"valeur(s) manquante(s) sur {len(matched_items)} items. "
+                            "Les colonnes formule (Boni, Sur-Com, Total, Total Reçu) "
+                            "pourraient être incomplètes."
+                        )
 
                 sales_df = pipeline.monday.board_items_to_dataframe(
                     all_items, include_item_id=True,
@@ -1201,8 +1216,11 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
 
     sales_df = st.session_state.reconciliation_sales_df
 
-    # --- Warn if formula columns (Com, Boni, Sur-Com) are all null ---
-    _formula_cols = ["Com", "Boni", "Sur-Com"]
+    # --- Warn if formula columns are all null ---
+    # Note: Com is a regular numbers column (always has text).
+    # Boni, Sur-Com, Total, Total Reçu are formula columns that require
+    # FormulaValue enrichment to return data.
+    _formula_cols = ["Boni", "Sur-Com", "Total", "Total Reçu"]
     _empty_formula_cols = [
         c for c in _formula_cols
         if c in sales_df.columns and sales_df[c].dropna().empty

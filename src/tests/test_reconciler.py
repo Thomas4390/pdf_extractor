@@ -629,6 +629,8 @@ def test_to_sales_view_dataframe():
             "Com": 100.0,
             "Boni": 50.0,
             "Sur-Com": 30.0,
+            "Total": 180.0,
+            "Total Reçu": 180.0,
             "PA": 1000.0,
             "item_id": "99",
             "Conseiller": "Marie Tremblay",
@@ -646,7 +648,9 @@ def test_to_sales_view_dataframe():
     for col in ["# de Police", "Compagnie", "Conseiller", "PA",
                 "Com", "Reçu 1", "Écart 1",
                 "Boni", "Reçu 2", "Écart 2",
-                "Sur-Com", "Reçu 3", "Écart 3", "Statut Rapp."]:
+                "Sur-Com", "Reçu 3", "Écart 3",
+                "Total", "Total Reçu", "Écart Total",
+                "Statut Rapp."]:
         assert col in view.columns, f"Missing column: {col}"
 
     # Values correctly placed
@@ -659,6 +663,9 @@ def test_to_sales_view_dataframe():
     assert row["Reçu 2"] == 50.0
     assert row["Sur-Com"] == 30.0
     assert row["Reçu 3"] == 30.0
+    assert row["Total"] == 180.0
+    assert row["Total Reçu"] == 180.0
+    assert row["Écart Total"] == "0.0%"
 
     # All pass → status Vérifié
     assert row["Statut Rapp."] == "Vérifié"
