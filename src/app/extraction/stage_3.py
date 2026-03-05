@@ -107,11 +107,31 @@ def render_stage_3() -> None:
                 st.markdown(f"- {recon_result.flagged} écarts (non écrits)")
 
     # Data preview before upload
-    with st.expander("📋 Aperçu des données à envoyer", expanded=not has_recon):
-        # Remove internal columns for display
-        display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
-        st.dataframe(display_df, width="stretch", height=300)
-        st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
+    if has_recon:
+        # Two-board preview: one tab per board
+        with st.expander("📋 Aperçu des données à envoyer", expanded=False):
+            tab_hist, tab_sales = st.tabs([
+                f"Board 1 — {board_name}",
+                f"Board 2 — {sales_board_name}",
+            ])
+
+            with tab_hist:
+                display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
+                st.dataframe(display_df, width="stretch", height=300)
+                st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
+
+            with tab_sales:
+                sales_preview = recon_result.to_display_dataframe()
+                if not sales_preview.empty:
+                    st.dataframe(sales_preview, width="stretch", height=300)
+                    st.caption(f"📊 {len(sales_preview)} lignes × {len(sales_preview.columns)} colonnes")
+                else:
+                    st.info("Aucune mise à jour pour ce board.")
+    else:
+        with st.expander("📋 Aperçu des données à envoyer", expanded=True):
+            display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
+            st.dataframe(display_df, width="stretch", height=300)
+            st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
 
     st.markdown("---")
 

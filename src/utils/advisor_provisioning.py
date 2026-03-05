@@ -711,13 +711,14 @@ class AdvisorBoardProvisioner:
             step5.status = "success"
             step5.message = "Pas d'email fourni, invitation ignorée"
 
-        # Step 6: Set board permissions to contributor
+        # Step 6: Set board permissions to contributor (fallback: promote to owner)
         step6 = ProvisioningStep(name="Configurer les permissions")
         result.steps.append(step6)
         step6.status = "running"
         _update("Configurer les permissions", "Restriction des boards en mode contributeur...")
 
         permissions_set = 0
+        fallback_promoted = 0
         for board_info in duplicated_boards:
             board_id = int(board_info["id"])
             try:
@@ -728,16 +729,36 @@ class AdvisorBoardProvisioner:
                 permissions_set += 1
                 logger.info(f"Set board {board_info['name']} to contributor mode")
             except MondayError as e:
-                logger.warning(f"Failed to set permissions on board {board_info['id']}: {e}")
-                result.errors.append(f"Permission setting failed for board {board_info['name']}: {e}")
+                logger.warning(f"set_board_permission failed for {board_info['name']}: {e}")
+                # Fallback: promote user to owner so they can edit
+                if result.invited_user_id:
+                    try:
+                        self.client.add_users_to_board_sync(
+                            board_id=board_id,
+                            user_ids=[result.invited_user_id],
+                            kind="owner",
+                        )
+                        fallback_promoted += 1
+                        logger.info(f"Promoted user to owner on board {board_info['name']} (fallback)")
+                    except MondayError as e2:
+                        logger.error(f"Owner fallback also failed for board {board_info['name']}: {e2}")
+                        result.errors.append(f"Permission setting failed for board {board_info['name']}: {e}")
+                else:
+                    logger.warning("No invited_user_id available for owner fallback")
+                    result.errors.append(f"Permission setting failed for board {board_info['name']}: {e}")
             time.sleep(0.3)
 
-        if permissions_set > 0:
+        total_configured = permissions_set + fallback_promoted
+        total_boards = len(duplicated_boards)
+        if total_configured > 0:
             step6.status = "success"
-            step6.message = f"{permissions_set}/{len(duplicated_boards)} board(s) en mode contributeur"
+            if fallback_promoted == 0:
+                step6.message = f"{permissions_set}/{total_boards} board(s) en mode contributeur"
+            else:
+                step6.message = f"{total_configured}/{total_boards} board(s) configuré(s) ({fallback_promoted} promu(s) owner)"
         else:
             step6.status = "error"
-            step6.message = "Aucun board configuré (plan Enterprise requis ?)"
+            step6.message = "Aucun board configuré"
 
         # Final status
         critical_steps = [s for s in result.steps if s.name in ["Créer le dossier", "Dupliquer les boards"]]
