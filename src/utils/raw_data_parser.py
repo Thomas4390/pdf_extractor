@@ -160,7 +160,7 @@ def parse_raw_client_data(raw_data: str) -> ParsedClientData:
         if match:
             result.policy_date = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
-    # 4. Extract commission rate - multiple patterns
+    # 4. Extract commission rate as decimal (e.g., 0.75 for 75%)
     # Pattern: "boni X%", "_X%", "recu p X%", "recup X%"
     match = re.search(r"(?:boni|recu\s*p|recup|_)\s*(\d+)\s*%", raw_data, re.IGNORECASE)
     if match:

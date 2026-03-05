@@ -288,12 +288,12 @@ class AdvisorMatcher:
                     if 'created_at' not in headers:
                         col_idx = len(headers) + 1
                         self._worksheet.update_cell(1, col_idx, 'created_at')
-                        self._worksheet.format(f'{chr(64 + col_idx)}1', {'textFormat': {'bold': True}})
+                        self._worksheet.format(f'{self._col_index_to_letter(col_idx - 1)}1', {'textFormat': {'bold': True}})
                         headers = self._worksheet.row_values(1)
                     if 'email' not in headers:
                         col_idx = len(headers) + 1
                         self._worksheet.update_cell(1, col_idx, 'email')
-                        self._worksheet.format(f'{chr(64 + col_idx)}1', {'textFormat': {'bold': True}})
+                        self._worksheet.format(f'{self._col_index_to_letter(col_idx - 1)}1', {'textFormat': {'bold': True}})
                 except Exception:
                     pass
             except gspread.WorksheetNotFound:
@@ -327,6 +327,16 @@ class AdvisorMatcher:
     def configuration_error(self) -> Optional[str]:
         """Return the configuration error message, if any."""
         return self._gsheets_error
+
+    @staticmethod
+    def _col_index_to_letter(idx: int) -> str:
+        """Convert a 0-based column index to Excel-style letter(s) (A, B, ..., Z, AA, AB, ...)."""
+        result = ""
+        idx += 1  # 1-based
+        while idx:
+            idx, rem = divmod(idx - 1, 26)
+            result = chr(65 + rem) + result
+        return result
 
     # Common encoding issues (UTF-8 mojibake)
     ENCODING_FIXES = {
@@ -395,6 +405,10 @@ class AdvisorMatcher:
         for advisor in self.advisors:
             first = re.escape(self._normalize_text(advisor.first_name))
             last = re.escape(self._normalize_text(advisor.last_name))
+
+            # Skip advisors with empty first or last name
+            if not first or not last:
+                continue
 
             # HIGH PRIORITY: Full name patterns
             high_patterns = [
@@ -528,7 +542,8 @@ class AdvisorMatcher:
                     if idx == 0:
                         continue
                     if row and str(row[0]) == str(advisor._row_id):
-                        cell_ref = f'{chr(65 + status_col_idx)}{idx + 1}'
+                        col_letter = self._col_index_to_letter(status_col_idx)
+                        cell_ref = f'{col_letter}{idx + 1}'
                         updates.append({'range': cell_ref, 'values': [['Active']]})
                         break
 
@@ -877,19 +892,12 @@ class AdvisorMatcher:
         self._load()
 
 
-# Module-level singleton for easy access
-_matcher_instance: Optional[AdvisorMatcher] = None
-
-
 def get_advisor_matcher() -> AdvisorMatcher:
-    """Get the global AdvisorMatcher instance."""
-    global _matcher_instance
-    if _matcher_instance is None:
-        from src.utils.config import get_settings
-        _matcher_instance = AdvisorMatcher(
-            fuzzy_threshold=get_settings().advisor_fuzzy_threshold,
-        )
-    return _matcher_instance
+    """Get the global AdvisorMatcher singleton instance."""
+    from src.utils.config import get_settings
+    return AdvisorMatcher.get_instance(
+        fuzzy_threshold=get_settings().advisor_fuzzy_threshold,
+    )
 
 
 def normalize_advisor_name(name: str) -> Optional[str]:

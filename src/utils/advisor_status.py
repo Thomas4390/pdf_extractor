@@ -59,9 +59,6 @@ class AdvisorStatusHistoryStore:
 
     # Singleton instance
     _instance: Optional['AdvisorStatusHistoryStore'] = None
-    _worksheet: Optional[Any] = None
-    _initialized: bool = False
-    _error: Optional[str] = None
 
     @classmethod
     def get_instance(cls) -> 'AdvisorStatusHistoryStore':
@@ -74,29 +71,28 @@ class AdvisorStatusHistoryStore:
     def reset_instance(cls):
         """Reset the singleton instance."""
         cls._instance = None
-        cls._worksheet = None
-        cls._initialized = False
-        cls._error = None
 
     def __init__(self):
-        """Initialize the store."""
-        if not AdvisorStatusHistoryStore._initialized:
-            self._init_gsheets()
+        """Initialize the store. Use get_instance() instead of direct instantiation."""
+        self._worksheet: Optional[Any] = None
+        self._initialized: bool = False
+        self._error: Optional[str] = None
+        self._init_gsheets()
 
     def _init_gsheets(self):
         """Initialize Google Sheets connection."""
         if not GSHEETS_AVAILABLE or gspread is None:
-            AdvisorStatusHistoryStore._error = "gspread library not installed"
+            self._error = "gspread library not installed"
             return
 
         spreadsheet_id = get_secret('GOOGLE_SHEETS_SPREADSHEET_ID')
         if not spreadsheet_id:
-            AdvisorStatusHistoryStore._error = "GOOGLE_SHEETS_SPREADSHEET_ID not configured"
+            self._error = "GOOGLE_SHEETS_SPREADSHEET_ID not configured"
             return
 
         credentials = get_gcp_credentials()
         if not credentials:
-            AdvisorStatusHistoryStore._error = "GCP credentials not found"
+            self._error = "GCP credentials not found"
             return
 
         try:
@@ -105,35 +101,35 @@ class AdvisorStatusHistoryStore:
 
             # Get or create the AdvisorStatusHistory worksheet
             try:
-                AdvisorStatusHistoryStore._worksheet = spreadsheet.worksheet(self.WORKSHEET_NAME)
+                self._worksheet = spreadsheet.worksheet(self.WORKSHEET_NAME)
             except gspread.WorksheetNotFound:
                 # Create the worksheet with headers
-                AdvisorStatusHistoryStore._worksheet = spreadsheet.add_worksheet(
+                self._worksheet = spreadsheet.add_worksheet(
                     title=self.WORKSHEET_NAME,
                     rows=1000, cols=5
                 )
-                AdvisorStatusHistoryStore._worksheet.update(
+                self._worksheet.update(
                     'A1:E1',
                     [['advisor_name', 'month', 'status', 'first_appearance_month', 'updated_at']]
                 )
-                AdvisorStatusHistoryStore._worksheet.format('A1:E1', {'textFormat': {'bold': True}})
+                self._worksheet.format('A1:E1', {'textFormat': {'bold': True}})
 
-            AdvisorStatusHistoryStore._initialized = True
-            AdvisorStatusHistoryStore._error = None
+            self._initialized = True
+            self._error = None
 
         except Exception as e:
             logging.warning(f"Could not initialize AdvisorStatusHistory sheet: {e}")
-            AdvisorStatusHistoryStore._error = str(e)
+            self._error = str(e)
 
     @property
     def is_configured(self) -> bool:
         """Return True if Google Sheets is properly configured."""
-        return AdvisorStatusHistoryStore._initialized and AdvisorStatusHistoryStore._worksheet is not None
+        return self._initialized and self._worksheet is not None
 
     @property
     def configuration_error(self) -> Optional[str]:
         """Return the configuration error message, if any."""
-        return AdvisorStatusHistoryStore._error
+        return self._error
 
     def get_status_history(self, advisor_name: str) -> list[dict[str, str]]:
         """
@@ -149,7 +145,7 @@ class AdvisorStatusHistoryStore:
             return []
 
         try:
-            records = AdvisorStatusHistoryStore._worksheet.get_all_records()
+            records = self._worksheet.get_all_records()
             return [
                 {
                     'month': r['month'],
@@ -179,7 +175,7 @@ class AdvisorStatusHistoryStore:
             return None
 
         try:
-            records = AdvisorStatusHistoryStore._worksheet.get_all_records()
+            records = self._worksheet.get_all_records()
             for r in records:
                 if r.get('advisor_name') == advisor_name and r.get('month') == month:
                     return r.get('status')
@@ -215,7 +211,7 @@ class AdvisorStatusHistoryStore:
             updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Check if record already exists
-            all_values = AdvisorStatusHistoryStore._worksheet.get_all_values()
+            all_values = self._worksheet.get_all_values()
             row_index = None
 
             for idx, row in enumerate(all_values):
@@ -227,13 +223,13 @@ class AdvisorStatusHistoryStore:
 
             if row_index:
                 # Update existing row
-                AdvisorStatusHistoryStore._worksheet.update(
+                self._worksheet.update(
                     f'A{row_index}:E{row_index}',
                     [[advisor_name, month, status, first_appearance_month or '', updated_at]]
                 )
             else:
                 # Append new row
-                AdvisorStatusHistoryStore._worksheet.append_row([
+                self._worksheet.append_row([
                     advisor_name, month, status, first_appearance_month or '', updated_at
                 ])
 
@@ -264,7 +260,7 @@ class AdvisorStatusHistoryStore:
             updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Get existing records for lookup
-            all_values = AdvisorStatusHistoryStore._worksheet.get_all_values()
+            all_values = self._worksheet.get_all_values()
             existing_lookup = {}
             for idx, row in enumerate(all_values):
                 if idx == 0:  # Skip header
@@ -299,11 +295,11 @@ class AdvisorStatusHistoryStore:
 
             # Perform batch updates
             if updates:
-                AdvisorStatusHistoryStore._worksheet.batch_update(updates)
+                self._worksheet.batch_update(updates)
 
             # Append new rows
             if new_rows:
-                AdvisorStatusHistoryStore._worksheet.append_rows(new_rows)
+                self._worksheet.append_rows(new_rows)
 
             return len(updates) + len(new_rows)
 
@@ -325,7 +321,7 @@ class AdvisorStatusHistoryStore:
             return {}
 
         try:
-            records = AdvisorStatusHistoryStore._worksheet.get_all_records()
+            records = self._worksheet.get_all_records()
             return {
                 r['advisor_name']: r['status']
                 for r in records

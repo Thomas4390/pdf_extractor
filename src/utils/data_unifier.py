@@ -124,6 +124,16 @@ class DataUnifier:
     DEFAULT_BONUS_RATE = 1.75        # 175%
     DEFAULT_ON_COMMISSION_RATE = 0.75  # 75%
 
+    @staticmethod
+    def _col_index_to_letter(idx: int) -> str:
+        """Convert a 0-based column index to Excel-style letter(s) (A, B, ..., Z, AA, AB, ...)."""
+        result = ""
+        idx += 1  # 1-based
+        while idx:
+            idx, rem = divmod(idx - 1, 26)
+            result = chr(65 + rem) + result
+        return result
+
     def __init__(self, advisor_matcher=None, auto_load_matcher: bool = True):
         """
         Initialise le DataUnifier.
@@ -737,17 +747,13 @@ class DataUnifier:
                 client_name = fee.client_full_name
                 advisor_name = fee.advisor_name
                 policy_number = fee.policy_number or fee.account_number
-                # Use company_code from parsed data if available (overrides default)
-                company_name = fee.company_code if hasattr(fee, 'company_code') and fee.company_code else fee.company
             else:
                 # IDCTrailingFeeRaw - parser raw_client_data
                 client_name = self._parse_client_from_raw(fee.raw_client_data)
                 advisor_name = self._parse_advisor_from_raw(fee.raw_client_data)
                 policy_number = self._parse_policy_from_raw(fee.raw_client_data) or fee.account_number
-                # Try to extract company from raw_client_data
-                company_name = self._parse_company_from_raw(fee.raw_client_data) or fee.company
 
-            # IDC Statement: Toujours utiliser "IDC" comme nom de compagnie
+            # IDC Statement: Always use "IDC" as company name
             company_name = 'IDC'
 
             # Convertir le montant des frais de suivi
@@ -1408,7 +1414,7 @@ class DataUnifier:
                     continue
 
                 col_idx = headers.index(column_name)
-                col_letter = chr(ord('A') + col_idx)
+                col_letter = self._col_index_to_letter(col_idx)
 
                 print(f"\n--- Processing: {ws.title} ---")
                 print(f"  Column '{column_name}' found at index {col_idx + 1} ({col_letter})")

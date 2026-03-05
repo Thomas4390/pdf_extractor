@@ -478,21 +478,51 @@ class MetricsConfig:
     rewards_column: str = "Récompenses"
 
 
-def _get_data_board_id() -> int:
-    """Get the Data board ID from config."""
+def get_data_board_id() -> int:
+    """Get the Data board ID from config (lazy, safe for Streamlit)."""
     from src.utils.config import get_settings
     return get_settings().monday_board_data
 
 
-# Monday.com "Data" board ID — used as both metrics source and default aggregation target
-# Kept as module-level for backward compat; reads from config on first use
-DATA_BOARD_ID = _get_data_board_id()
+class _LazyBoardId:
+    """Lazy proxy for DATA_BOARD_ID — defers config read until first use."""
 
-# Default metrics board configuration
-# The metrics board "Data" has groups named by month (e.g., "Janvier 2026")
-METRICS_BOARD_CONFIG = MetricsConfig(
-    board_id=DATA_BOARD_ID,
-)
+    def __int__(self):
+        return get_data_board_id()
+
+    def __eq__(self, other):
+        return int(self) == other
+
+    def __hash__(self):
+        return hash(int(self))
+
+    def __repr__(self):
+        return repr(int(self))
+
+
+# Monday.com "Data" board ID — lazy proxy, safe for Streamlit import
+DATA_BOARD_ID = _LazyBoardId()
+
+
+def get_metrics_board_config() -> MetricsConfig:
+    """Get metrics board config with lazily resolved board ID."""
+    return MetricsConfig(board_id=get_data_board_id())
+
+
+# Default metrics board configuration — lazy accessor
+# Callers using METRICS_BOARD_CONFIG.board_id will get the correct value
+METRICS_BOARD_CONFIG = MetricsConfig(board_id=0)  # placeholder, see __init__ below
+
+
+class _LazyMetricsConfig:
+    """Lazy proxy for METRICS_BOARD_CONFIG."""
+
+    def __getattr__(self, name):
+        config = get_metrics_board_config()
+        return getattr(config, name)
+
+
+METRICS_BOARD_CONFIG = _LazyMetricsConfig()
 
 
 # =============================================================================

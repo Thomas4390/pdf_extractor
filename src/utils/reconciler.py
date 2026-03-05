@@ -112,6 +112,14 @@ class ReconciliationResult:
             ):
                 if m.sales_item_id not in updates:
                     updates[m.sales_item_id] = {}
+                if m.classification.recu_field in updates[m.sales_item_id]:
+                    logger.warning(
+                        "get_sales_updates: collision on item_id=%s field=%s — "
+                        "overwriting %.2f with %.2f",
+                        m.sales_item_id, m.classification.recu_field,
+                        updates[m.sales_item_id][m.classification.recu_field],
+                        m.recu_amount,
+                    )
                 updates[m.sales_item_id][m.classification.recu_field] = m.recu_amount
         return updates
 
@@ -194,6 +202,11 @@ class ReconciliationResult:
             for _, row in sales_df.iterrows():
                 police = str(row.get("# de Police", "")).strip()
                 if police:
+                    if police in sales_lookup:
+                        logger.warning(
+                            "Reconciler: duplicate police '%s' in sales view — using last row",
+                            police,
+                        )
                     sales_lookup[police] = row
 
         # Group matches by police_number
@@ -490,6 +503,11 @@ class Reconciler:
             for _, row in sales_df.iterrows():
                 police = str(row.get("# de Police", "")).strip()
                 if police:
+                    if police in sales_lookup:
+                        logger.warning(
+                            "Reconciler: duplicate police '%s' in sales board — using last row",
+                            police,
+                        )
                     sales_lookup[police] = row
 
         # Warn if formula columns are entirely null in the sales DataFrame

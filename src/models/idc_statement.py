@@ -182,7 +182,7 @@ class IDCTrailingFeeParsed(BaseModel):
     )
     commission_rate: FlexibleDecimal = Field(
         default=None,
-        description="Commission rate as percentage (75.0 for 75%)",
+        description="Commission rate as decimal (0.75 for 75%)",
     )
     policy_number: FlexibleString = Field(
         default=None,

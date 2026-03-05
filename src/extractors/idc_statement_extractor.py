@@ -165,12 +165,13 @@ class IDCStatementExtractor(BaseExtractor[IDCStatementReportParsed]):
             )
         else:
             # Vision mode: send images to VLM
-            all_images = self.get_images(pdf_path)
+            images, mime_type = self.get_images(pdf_path)
 
-            logger.info(f"Sending {len(all_images)} pages to VLM (direct extraction)")
+            logger.info(f"Sending {len(images)} pages to VLM (direct extraction)")
 
             result = await self.client.extract_with_vision(
-                images=all_images,
+                images=images,
+                mime_type=mime_type,
                 system_prompt=self.system_prompt_direct,
                 user_prompt=self.user_prompt_direct,
             )

@@ -484,7 +484,8 @@ class Pipeline:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> BatchResult:
         """Synchronous wrapper for process_batch."""
-        return asyncio.run(
+        from .app.utils.async_helpers import run_async
+        return run_async(
             self.process_batch(
                 pdf_paths=pdf_paths,
                 source=source,
@@ -561,7 +562,8 @@ class Pipeline:
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> UploadResult:
         """Synchronous wrapper for upload_to_monday."""
-        return asyncio.run(
+        from .app.utils.async_helpers import run_async
+        return run_async(
             self.upload_to_monday(
                 result=result,
                 board_id=board_id,
@@ -669,4 +671,5 @@ def extract_pdf_sync(
     source: Optional[str] = None,
 ) -> pd.DataFrame:
     """Synchronous wrapper for extract_pdf."""
-    return asyncio.run(extract_pdf(pdf_path, source=source))
+    from .app.utils.async_helpers import run_async
+    return run_async(extract_pdf(pdf_path, source=source))
