@@ -450,6 +450,30 @@ class AdvisorBoardProvisioner:
         self.client = client
         self.config = config
 
+    def _fetch_board_names(self, board_ids: list[int]) -> list[dict]:
+        """Fetch board names from Monday.com by IDs.
+
+        Returns:
+            List of {"id": str, "name": str} dicts.
+        """
+        ids_str = ", ".join(str(bid) for bid in board_ids)
+        query = f"""
+        {{
+            boards(ids: [{ids_str}]) {{
+                id
+                name
+            }}
+        }}
+        """
+        result = self.client._execute_query_sync(query)
+        boards = result.get("data", {}).get("boards", [])
+        # Fallback for any IDs not found
+        found_ids = {b["id"] for b in boards}
+        for bid in board_ids:
+            if str(bid) not in found_ids:
+                boards.append({"id": str(bid), "name": f"Board {bid}"})
+        return boards
+
     def provision(
         self,
         advisor,
@@ -511,11 +535,8 @@ class AdvisorBoardProvisioner:
         template_boards = []
         try:
             if self.config.template_board_ids:
-                # Use explicit board IDs
-                template_boards = [
-                    {"id": str(bid), "name": f"Board {bid}"}
-                    for bid in self.config.template_board_ids
-                ]
+                # Use explicit board IDs — fetch real names from API
+                template_boards = self._fetch_board_names(self.config.template_board_ids)
             else:
                 # Auto-discover from folder
                 template_boards = self.client.list_boards_in_folder_sync(

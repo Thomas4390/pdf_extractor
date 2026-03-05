@@ -38,8 +38,88 @@ def _get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
     return os.environ.get(key, default)
 
 
+_BOARD_IDS = {
+    "prod": {
+        "paiement_historique": 8553813876,
+        "vente_production": 9423464449,
+        "ae_tracker": 9142978904,
+        "data": 9142121714,
+    },
+    "test": {
+        "paiement_historique": 18402704159,
+        "vente_production": 18402704199,
+        "ae_tracker": 9142978904,
+        "data": 18402704401,
+    },
+}
+
+
+_resolved_boards: Optional[dict[str, int]] = None
+_resolved_env: Optional[str] = None
+
+
+def _resolve_board_ids() -> dict[str, int]:
+    """Resolve board IDs based on ENVIRONMENT setting (test/prod).
+
+    Priority for environment: env var > .env file > Streamlit secrets > default.
+    Priority for board IDs: Streamlit secrets boards.{env} > hardcoded _BOARD_IDS.
+
+    Results are cached for the process lifetime.
+    """
+    global _resolved_boards, _resolved_env
+
+    if _resolved_boards is not None:
+        return _resolved_boards
+
+    # Snapshot env var BEFORE any Streamlit import (Streamlit may overwrite
+    # os.environ with values from secrets.toml).
+    env = os.environ.get("ENVIRONMENT", "").strip().lower() or None
+
+    # Fallback to Streamlit secrets / default
+    if not env:
+        env = (_get_secret("ENVIRONMENT") or "prod").strip().lower()
+
+    if env not in _BOARD_IDS:
+        env = "prod"
+
+    _resolved_env = env
+
+    # Try Streamlit secrets boards table first
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "boards" in st.secrets:
+            boards_section = st.secrets["boards"]
+            if env in boards_section:
+                tbl = boards_section[env]
+                _resolved_boards = {
+                    "paiement_historique": int(tbl.get("paiement_historique", _BOARD_IDS[env]["paiement_historique"])),
+                    "vente_production": int(tbl.get("vente_production", _BOARD_IDS[env]["vente_production"])),
+                    "ae_tracker": int(tbl.get("ae_tracker", _BOARD_IDS[env]["ae_tracker"])),
+                    "data": int(tbl.get("data", _BOARD_IDS[env]["data"])),
+                }
+                return _resolved_boards
+    except Exception:
+        pass
+
+    _resolved_boards = _BOARD_IDS[env]
+    return _resolved_boards
+
+
+def get_environment() -> str:
+    """Return the resolved environment name ('test' or 'prod')."""
+    _resolve_board_ids()  # ensure resolution happened
+    return _resolved_env or "prod"
+
+
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
+
+    # Environment (test / prod)
+    environment: str = Field(
+        default="prod",
+        alias="ENVIRONMENT",
+        description="Environment: 'test' or 'prod' — selects Monday.com board IDs",
+    )
 
     # API Keys
     openrouter_api_key: Optional[str] = Field(
@@ -110,23 +190,22 @@ class Settings(BaseSettings):
         description="Directory for cached extraction results",
     )
 
-    # Monday.com Board IDs
-    monday_board_paiement_historique: int = Field(
-        default=8553813876,
-        description="Monday.com board ID for Paiement Historique",
-    )
-    monday_board_vente_production: int = Field(
-        default=9423464449,
-        description="Monday.com board ID for Ventes/Production",
-    )
-    monday_board_ae_tracker: int = Field(
-        default=9142978904,
-        description="Monday.com board ID for AE Tracker",
-    )
-    monday_board_data: int = Field(
-        default=9142121714,
-        description="Monday.com board ID for Data (metrics + aggregation target)",
-    )
+    # Monday.com Board IDs — resolved dynamically from ENVIRONMENT
+    @property
+    def monday_board_paiement_historique(self) -> int:
+        return _resolve_board_ids()["paiement_historique"]
+
+    @property
+    def monday_board_vente_production(self) -> int:
+        return _resolve_board_ids()["vente_production"]
+
+    @property
+    def monday_board_ae_tracker(self) -> int:
+        return _resolve_board_ids()["ae_tracker"]
+
+    @property
+    def monday_board_data(self) -> int:
+        return _resolve_board_ids()["data"]
 
     # Monday.com Client
     monday_batch_size: int = Field(
