@@ -103,36 +103,58 @@ def load_boards_async(force_rerun: bool = False) -> None:
             st.session_state.boards_error = str(e)
 
 
-def _load_aggregation_data_thread(api_key: str, selected_sources: dict) -> None:
+def _load_aggregation_data_thread(
+    api_key: str, selected_sources: dict, board_names: dict[int, str] | None = None,
+) -> None:
     """
     Background thread function to load aggregation source data.
 
     Args:
         api_key: Monday.com API key
         selected_sources: Dict of {source_key: board_id}
+        board_names: Optional dict of {board_id: board_name} for display
     """
     global _background_agg_data, _background_agg_loading, _background_agg_error, _background_agg_progress
 
     from src.clients.monday import MondayClient
-    from src.utils.aggregator import SOURCE_BOARDS
+    from src.utils.aggregator import METRICS_BOARD_CONFIG, SOURCE_BOARDS
 
     _background_agg_loading = True
     _background_agg_error = None
     _background_agg_data = {}
     _background_agg_progress = {"current": 0, "total": len(selected_sources), "current_source": ""}
 
+    if board_names is None:
+        board_names = {}
+
     try:
         client = MondayClient(api_key=api_key)
+
+        # Load advisor history for dynamic status calculation
+        _background_agg_progress = {
+            "current": 0,
+            "total": len(selected_sources),
+            "current_source": "Historique des conseillers...",
+        }
+        try:
+            from src.utils.advisor_status import load_advisor_history
+            data_board_id = METRICS_BOARD_CONFIG.board_id
+            load_advisor_history(client, data_board_id)
+        except Exception:
+            pass  # Status will default to "Active"
 
         for idx, (source_key, board_id) in enumerate(selected_sources.items()):
             config = SOURCE_BOARDS.get(source_key)
             if not config:
                 continue
 
+            # Use actual board name if available, fall back to config display_name
+            display_label = board_names.get(board_id, config.display_name)
+
             _background_agg_progress = {
                 "current": idx,
                 "total": len(selected_sources),
-                "current_source": config.display_name,
+                "current_source": display_label,
             }
 
             try:
@@ -187,9 +209,16 @@ def start_background_aggregation_load() -> bool:
     if not selected_sources:
         return False
 
+    # Build board_id -> board_name mapping from session state
+    board_names: dict[int, str] = {}
+    boards = st.session_state.get("monday_boards")
+    if boards:
+        for b in boards:
+            board_names[int(b["id"])] = b["name"]
+
     thread = threading.Thread(
         target=_load_aggregation_data_thread,
-        args=(api_key, selected_sources),
+        args=(api_key, selected_sources, board_names),
         daemon=True,
     )
     thread.start()
