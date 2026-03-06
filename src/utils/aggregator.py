@@ -1005,13 +1005,18 @@ def aggregate_by_advisor(
         df, unknown_names = normalize_advisor_column(df, advisor_column, filter_unknown=True)
 
     # Convert value column to numeric
+    original_na_count = df[value_column].isna().sum()
+    original_series = df[value_column].copy()
     df[value_column] = pd.to_numeric(df[value_column], errors="coerce")
-    nan_count = df[value_column].isna().sum()
-    if nan_count > 0:
-        logger.warning(
-            "Agrégation %s: %d valeur(s) non-numériques remplacées par 0",
+    coerced_count = df[value_column].isna().sum() - original_na_count
+    if coerced_count > 0:
+        bad_mask = df[value_column].isna() & original_series.notna()
+        bad_values = original_series[bad_mask].unique()[:5]
+        logger.info(
+            "Agrégation %s: %d valeur(s) non-numériques remplacées par 0 (exemples: %s)",
             value_column,
-            nan_count,
+            coerced_count,
+            bad_values,
         )
     df[value_column] = df[value_column].fillna(0)
 

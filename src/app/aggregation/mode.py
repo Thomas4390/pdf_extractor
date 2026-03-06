@@ -571,8 +571,12 @@ def render_agg_step_2_period_preview() -> None:
                 all_filtered_rows.append(display_df)
 
             if all_filtered_rows:
-                # Combine all sources
-                detail_df = pd.concat(all_filtered_rows, ignore_index=True)
+                # Filter out empty or all-NA DataFrames before concat
+                non_empty = [df for df in all_filtered_rows if not df.empty and not df.isna().all(axis=None)]
+                if non_empty:
+                    detail_df = pd.concat(non_empty, ignore_index=True)
+                else:
+                    detail_df = pd.DataFrame()
 
                 # Filter by selected advisor if not "Tous"
                 if selected_advisor != "Tous":
