@@ -110,7 +110,8 @@ def _load_aggregation_data_thread(
     Background thread function to load aggregation source data.
 
     Loads all source boards and advisor history concurrently using
-    asyncio.gather for significantly faster loading.
+    asyncio.gather for significantly faster loading. Formula enrichment
+    is skipped (not needed for aggregation) to avoid rate limits.
 
     Args:
         api_key: Monday.com API key
@@ -131,12 +132,31 @@ def _load_aggregation_data_thread(
     if board_names is None:
         board_names = {}
 
-    total_sources = len(selected_sources)
+    # Shared mutable state for progress tracking across async tasks
+    progress_state = {
+        "current": 0,
+        "total": 1,  # Updated once we know total work units
+        "logs": [],   # Completed item log entries
+    }
+
+    def _update_progress(message: str, increment: bool = True) -> None:
+        """Update the global progress dict from any async task."""
+        global _background_agg_progress
+        if increment:
+            progress_state["current"] += 1
+        progress_state["logs"].append(message)
+        _background_agg_progress = {
+            "current": progress_state["current"],
+            "total": progress_state["total"],
+            "current_source": message,
+            "logs": list(progress_state["logs"]),
+        }
 
     _background_agg_progress = {
         "current": 0,
-        "total": total_sources,
-        "current_source": "Démarrage...",
+        "total": 1,
+        "current_source": "Connexion à Monday.com...",
+        "logs": [],
     }
 
     try:
@@ -144,33 +164,27 @@ def _load_aggregation_data_thread(
         history_board_id = METRICS_BOARD_CONFIG.board_id
 
         async def _load_one_source(source_key: str, board_id: int, config) -> None:
-            """Load a single source board and update progress on completion."""
-            global _background_agg_progress
+            """Load a single source board and log completion."""
             display_label = board_names.get(board_id, config.display_name)
             try:
-                items = await client.extract_board_data(board_id)
+                items = await client.extract_board_data(
+                    board_id, skip_formula_enrichment=True,
+                )
                 df = client.board_items_to_dataframe(items)
                 _background_agg_data[source_key] = df
-            except Exception:
+                _update_progress(f"✅ {display_label} — {len(df)} lignes")
+            except Exception as e:
                 _background_agg_data[source_key] = pd.DataFrame()
+                _update_progress(f"⚠️ {display_label} — erreur: {e}")
 
-            # Update progress as each source completes
-            completed = sum(1 for k in selected_sources if k in _background_agg_data)
-            _background_agg_progress = {
-                "current": completed,
-                "total": total_sources,
-                "current_source": display_label,
-            }
-
-        async def _load_advisor_history() -> None:
-            """Load advisor history by fetching all groups in parallel."""
+        async def _load_advisor_history() -> int:
+            """Load advisor history. Returns number of groups loaded."""
             from src.utils.advisor_matcher import normalize_advisor_name_full
             from src.utils.advisor_status import AdvisorStatusCalculator
 
             try:
                 groups = await client.list_groups(history_board_id)
 
-                # Parse and sort groups chronologically
                 sorted_groups = []
                 for group in groups:
                     title = group.get("title", "")
@@ -180,23 +194,33 @@ def _load_aggregation_data_thread(
                 sorted_groups.sort(key=lambda x: (x[0], x[1]))
 
                 if not sorted_groups:
-                    return
+                    _update_progress("📊 Historique conseillers — aucun groupe")
+                    return 0
 
-                # Load all group items concurrently (skip formula enrichment — not needed)
-                group_tasks = [
-                    client.extract_board_data(
-                        history_board_id, group_id=g["id"], skip_formula_enrichment=True,
+                # Update total now that we know how many groups there are
+                progress_state["total"] += len(sorted_groups)
+                _background_agg_progress["total"] = progress_state["total"]
+
+                # Load all group items concurrently
+                async def _load_history_group(year_month_group):
+                    _year, _month, g = year_month_group
+                    items = await client.extract_board_data(
+                        history_board_id, group_id=g["id"],
+                        skip_formula_enrichment=True,
                     )
-                    for _, _, g in sorted_groups
-                ]
-                group_results = await asyncio.gather(*group_tasks, return_exceptions=True)
+                    _update_progress(f"📊 Historique — {g['title']}")
+                    return g, items
 
-                # Process results in chronological order to find first appearances
+                tasks = [_load_history_group(g) for g in sorted_groups]
+                group_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Process in chronological order
                 first_appearances: dict[str, str] = {}
-                for (_, _, group), result in zip(sorted_groups, group_results):
+                for ymg, result in zip(sorted_groups, group_results):
                     if isinstance(result, Exception):
                         continue
-                    df = client.board_items_to_dataframe(result)
+                    group, items = result
+                    df = client.board_items_to_dataframe(items)
                     if df.empty:
                         continue
 
@@ -207,17 +231,18 @@ def _load_aggregation_data_thread(
                     else:
                         continue
 
-                    group_title = group["title"]
                     for advisor in advisors:
                         normalized = normalize_advisor_name_full(str(advisor))
                         if normalized and normalized not in first_appearances:
-                            first_appearances[normalized] = group_title
+                            first_appearances[normalized] = group["title"]
 
                 AdvisorStatusCalculator._first_appearance_cache = first_appearances
                 AdvisorStatusCalculator._cache_loaded = True
+                return len(sorted_groups)
 
             except Exception:
-                pass  # Status will default to "Active"
+                _update_progress("⚠️ Historique conseillers — erreur (statut par défaut)")
+                return 0
 
         async def _load_all_parallel() -> None:
             """Load all source boards + advisor history concurrently."""
@@ -227,21 +252,19 @@ def _load_aggregation_data_thread(
                 if config:
                     source_tasks.append(_load_one_source(source_key, board_id, config))
 
-            # Run everything in parallel: all source boards + advisor history
-            await asyncio.gather(*source_tasks, _load_advisor_history())
+            # Total starts at num_sources; advisor history will add its groups
+            progress_state["total"] = len(source_tasks)
+            _background_agg_progress["total"] = progress_state["total"]
 
-        _background_agg_progress = {
-            "current": 0,
-            "total": total_sources,
-            "current_source": "Chargement en parallèle...",
-        }
+            await asyncio.gather(*source_tasks, _load_advisor_history())
 
         asyncio.run(_load_all_parallel())
 
         _background_agg_progress = {
-            "current": total_sources,
-            "total": total_sources,
+            "current": progress_state["total"],
+            "total": progress_state["total"],
             "current_source": "Terminé",
+            "logs": progress_state["logs"],
         }
 
     except Exception as e:

@@ -192,14 +192,18 @@ def render_agg_step_1_config() -> None:
             progress = bg_status["progress"]
             current = progress.get("current", 0)
             total = progress.get("total", 1)
-            current_source = progress.get("current_source", "")
+            logs = progress.get("logs", [])
 
             st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
-            if current_source:
-                st.caption(current_source)
 
             if total > 0:
-                st.progress(current / total)
+                st.progress(min(current / total, 1.0))
+
+            # Show completed items log
+            if logs:
+                with st.container():
+                    for log in logs:
+                        st.caption(log)
 
             import time
             time.sleep(0.5)
