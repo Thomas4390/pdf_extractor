@@ -163,13 +163,17 @@ def _load_aggregation_data_thread(
         client = MondayClient(api_key=api_key)
         history_board_id = METRICS_BOARD_CONFIG.board_id
 
+        # Store raw items per source for deferred formula enrichment
+        _source_items: dict[str, list[dict]] = {}
+
         async def _load_one_source(source_key: str, board_id: int, config) -> None:
-            """Load a single source board and log completion."""
+            """Load a single source board (without formulas) and log completion."""
             display_label = board_names.get(board_id, config.display_name)
             try:
                 items = await client.extract_board_data(
                     board_id, skip_formula_enrichment=True,
                 )
+                _source_items[source_key] = items
                 df = client.board_items_to_dataframe(items)
                 _background_agg_data[source_key] = df
                 _update_progress(f"✅ {display_label} — {len(df)} lignes")
@@ -245,18 +249,56 @@ def _load_aggregation_data_thread(
                 return 0
 
         async def _load_all_parallel() -> None:
-            """Load all source boards + advisor history concurrently."""
+            """Load all source boards + advisor history concurrently,
+            then enrich formula columns sequentially to respect rate limits."""
+            source_configs = {}
             source_tasks = []
             for source_key, board_id in selected_sources.items():
                 config = SOURCE_BOARDS.get(source_key)
                 if config:
+                    source_configs[source_key] = config
                     source_tasks.append(_load_one_source(source_key, board_id, config))
 
             # Total starts at num_sources; advisor history will add its groups
             progress_state["total"] = len(source_tasks)
             _background_agg_progress["total"] = progress_state["total"]
 
+            # Phase 1: Load all data in parallel (without formulas)
             await asyncio.gather(*source_tasks, _load_advisor_history())
+
+            # Phase 2: Enrich formula columns sequentially per board
+            # (rate limit: 10k formula values/min — sequential avoids collisions)
+            for source_key, items in _source_items.items():
+                if not items:
+                    continue
+                config = source_configs.get(source_key)
+                if not config:
+                    continue
+                board_id = selected_sources[source_key]
+                display_label = board_names.get(board_id, config.display_name)
+
+                # Check if this board has any formula columns
+                has_formulas = any(
+                    cv.get("column", {}).get("type") == "formula"
+                    for item in items[:1]
+                    for cv in item.get("column_values", [])
+                )
+                if not has_formulas:
+                    continue
+
+                try:
+                    _update_progress(
+                        f"🔢 Formules — {display_label}...", increment=False,
+                    )
+                    await client.enrich_formula_columns(items)
+                    # Rebuild DataFrame with enriched formula values
+                    df = client.board_items_to_dataframe(items)
+                    _background_agg_data[source_key] = df
+                    _update_progress(f"🔢 Formules — {display_label} ✅")
+                except Exception:
+                    _update_progress(
+                        f"⚠️ Formules — {display_label} (fallback texte)"
+                    )
 
         asyncio.run(_load_all_parallel())
 
