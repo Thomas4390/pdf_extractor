@@ -196,7 +196,7 @@ def render_agg_step_1_config() -> None:
 
             st.info(f"⏳ Chargement en arrière-plan... ({current}/{total})")
             if current_source:
-                st.caption(f"Source actuelle : {current_source}")
+                st.caption(current_source)
 
             if total > 0:
                 st.progress(current / total)

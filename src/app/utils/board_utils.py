@@ -109,6 +109,9 @@ def _load_aggregation_data_thread(
     """
     Background thread function to load aggregation source data.
 
+    Loads all source boards and advisor history concurrently using
+    asyncio.gather for significantly faster loading.
+
     Args:
         api_key: Monday.com API key
         selected_sources: Dict of {source_key: board_id}
@@ -116,57 +119,128 @@ def _load_aggregation_data_thread(
     """
     global _background_agg_data, _background_agg_loading, _background_agg_error, _background_agg_progress
 
+    import asyncio
+
     from src.clients.monday import MondayClient
     from src.utils.aggregator import METRICS_BOARD_CONFIG, SOURCE_BOARDS
 
     _background_agg_loading = True
     _background_agg_error = None
     _background_agg_data = {}
-    _background_agg_progress = {"current": 0, "total": len(selected_sources), "current_source": ""}
 
     if board_names is None:
         board_names = {}
 
+    total_sources = len(selected_sources)
+
+    _background_agg_progress = {
+        "current": 0,
+        "total": total_sources,
+        "current_source": "Démarrage...",
+    }
+
     try:
         client = MondayClient(api_key=api_key)
+        history_board_id = METRICS_BOARD_CONFIG.board_id
 
-        # Load advisor history for dynamic status calculation
-        _background_agg_progress = {
-            "current": 0,
-            "total": len(selected_sources),
-            "current_source": "Historique des conseillers...",
-        }
-        try:
-            from src.utils.advisor_status import load_advisor_history
-            data_board_id = METRICS_BOARD_CONFIG.board_id
-            load_advisor_history(client, data_board_id)
-        except Exception:
-            pass  # Status will default to "Active"
-
-        for idx, (source_key, board_id) in enumerate(selected_sources.items()):
-            config = SOURCE_BOARDS.get(source_key)
-            if not config:
-                continue
-
-            # Use actual board name if available, fall back to config display_name
+        async def _load_one_source(source_key: str, board_id: int, config) -> None:
+            """Load a single source board and update progress on completion."""
+            global _background_agg_progress
             display_label = board_names.get(board_id, config.display_name)
-
-            _background_agg_progress = {
-                "current": idx,
-                "total": len(selected_sources),
-                "current_source": display_label,
-            }
-
             try:
-                items = client.extract_board_data_sync(board_id)
+                items = await client.extract_board_data(board_id)
                 df = client.board_items_to_dataframe(items)
                 _background_agg_data[source_key] = df
             except Exception:
                 _background_agg_data[source_key] = pd.DataFrame()
 
+            # Update progress as each source completes
+            completed = sum(1 for k in selected_sources if k in _background_agg_data)
+            _background_agg_progress = {
+                "current": completed,
+                "total": total_sources,
+                "current_source": display_label,
+            }
+
+        async def _load_advisor_history() -> None:
+            """Load advisor history by fetching all groups in parallel."""
+            from src.utils.advisor_matcher import normalize_advisor_name_full
+            from src.utils.advisor_status import AdvisorStatusCalculator
+
+            try:
+                groups = await client.list_groups(history_board_id)
+
+                # Parse and sort groups chronologically
+                sorted_groups = []
+                for group in groups:
+                    title = group.get("title", "")
+                    year, month = AdvisorStatusCalculator._parse_month_year(title)
+                    if year > 0 and month > 0:
+                        sorted_groups.append((year, month, group))
+                sorted_groups.sort(key=lambda x: (x[0], x[1]))
+
+                if not sorted_groups:
+                    return
+
+                # Load all group items concurrently (skip formula enrichment — not needed)
+                group_tasks = [
+                    client.extract_board_data(
+                        history_board_id, group_id=g["id"], skip_formula_enrichment=True,
+                    )
+                    for _, _, g in sorted_groups
+                ]
+                group_results = await asyncio.gather(*group_tasks, return_exceptions=True)
+
+                # Process results in chronological order to find first appearances
+                first_appearances: dict[str, str] = {}
+                for (_, _, group), result in zip(sorted_groups, group_results):
+                    if isinstance(result, Exception):
+                        continue
+                    df = client.board_items_to_dataframe(result)
+                    if df.empty:
+                        continue
+
+                    if "Conseiller" in df.columns:
+                        advisors = df["Conseiller"].dropna().unique()
+                    elif "item_name" in df.columns:
+                        advisors = df["item_name"].dropna().unique()
+                    else:
+                        continue
+
+                    group_title = group["title"]
+                    for advisor in advisors:
+                        normalized = normalize_advisor_name_full(str(advisor))
+                        if normalized and normalized not in first_appearances:
+                            first_appearances[normalized] = group_title
+
+                AdvisorStatusCalculator._first_appearance_cache = first_appearances
+                AdvisorStatusCalculator._cache_loaded = True
+
+            except Exception:
+                pass  # Status will default to "Active"
+
+        async def _load_all_parallel() -> None:
+            """Load all source boards + advisor history concurrently."""
+            source_tasks = []
+            for source_key, board_id in selected_sources.items():
+                config = SOURCE_BOARDS.get(source_key)
+                if config:
+                    source_tasks.append(_load_one_source(source_key, board_id, config))
+
+            # Run everything in parallel: all source boards + advisor history
+            await asyncio.gather(*source_tasks, _load_advisor_history())
+
         _background_agg_progress = {
-            "current": len(selected_sources),
-            "total": len(selected_sources),
+            "current": 0,
+            "total": total_sources,
+            "current_source": "Chargement en parallèle...",
+        }
+
+        asyncio.run(_load_all_parallel())
+
+        _background_agg_progress = {
+            "current": total_sources,
+            "total": total_sources,
             "current_source": "Terminé",
         }
 
