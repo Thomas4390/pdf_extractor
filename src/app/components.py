@@ -173,21 +173,27 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
     # Calculate percentage difference
     pct_diff = ((recu - com_calculee) / com_calculee * 100).round(1)
 
+    # Calculate actual monetary difference (Reçu - Com Calculée)
+    ecart = (recu - com_calculee).round(2)
+
     # Create verification column
     verification = []
     for i in range(len(result_df)):
         r = recu.iloc[i]
         c = com_calculee.iloc[i]
-        diff = pct_diff.iloc[i]
+        e = ecart.iloc[i]
 
         if pd.isna(r) or pd.isna(c) or c == 0:
             verification.append('-')
-        elif r > upper_bound.iloc[i]:
-            verification.append(f'✅ +{diff}%')  # Bonus
-        elif r < lower_bound.iloc[i]:
-            verification.append(f'⚠️ {diff}%')  # Problem
         else:
-            verification.append('✓ OK')
+            # Format the difference with sign
+            ecart_str = f"+{e}" if e >= 0 else f"{e}"
+            if r > upper_bound.iloc[i]:
+                verification.append(f'✅ {ecart_str}$')
+            elif r < lower_bound.iloc[i]:
+                verification.append(f'⚠️ {ecart_str}$')
+            else:
+                verification.append(f'✓ {ecart_str}$')
 
     result_df[f'Vérification (±{tolerance_pct:.0f}%)'] = verification
 
