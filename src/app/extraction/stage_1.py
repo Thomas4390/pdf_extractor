@@ -159,17 +159,10 @@ def render_pdf_extraction_tab() -> None:
         else BoardType.HISTORICAL_PAYMENTS
     )
 
-    # Default board names per type
-    _DEFAULT_BOARD_FOR_TYPE = {
-        "Paiements Historiques": "Paiement Historique",
-        "Ventes et Production": "Ventes/Production",
-    }
-
-    # On board type change or first render, set the default board in session state
-    if new_board_type != st.session_state.selected_board_type or "pdf_board_select" not in st.session_state:
-        default_name = _DEFAULT_BOARD_FOR_TYPE.get(target_type)
-        if default_name:
-            st.session_state.pdf_board_select = default_name
+    # On board type change, clear board selection so the ID-based default takes effect
+    if new_board_type != st.session_state.selected_board_type:
+        if "pdf_board_select" in st.session_state:
+            del st.session_state["pdf_board_select"]
 
     st.session_state.selected_board_type = new_board_type
 
