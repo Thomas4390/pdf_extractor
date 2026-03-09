@@ -37,7 +37,7 @@ def _get_monday_config():
         from ..utils.config import get_settings
         cfg = get_settings()
         return cfg
-    except Exception:
+    except (ImportError, AttributeError):
         return None
 
 _cfg = _get_monday_config()
@@ -2391,6 +2391,35 @@ class MondayClient:
                         policy_numbers.add(text.strip())
                     break
         return policy_numbers
+
+    async def get_existing_rows(
+        self, board_id: int, columns: list[str]
+    ) -> list[dict[str, str]]:
+        """
+        Get all existing rows from a board as dicts of column values.
+
+        Fetches all items and extracts the text value for each requested column.
+        Used for full-row duplicate detection.
+
+        Args:
+            board_id: Board ID to read from
+            columns: List of column titles to extract
+
+        Returns:
+            List of dicts mapping column title → normalized text value
+        """
+        items = await self.extract_board_data(
+            board_id, skip_formula_enrichment=True
+        )
+        rows = []
+        for item in items:
+            col_values = {
+                cv.get("column", {}).get("title"): (cv.get("text") or "").strip()
+                for cv in item.get("column_values", [])
+            }
+            row = {col: col_values.get(col, "") for col in columns}
+            rows.append(row)
+        return rows
 
     # -------------------------------------------------------------------------
     # Folder operations

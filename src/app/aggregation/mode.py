@@ -753,14 +753,14 @@ def render_agg_step_3_execute() -> None:
 
     # Navigation - execute directly without confirmation
     # Disable execution if validation failed
-    can_execute = not st.session_state.agg_is_executing and st.session_state.get("agg_validation_passed", True)
+    can_execute = not st.session_state.agg_is_executing and st.session_state.get("agg_validation_passed", False)
     go_back, go_next = render_navigation_buttons(
         current_step=3,
         max_step=3,
         can_proceed=can_execute,
     )
 
-    if not st.session_state.get("agg_validation_passed", True):
+    if not st.session_state.get("agg_validation_passed", False):
         st.warning("La validation des données a échoué. Corrigez les erreurs avant d'exécuter l'upload.")
 
     if go_back:

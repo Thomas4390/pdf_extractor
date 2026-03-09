@@ -225,3 +225,4 @@ service_account.json
 .streamlit/secrets.toml
 secrets.yaml
 secrets.yml
+cloud_secrets.toml

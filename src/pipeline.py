@@ -36,6 +36,19 @@ from .utils.advisor_matcher import get_advisor_matcher
 from .utils.data_unifier import BoardType, DataUnifier
 from .utils.model_registry import get_model_config
 
+# Mapping from source type to board type (mirrors DataUnifier.SOURCE_TO_BOARD_TYPE)
+_SOURCE_TO_BOARD_TYPE: dict[str, BoardType] = {
+    "UV": BoardType.HISTORICAL_PAYMENTS,
+    "IDC": BoardType.SALES_PRODUCTION,
+    "ASSOMPTION": BoardType.HISTORICAL_PAYMENTS,
+    "IDC_STATEMENT": BoardType.HISTORICAL_PAYMENTS,
+}
+
+
+def _board_type_for_source(source_type: "SourceType") -> BoardType:
+    """Get the board type for a given source type."""
+    return _SOURCE_TO_BOARD_TYPE.get(source_type.value, BoardType.SALES_PRODUCTION)
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -193,17 +206,23 @@ class Pipeline:
     """
 
     # Patterns for auto-detecting source type from path/filename
-    SOURCE_PATTERNS: dict[str, SourceType] = {
-        "uv": SourceType.UV,
-        "idc_statement": SourceType.IDC_STATEMENT,
-        "idc-statement": SourceType.IDC_STATEMENT,
-        "statement": SourceType.IDC_STATEMENT,
-        "frais de suivi": SourceType.IDC_STATEMENT,
-        "idc": SourceType.IDC,
-        "proposition": SourceType.IDC,
-        "assomption": SourceType.ASSOMPTION,
-        "remuneration": SourceType.ASSOMPTION,
-    }
+    # Sorted by length (longest first) to ensure specific patterns match before generic ones
+    # e.g. "idc_statement" matches before "statement" or "idc"
+    SOURCE_PATTERNS: list[tuple[str, SourceType]] = sorted(
+        [
+            ("uv", SourceType.UV),
+            ("idc_statement", SourceType.IDC_STATEMENT),
+            ("idc-statement", SourceType.IDC_STATEMENT),
+            ("statement", SourceType.IDC_STATEMENT),
+            ("frais de suivi", SourceType.IDC_STATEMENT),
+            ("idc", SourceType.IDC),
+            ("proposition", SourceType.IDC),
+            ("assomption", SourceType.ASSOMPTION),
+            ("remuneration", SourceType.ASSOMPTION),
+        ],
+        key=lambda x: len(x[0]),
+        reverse=True,
+    )
 
     def __init__(
         self,
@@ -269,15 +288,15 @@ class Pipeline:
         """
         path_str = str(pdf_path).lower()
 
-        # Check patterns against full path (more specific patterns first)
-        for pattern, source in self.SOURCE_PATTERNS.items():
+        # Check patterns against full path (longest patterns first for specificity)
+        for pattern, source in self.SOURCE_PATTERNS:
             if pattern in path_str:
                 return source
 
         raise ValueError(
             f"Cannot detect source type for: {pdf_path}\n"
             f"Please specify source explicitly or ensure the path contains "
-            f"one of: {list(self.SOURCE_PATTERNS.keys())}"
+            f"one of: {[p for p, _ in self.SOURCE_PATTERNS]}"
         )
 
     # -------------------------------------------------------------------------
@@ -340,10 +359,12 @@ class Pipeline:
             try:
                 # Step 1: Extract using VLM
                 extractor = self._extractors[source_type]
-                report = await extractor.extract(pdf_path, force_refresh=force_refresh)
 
-                # Track cache status
-                was_cached = extractor.last_was_cached
+                # Check cache status BEFORE extraction to avoid race condition
+                # when multiple concurrent tasks share the same extractor instance
+                was_cached = (not force_refresh) and extractor.is_cached(pdf_path)
+
+                report = await extractor.extract(pdf_path, force_refresh=force_refresh)
 
                 # Step 2: Unify to DataFrame
                 df, board_type = self._unifier.unify(report, source_type.value)
@@ -416,7 +437,6 @@ class Pipeline:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).exception(
                     "Unexpected error processing %s", pdf_path
                 )
@@ -424,7 +444,7 @@ class Pipeline:
                 return PipelineResult(
                     pdf_path=str(pdf_path),
                     source=source_type,
-                    board_type=BoardType.SALES_PRODUCTION,
+                    board_type=_board_type_for_source(source_type),
                     dataframe=pd.DataFrame(),
                     success=False,
                     error=str(e),

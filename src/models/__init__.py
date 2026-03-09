@@ -1,6 +1,7 @@
 """Pydantic models for structured data extraction."""
 
 from .assomption import AssomptionBoni, AssomptionCommission, AssomptionReport
+from .coercion import FlexibleDecimal, FlexibleString, FlexibleStringWithDefault, coerce_decimal, coerce_string
 from .idc import IDCProposition, IDCReport
 from .idc_statement import (
     IDCStatementReport,
@@ -15,6 +16,9 @@ __all__ = [
     "AssomptionBoni",
     "AssomptionCommission",
     "AssomptionReport",
+    "FlexibleDecimal",
+    "FlexibleString",
+    "FlexibleStringWithDefault",
     "IDCProposition",
     "IDCReport",
     "IDCStatementReport",
@@ -24,4 +28,6 @@ __all__ = [
     "IDCTrailingFeeRaw",
     "UVActivity",
     "UVReport",
+    "coerce_decimal",
+    "coerce_string",
 ]

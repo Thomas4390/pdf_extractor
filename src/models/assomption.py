@@ -5,76 +5,12 @@ These models represent the structure of data extracted from Assomption Vie
 PDF reports, combining commission and bonus data into unified records.
 """
 
-from decimal import Decimal, InvalidOperation
-from typing import Annotated, Any, Optional
+from decimal import Decimal
+from typing import Any, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-# =============================================================================
-# FLEXIBLE TYPE COERCION
-# =============================================================================
-
-def coerce_decimal(v: Any) -> Optional[Decimal]:
-    """
-    Coerce various input types to Decimal, handling common VLM output formats.
-
-    Handles:
-    - None, empty string, "N/A", "n/a" → None
-    - Strings with currency symbols: "1 196,00 $" → 1196.00
-    - Strings with percentage: "55,000 %" → 55.0
-    - French decimal format: "1,5" → 1.5
-    - Already Decimal/float/int → Decimal
-    """
-    if v is None:
-        return None
-
-    if isinstance(v, Decimal):
-        return v
-
-    if isinstance(v, (int, float)):
-        return Decimal(str(v))
-
-    if isinstance(v, str):
-        v = v.strip()
-        # Handle empty/null-like strings
-        if not v or v.lower() in ("", "none", "null", "n/a", "nan", "-"):
-            return None
-
-        # Clean currency and percentage symbols
-        v = v.replace("$", "").replace("%", "").replace(" ", "")
-        # Handle French decimal format (comma as decimal separator)
-        v = v.replace(",", ".")
-        # Handle multiple dots (thousands separator)
-        parts = v.split(".")
-        if len(parts) > 2:
-            # Assume last part is decimal, rest is thousands
-            v = "".join(parts[:-1]) + "." + parts[-1]
-
-        try:
-            return Decimal(v) if v else None
-        except InvalidOperation:
-            return None
-
-    return None
-
-
-def coerce_string(v: Any) -> Optional[str]:
-    """
-    Coerce input to string, handling None and empty values gracefully.
-    """
-    if v is None:
-        return None
-
-    v_str = str(v).strip()
-    if not v_str or v_str.lower() in ("none", "null", "nan"):
-        return None
-
-    return v_str
-
-
-# Type aliases for flexible fields
-FlexibleDecimal = Annotated[Optional[Decimal], BeforeValidator(coerce_decimal)]
-FlexibleString = Annotated[Optional[str], BeforeValidator(coerce_string)]
+from .coercion import FlexibleDecimal, FlexibleString
 
 
 # =============================================================================

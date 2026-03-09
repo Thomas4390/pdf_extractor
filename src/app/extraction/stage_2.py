@@ -463,33 +463,55 @@ def _render_empty_data_error() -> None:
 
 
 def _check_duplicates_against_board(df: pd.DataFrame) -> pd.DataFrame:
-    """Check for duplicate policy numbers against the Monday.com board.
+    """Check for duplicates against the Monday.com board.
 
-    Only runs for SALES_PRODUCTION board type. Results are cached in session state.
+    For SALES_PRODUCTION: checks policy numbers only (duplicates excluded from upload).
+    For HISTORICAL_PAYMENTS: checks full row equality (duplicates are informational only).
+
+    Results are cached in session state.
 
     Args:
-        df: DataFrame with '# de Police' column
+        df: DataFrame to check
 
     Returns:
         DataFrame with '_is_duplicate' column added
     """
-    if st.session_state.selected_board_type != BoardType.SALES_PRODUCTION:
-        return df
-
-    if '# de Police' not in df.columns:
-        return df
-
+    board_type = st.session_state.selected_board_type
     board_id = st.session_state.selected_board_id
     if not board_id:
         return df
 
-    # Only fetch once per pipeline run
+    # Invalidate duplicate check if the board changed since last check
+    prev_check_board = st.session_state.get("duplicate_check_board_id")
+    if st.session_state.duplicate_check_done and prev_check_board != board_id:
+        st.session_state.duplicate_check_done = False
+        st.session_state._duplicate_state_written = False
+        st.session_state.existing_policy_numbers = None
+        st.session_state.existing_board_rows = None
+
+    # Store which board this check is for
+    st.session_state.duplicate_check_board_id = board_id
+
+    if board_type == BoardType.SALES_PRODUCTION:
+        return _check_duplicates_by_policy(df, int(board_id))
+
+    if board_type == BoardType.HISTORICAL_PAYMENTS:
+        return _check_duplicates_full_row(df, int(board_id))
+
+    return df
+
+
+def _check_duplicates_by_policy(df: pd.DataFrame, board_id: int) -> pd.DataFrame:
+    """Check duplicates by policy number for SALES_PRODUCTION boards."""
+    if '# de Police' not in df.columns:
+        return df
+
     if not st.session_state.duplicate_check_done:
         try:
             with st.spinner("Vérification des doublons sur Monday.com..."):
                 pipeline = get_pipeline()
                 existing = run_async(
-                    pipeline.monday.get_existing_policy_numbers(int(board_id))
+                    pipeline.monday.get_existing_policy_numbers(board_id)
                 )
                 st.session_state.existing_policy_numbers = existing
                 st.session_state.duplicate_check_done = True
@@ -500,14 +522,58 @@ def _check_duplicates_against_board(df: pd.DataFrame) -> pd.DataFrame:
 
     existing = st.session_state.existing_policy_numbers or set()
 
-    # Mark duplicates
     df = df.copy()
     df['_is_duplicate'] = df['# de Police'].apply(
         lambda x: str(x).strip() in existing if pd.notna(x) else False
     )
-    dup_count = df['_is_duplicate'].sum()
-    st.session_state.duplicate_count = int(dup_count)
-    st.session_state.combined_data = df
+    dup_count = int(df['_is_duplicate'].sum())
+
+    # Only update session state when the check is first performed, not on every re-render
+    if not st.session_state.get("_duplicate_state_written"):
+        st.session_state.duplicate_count = dup_count
+        st.session_state.combined_data = df
+        st.session_state._duplicate_state_written = True
+
+    return df
+
+
+def _check_duplicates_full_row(df: pd.DataFrame, board_id: int) -> pd.DataFrame:
+    """Check duplicates by full row comparison for HISTORICAL_PAYMENTS boards."""
+    if not st.session_state.duplicate_check_done:
+        try:
+            with st.spinner("Vérification des doublons sur Monday.com..."):
+                compare_cols = [c for c in df.columns if not c.startswith('_')]
+                pipeline = get_pipeline()
+                existing_rows = run_async(
+                    pipeline.monday.get_existing_rows(board_id, compare_cols)
+                )
+                # Build a set of tuples for fast lookup
+                existing_tuples = set()
+                for row in existing_rows:
+                    existing_tuples.add(
+                        tuple(row.get(c, "") for c in compare_cols)
+                    )
+                st.session_state.existing_board_rows = existing_tuples
+                st.session_state.duplicate_check_done = True
+        except Exception as e:
+            st.warning(f"Impossible de vérifier les doublons: {e}")
+            st.session_state.duplicate_check_done = True
+            st.session_state.existing_board_rows = set()
+
+    existing_tuples = st.session_state.existing_board_rows or set()
+
+    df = df.copy()
+    compare_cols = [c for c in df.columns if not c.startswith('_')]
+    df['_is_duplicate'] = df[compare_cols].fillna('').astype(str).apply(
+        lambda row: tuple(v.strip() for v in row) in existing_tuples, axis=1
+    )
+    dup_count = int(df['_is_duplicate'].sum())
+
+    # Only update session state when the check is first performed, not on every re-render
+    if not st.session_state.get("_duplicate_state_written"):
+        st.session_state.duplicate_count = dup_count
+        st.session_state.combined_data = df
+        st.session_state._duplicate_state_written = True
 
     return df
 
@@ -536,10 +602,16 @@ def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verificati
 
     # Duplicate warning
     if dup_count > 0:
-        st.warning(
-            f"⚠️ **{dup_count} ligne(s)** ont un # de Police déjà présent sur le board Monday.com. "
-            "Ces lignes seront exclues lors de l'upload."
-        )
+        if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION:
+            st.warning(
+                f"⚠️ **{dup_count} ligne(s)** ont un # de Police déjà présent sur le board Monday.com. "
+                "Ces lignes seront exclues lors de l'upload."
+            )
+        else:
+            st.info(
+                f"ℹ️ **{dup_count} ligne(s)** sont déjà présentes sur le board Monday.com "
+                "(comparaison ligne complète). Ces lignes seront tout de même uploadées."
+            )
 
     st.markdown("---")
 

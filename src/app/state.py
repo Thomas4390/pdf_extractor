@@ -108,6 +108,8 @@ def init_session_state() -> None:
         "extraction_usage": None,  # UsageStats for cost/model tracking
         "selected_model": None,  # Custom model override for extraction
         "file_group_overrides": {},  # Per-file group overrides {filename: group_name}
+        "extraction_error": None,  # Error message from failed extraction
+        "extraction_traceback": None,  # Traceback from failed extraction
 
         # Processing state
         "is_processing": False,
@@ -125,8 +127,11 @@ def init_session_state() -> None:
 
         # Duplicate detection
         "existing_policy_numbers": None,
+        "existing_board_rows": None,
         "duplicate_check_done": False,
+        "duplicate_check_board_id": None,
         "duplicate_count": 0,
+        "_duplicate_state_written": False,
 
         # Options
         "selected_source": None,
@@ -168,7 +173,7 @@ def init_session_state() -> None:
         "agg_flexible_period": None,  # FlexiblePeriod object for flexible date selection
         "agg_metrics_loaded": False,  # True when metrics have been imported
         "agg_metrics_group": "",  # Group name from which metrics were loaded
-        "agg_validation_passed": True,  # Validation status for pre-upload check
+        "agg_validation_passed": False,  # Validation status for pre-upload check (requires explicit validation)
 
         # Advisor provisioning
         "last_provisioning_result": None,
@@ -180,9 +185,6 @@ def init_session_state() -> None:
         "reconciliation_board_id": None,
         "reconciliation_board_name": None,
         "reconciliation_enabled": False,
-
-        # Next-month group provisioning (per-session flag)
-        "_next_month_groups_checked": False,
     }
 
     for key, default in defaults.items():
@@ -210,7 +212,8 @@ def reset_pipeline() -> None:
         'upload_result', 'is_uploading', 'selected_source', 'data_modified',
         '_current_board_name', 'selected_model', 'file_group_overrides',
         'extraction_error', 'extraction_traceback',
-        'existing_policy_numbers', 'duplicate_check_done', 'duplicate_count',
+        'existing_policy_numbers', 'existing_board_rows', 'duplicate_check_done', 'duplicate_check_board_id',
+        'duplicate_count', '_duplicate_state_written',
         'reconciliation_result', 'reconciliation_sales_df',
         'reconciliation_sales_loaded', 'reconciliation_board_id', 'reconciliation_board_name',
         'reconciliation_enabled',
@@ -222,7 +225,7 @@ def reset_pipeline() -> None:
             st.session_state[key] = []
         elif key in ['extraction_results', 'file_group_overrides']:
             st.session_state[key] = {}
-        elif key in ['is_processing', 'is_uploading', 'data_modified', 'duplicate_check_done', 'reconciliation_sales_loaded', 'reconciliation_enabled']:
+        elif key in ['is_processing', 'is_uploading', 'data_modified', 'duplicate_check_done', '_duplicate_state_written', 'reconciliation_sales_loaded', 'reconciliation_enabled']:
             st.session_state[key] = False
         elif key == 'duplicate_count':
             st.session_state[key] = 0
@@ -256,4 +259,4 @@ def reset_aggregation_state() -> None:
     st.session_state.agg_flexible_period = None
     st.session_state.agg_metrics_loaded = False
     st.session_state.agg_metrics_group = ""
-    st.session_state.agg_validation_passed = True
+    st.session_state.agg_validation_passed = False
