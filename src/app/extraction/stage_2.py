@@ -1370,44 +1370,59 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     # --- Detail sections ---
     if result.not_found > 0:
         with st.expander(f"Polices non trouvées ({result.not_found})", expanded=False):
+            nf_rows = []
             for m in result.matches:
                 if m.status == ReconciliationStatus.NOT_FOUND:
-                    st.markdown(f"- `{m.police_number}` — {m.compagnie}")
+                    nf_rows.append({
+                        "# de Police": m.police_number,
+                        "Compagnie": m.compagnie,
+                        "Reçu": m.recu_amount,
+                        "Lignes": m.line_count,
+                    })
+            st.dataframe(pd.DataFrame(nf_rows), width="stretch", hide_index=True)
 
     if result.flagged > 0:
         with st.expander(f"Écarts ({result.flagged})", expanded=False):
+            flag_rows = []
             for m in result.matches:
                 if m.status == ReconciliationStatus.FLAGGED:
-                    ecart_str = f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "N/A"
-                    label = m.classification.label if m.classification else "?"
-                    lines = f" ({m.line_count} lignes)" if m.line_count > 1 else ""
-                    st.markdown(
-                        f"- `{m.police_number}` — {label}{lines}: "
-                        f"Reçu={m.recu_amount}, Réf={m.reference_amount}, "
-                        f"Écart={ecart_str} (seuil {m.threshold_pct:.0f}%)"
-                    )
+                    ecart_abs = round(m.recu_amount - m.reference_amount, 2) if m.recu_amount is not None and m.reference_amount is not None else None
+                    flag_rows.append({
+                        "# de Police": m.police_number,
+                        "Type": m.classification.label if m.classification else "?",
+                        "Lignes": m.line_count,
+                        "Reçu": m.recu_amount,
+                        "Référence": m.reference_amount,
+                        "Écart ($)": ecart_abs,
+                        "Écart (%)": f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "—",
+                        "Seuil": f"{m.threshold_pct:.0f}%" if m.threshold_pct is not None else "—",
+                    })
+            st.dataframe(pd.DataFrame(flag_rows), width="stretch", hide_index=True)
 
     # Overwrite warnings
     if result.passed > 0:
         sales_updates = result.get_sales_updates()
-        overwrite_warnings = []
+        overwrite_rows = []
         for item_id, fields in sales_updates.items():
-            for field_name, _ in fields.items():
-                item_rows = sales_df[sales_df["item_id"].astype(str) == str(item_id)]
+            item_rows = sales_df[sales_df["item_id"].astype(str) == str(item_id)]
+            # Get police number for display
+            police = ""
+            if not item_rows.empty and "# de Police" in item_rows.columns:
+                police = str(item_rows.iloc[0].get("# de Police", ""))
+            for field_name, new_value in fields.items():
                 if not item_rows.empty and field_name in item_rows.columns:
                     existing = item_rows.iloc[0].get(field_name)
                     if existing is not None and str(existing).strip() not in ("", "0", "0.0", "None"):
-                        overwrite_warnings.append(
-                            f"`{field_name}` de l'item {item_id} "
-                            f"contient déjà `{existing}`"
-                        )
-        if overwrite_warnings:
-            with st.expander(f"Valeurs existantes ({len(overwrite_warnings)})", expanded=True):
-                st.warning(
-                    "Les champs suivants seront écrasés lors du writeback :"
-                )
-                for w in overwrite_warnings:
-                    st.markdown(f"- {w}")
+                        overwrite_rows.append({
+                            "# de Police": police,
+                            "Champ": field_name,
+                            "Valeur actuelle": existing,
+                            "Nouvelle valeur": new_value,
+                        })
+        if overwrite_rows:
+            with st.expander(f"Valeurs existantes ({len(overwrite_rows)})", expanded=True):
+                st.warning("Les champs suivants seront écrasés lors du writeback :")
+                st.dataframe(pd.DataFrame(overwrite_rows), width="stretch", hide_index=True)
 
     # Bottom actions
     st.markdown("---")
