@@ -18,6 +18,7 @@ from src.app.components import (
 from src.app.state import get_pipeline, reset_pipeline
 from src.app.utils.async_helpers import run_async
 from src.app.utils.navigation import render_breadcrumb, render_stepper
+from src.utils.data_unifier import BoardType
 
 
 def _has_reconciliation() -> bool:
@@ -44,10 +45,12 @@ def render_stage_3() -> None:
     if st.session_state.data_modified:
         st.warning("Upload de données modifiées")
 
-    # Count duplicates that will be excluded
+    # Count duplicates
     dup_count = st.session_state.get('duplicate_count', 0)
     has_duplicates = '_is_duplicate' in df.columns and dup_count > 0
-    upload_count = len(df) - dup_count if has_duplicates else len(df)
+    is_sales = st.session_state.selected_board_type == BoardType.SALES_PRODUCTION
+    # Only subtract duplicates for SALES_PRODUCTION (they get excluded)
+    upload_count = len(df) - dup_count if has_duplicates and is_sales else len(df)
 
     # Summary Dashboard (similar to Stage 2)
     unique_groups = df['_target_group'].unique() if '_target_group' in df.columns else []
@@ -61,7 +64,10 @@ def render_stage_3() -> None:
     )
 
     if has_duplicates:
-        st.warning(f"⚠️ **{dup_count} doublon(s)** seront exclus de l'upload (# de Police déjà sur le board).")
+        if is_sales:
+            st.warning(f"⚠️ **{dup_count} doublon(s)** seront exclus de l'upload (# de Police déjà sur le board).")
+        else:
+            st.info(f"ℹ️ **{dup_count} doublon(s)** déjà présents sur le board (lignes identiques). Ils seront tout de même uploadés.")
 
     # Target group display
     if '_target_group' in df.columns and len(unique_groups) > 0:
@@ -179,8 +185,8 @@ def execute_upload(df: pd.DataFrame) -> None:
     """Execute the upload to Monday.com."""
     st.session_state.upload_result = None
 
-    # Filter out duplicates before upload
-    if '_is_duplicate' in df.columns:
+    # Filter out duplicates before upload (only for SALES_PRODUCTION)
+    if '_is_duplicate' in df.columns and st.session_state.selected_board_type == BoardType.SALES_PRODUCTION:
         df = df[~df['_is_duplicate']].copy()
 
     pipeline = get_pipeline()

@@ -211,9 +211,12 @@ def render_pdf_extraction_tab() -> None:
             board_options = {b['name']: b['id'] for b in sorted_boards}
             board_names = list(board_options.keys())
 
-            # Pre-select the environment's paiement_historique board
+            # Pre-select the environment's board based on selected board type
             from src.utils.config import settings
-            env_board_id = settings.monday_board_paiement_historique
+            if st.session_state.selected_board_type == BoardType.SALES_PRODUCTION:
+                env_board_id = settings.monday_board_vente_production
+            else:
+                env_board_id = settings.monday_board_paiement_historique
             default_idx = 0
             for idx, name in enumerate(board_names):
                 if board_options[name] == env_board_id:
