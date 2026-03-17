@@ -21,6 +21,7 @@ from src.app.aggregation.execution import (
 )
 from src.app.aggregation.exporters import render_export_buttons
 from src.app.aggregation.validators import render_validation_report, validate_dataframe
+from src.app.components import get_financial_column_config
 from src.app.aggregation_ui import (
     render_combined_preview,
     render_editable_preview,
@@ -731,7 +732,7 @@ def render_agg_step_3_execute() -> None:
     # Data preview before upload
     if combined_df is not None and not combined_df.empty:
         with st.expander("📋 Aperçu des données à envoyer", expanded=True):
-            st.dataframe(combined_df, width="stretch", height=300)
+            st.dataframe(combined_df, width="stretch", height=400, column_config=get_financial_column_config(combined_df))
             st.caption(f"📊 {len(combined_df)} lignes × {len(combined_df.columns)} colonnes")
 
         # Data validation section

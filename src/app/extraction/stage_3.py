@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from src.app.components import (
+    get_financial_column_config,
     render_success_box,
     render_upload_dashboard,
 )
@@ -22,9 +23,9 @@ from src.utils.data_unifier import BoardType
 
 
 def _has_reconciliation() -> bool:
-    """Check if reconciliation is active with passed results."""
+    """Check if reconciliation is active with passed results (including CB verified)."""
     recon = st.session_state.get("reconciliation_result")
-    return recon is not None and recon.passed > 0
+    return recon is not None and (recon.passed > 0 or recon.cb_verified > 0)
 
 
 def render_stage_3() -> None:
@@ -111,6 +112,12 @@ def render_stage_3() -> None:
             st.markdown(f"- {recon_result.passed} correspondances vérifiées")
             if recon_result.flagged > 0:
                 st.markdown(f"- {recon_result.flagged} écarts (non écrits)")
+            if recon_result.total_chargebacks > 0:
+                st.markdown(
+                    f"- {recon_result.total_chargebacks} charge back(s) — "
+                    f"{recon_result.cb_verified} vérifiés, {recon_result.cb_flagged} écarts"
+                )
+                st.markdown("- Montants Reçu = **nets** (Payé − Charge back)")
 
     # Data preview before upload
     if has_recon:
@@ -123,20 +130,20 @@ def render_stage_3() -> None:
 
             with tab_hist:
                 display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
-                st.dataframe(display_df, width="stretch", height=300)
+                st.dataframe(display_df, width="stretch", height=400, column_config=get_financial_column_config(display_df))
                 st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
 
             with tab_sales:
                 sales_preview = recon_result.to_display_dataframe()
                 if not sales_preview.empty:
-                    st.dataframe(sales_preview, width="stretch", height=300)
+                    st.dataframe(sales_preview, width="stretch", height=400, column_config=get_financial_column_config(sales_preview))
                     st.caption(f"📊 {len(sales_preview)} lignes × {len(sales_preview.columns)} colonnes")
                 else:
                     st.info("Aucune mise à jour pour ce board.")
     else:
         with st.expander("📋 Aperçu des données à envoyer", expanded=True):
             display_df = df.drop(columns=[c for c in df.columns if c.startswith('_')], errors='ignore')
-            st.dataframe(display_df, width="stretch", height=300)
+            st.dataframe(display_df, width="stretch", height=400, column_config=get_financial_column_config(display_df))
             st.caption(f"📊 {len(display_df)} lignes × {len(display_df.columns)} colonnes")
 
     st.markdown("---")
@@ -291,7 +298,7 @@ def execute_upload(df: pd.DataFrame) -> None:
 
         # --- Board 2: Reconciliation writeback ---
         recon_result = st.session_state.get("reconciliation_result")
-        if recon_result and (recon_result.passed > 0):
+        if recon_result and (recon_result.passed > 0 or recon_result.cb_verified > 0):
             _execute_reconciliation_writeback(
                 pipeline, board_id, recon_result, all_index_to_item_id, df,
                 progress_bar, status_text,

@@ -9,6 +9,8 @@ Provides Streamlit components for:
 import pandas as pd
 import streamlit as st
 
+from src.app.components import get_financial_column_config
+
 from ..utils.aggregator import SourceBoardConfig
 
 # =============================================================================
@@ -48,17 +50,16 @@ def render_source_data_preview(
             # Total
             value_col = config.aggregate_column
             total = aggregated_df[value_col].sum() if value_col in aggregated_df.columns else 0
-            st.metric(f"Total {value_col}", f"{total:,.2f}")
+            st.metric(f"Total {value_col}", f"${total:,.2f}")
 
         # Preview table
         if not aggregated_df.empty:
-            # Format numbers for display
-            display_df = aggregated_df.copy()
-            if value_col in display_df.columns:
-                display_df[value_col] = display_df[value_col].apply(
-                    lambda x: f"{x:,.2f}" if pd.notna(x) else "-"
-                )
-            st.dataframe(display_df, width="stretch", hide_index=True)
+            st.dataframe(
+                aggregated_df,
+                width="stretch",
+                hide_index=True,
+                column_config=get_financial_column_config(aggregated_df),
+            )
         else:
             st.warning("Aucune donnée après filtrage.")
 
@@ -105,9 +106,9 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
             if isinstance(total, (int, float)):
                 # Format with $ for monetary values
                 if col in ["AE CA", "Collected", "Profit", "Total Dépenses"]:
-                    st.metric(col, f"${total:,.0f}")
+                    st.metric(col, f"${total:,.2f}")
                 else:
-                    st.metric(col, f"{total:,.0f}")
+                    st.metric(col, f"{total:,.2f}")
 
     # Profitability summary (if available)
     if "Profitable" in combined_df.columns:
@@ -140,16 +141,13 @@ def render_combined_preview(combined_df: pd.DataFrame) -> None:
 
     # Display data table
     st.markdown("##### 📋 Données détaillées")
-    display_df = combined_df.copy()
-
-    # Format numeric columns for display, skip categorical columns
-    for col in display_df.columns:
-        if col not in categorical_cols:
-            display_df[col] = display_df[col].apply(
-                lambda x: f"{x:,.2f}" if pd.notna(x) and isinstance(x, (int, float)) else x
-            )
-
-    st.dataframe(display_df, width="stretch", hide_index=True, height=400)
+    st.dataframe(
+        combined_df,
+        width="stretch",
+        hide_index=True,
+        height=400,
+        column_config=get_financial_column_config(combined_df),
+    )
 
 
 def render_editable_preview(
@@ -285,7 +283,7 @@ def render_editable_preview(
     for idx, col in enumerate(numeric_cols):
         with total_cols[idx + 1]:
             total = edited_df[col].sum()
-            st.metric(f"Total {col}", f"{total:,.2f}")
+            st.metric(f"Total {col}", f"${total:,.2f}")
 
     return edited_df
 

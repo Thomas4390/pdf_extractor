@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from src.app.components import (
+    get_financial_column_config,
     get_verification_stats,
     render_metrics_dashboard,
     reorder_columns_for_display,
@@ -617,9 +618,11 @@ def _render_data_tab(df: pd.DataFrame, df_verified: pd.DataFrame, has_verificati
 
     # Display the dataframe
     if has_verification_cols:
-        st.dataframe(reorder_columns_for_display(df_verified), width="stretch", height=400)
+        _display = reorder_columns_for_display(df_verified)
+        st.dataframe(_display, width="stretch", height=400, column_config=get_financial_column_config(_display))
     else:
-        st.dataframe(reorder_columns_for_display(df), width="stretch", height=400)
+        _display = reorder_columns_for_display(df)
+        st.dataframe(_display, width="stretch", height=400, column_config=get_financial_column_config(_display))
 
     # Extraction details
     results = st.session_state.extraction_results
@@ -698,7 +701,8 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
                 st.dataframe(
                     ecart_df[display_cols],
                     width="stretch",
-                    hide_index=True
+                    hide_index=True,
+                    column_config=get_financial_column_config(ecart_df[display_cols]),
                 )
 
             # Show table with bonus (positive differences)
@@ -712,7 +716,8 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
                 st.dataframe(
                     bonus_df[display_cols],
                     width="stretch",
-                    hide_index=True
+                    hide_index=True,
+                    column_config=get_financial_column_config(bonus_df[display_cols]),
                 )
 
             # Show all data with verification
@@ -720,7 +725,8 @@ def _render_verification_tab(df: pd.DataFrame, has_verification_cols: bool) -> N
                 st.dataframe(
                     df_verified,
                     width="stretch",
-                    hide_index=True
+                    hide_index=True,
+                    column_config=get_financial_column_config(df_verified),
                 )
     else:
         st.info("La vérification n'est pas disponible pour ce type de données (colonnes 'Reçu' et 'PA' requises).")
@@ -1322,16 +1328,21 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
     st.session_state.reconciliation_result = result
 
     if result.total_hist_lines == 0:
-        st.warning("Aucune ligne avec Statut « Payé » dans les données historiques.")
+        st.warning("Aucune ligne avec Statut « Payé » ou « Charge back » dans les données historiques.")
         return
 
     # --- Header metrics ---
-    m_cols = st.columns(5)
-    m_cols[0].metric("Lignes Payé", result.total_hist_lines)
+    has_cb = result.total_chargebacks > 0
+    n_cols = 7 if has_cb else 5
+    m_cols = st.columns(n_cols)
+    m_cols[0].metric("Lignes actives", result.total_hist_lines)
     m_cols[1].metric("Groupes", result.total_groups)
     m_cols[2].metric("Vérifiées", result.passed)
     m_cols[3].metric("Écarts", result.flagged)
     m_cols[4].metric("Non trouvées", result.not_found)
+    if has_cb:
+        m_cols[5].metric("CB Vérifiés", result.cb_verified)
+        m_cols[6].metric("CB Écarts", result.cb_flagged)
 
     # --- Status highlight helper ---
     def _highlight_status(row, status_col="Statut Rapp."):
@@ -1342,6 +1353,10 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
             return ["background-color: rgba(255, 152, 0, 0.1)"] * len(row)
         elif status == ReconciliationStatus.NOT_FOUND.value:
             return ["background-color: rgba(244, 67, 54, 0.1)"] * len(row)
+        elif status == ReconciliationStatus.CB_VERIFIED.value:
+            return ["background-color: rgba(0, 150, 200, 0.1)"] * len(row)
+        elif status == ReconciliationStatus.CB_FLAGGED.value:
+            return ["background-color: rgba(200, 0, 100, 0.1)"] * len(row)
         return [""] * len(row)
 
     # --- Sales / Production table ---
@@ -1398,6 +1413,23 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
                         "Seuil": f"{m.threshold_pct:.0f}%" if m.threshold_pct is not None else "—",
                     })
             st.dataframe(pd.DataFrame(flag_rows), width="stretch", hide_index=True)
+
+    # --- Chargeback detail section ---
+    cb_matches = [m for m in result.matches if m.is_chargeback]
+    if cb_matches:
+        with st.expander(f"Charge backs ({result.total_chargebacks} lignes)", expanded=False):
+            cb_rows = []
+            for m in cb_matches:
+                cb_rows.append({
+                    "# de Police": m.police_number,
+                    "Type": m.classification.label if m.classification else "?",
+                    "Montant CB": m.recu_amount,
+                    "Référence": m.reference_amount,
+                    "Écart (%)": f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "—",
+                    "Seuil": f"{m.threshold_pct:.0f}%" if m.threshold_pct is not None else "—",
+                    "Statut": m.status.value,
+                })
+            st.dataframe(pd.DataFrame(cb_rows), width="stretch", hide_index=True)
 
     # Overwrite warnings
     if result.passed > 0:

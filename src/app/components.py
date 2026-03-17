@@ -95,6 +95,24 @@ def render_upload_dashboard(
     """, unsafe_allow_html=True)
 
 
+def get_financial_column_config(df: pd.DataFrame) -> dict:
+    """Generate column_config for financial columns in a DataFrame."""
+    FINANCIAL_COLS = {
+        'PA', 'Com', 'Com Calculée', 'Boni', 'Sur-Com', 'Reçu',
+        'Reçu 1', 'Reçu 2', 'Reçu 3', 'Total', 'Total Reçu',
+        'AE CA', 'Collected', 'Profit', 'Total Dépenses', 'Coût',
+        'Dépenses par Conseiller', 'Bonus', 'Récompenses',
+        'PA Vendues', 'Écart ($)',
+    }
+    config = {}
+    for col in df.columns:
+        if col in FINANCIAL_COLS:
+            config[col] = st.column_config.NumberColumn(
+                col, format="$ %.2f"
+            )
+    return config
+
+
 def render_success_box(title: str, message: str) -> None:
     """Render a success message box."""
     st.markdown(f"""
@@ -173,27 +191,23 @@ def verify_recu_vs_com(df: pd.DataFrame, tolerance_pct: float = 10.0) -> pd.Data
     # Calculate percentage difference
     pct_diff = ((recu - com_calculee) / com_calculee * 100).round(1)
 
-    # Calculate actual monetary difference (Reçu - Com Calculée)
-    ecart = (recu - com_calculee).round(2)
-
     # Create verification column
     verification = []
     for i in range(len(result_df)):
         r = recu.iloc[i]
         c = com_calculee.iloc[i]
-        e = ecart.iloc[i]
 
         if pd.isna(r) or pd.isna(c) or c == 0:
             verification.append('-')
         else:
-            # Format the difference with sign
-            ecart_str = f"+{e}" if e >= 0 else f"{e}"
+            diff = pct_diff.iloc[i]
+            diff_str = f"+{diff}" if diff >= 0 else f"{diff}"
             if r > upper_bound.iloc[i]:
-                verification.append(f'✅ {ecart_str}$')
+                verification.append(f'✅ {diff_str}%')
             elif r < lower_bound.iloc[i]:
-                verification.append(f'⚠️ {ecart_str}$')
+                verification.append(f'⚠️ {diff_str}%')
             else:
-                verification.append(f'✓ {ecart_str}$')
+                verification.append(f'✓ {diff_str}%')
 
     result_df[f'Vérification (±{tolerance_pct:.0f}%)'] = verification
 

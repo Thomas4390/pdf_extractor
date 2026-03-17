@@ -32,6 +32,8 @@ class ReconciliationStatus(StrEnum):
     FLAGGED = "Écart"
     NOT_FOUND = "Non trouvé"
     UNCLASSIFIED = "Non classifié"
+    CB_VERIFIED = "CB Vérifié"
+    CB_FLAGGED = "CB Écart"
 
 
 @dataclass
@@ -59,6 +61,7 @@ class ReconciliationMatch:
     conseiller: Optional[str] = None         # Advisor from sales board
     pa_amount: Optional[float] = None        # PA from sales board
     line_count: int = 1                      # Number of lines aggregated
+    is_chargeback: bool = False              # True if this group contains Charge back lines
 
 
 @dataclass
@@ -93,16 +96,31 @@ class ReconciliationResult:
     def unclassified(self) -> int:
         return sum(1 for m in self.matches if m.status == ReconciliationStatus.UNCLASSIFIED)
 
+    @property
+    def cb_verified(self) -> int:
+        return sum(1 for m in self.matches if m.status == ReconciliationStatus.CB_VERIFIED)
+
+    @property
+    def cb_flagged(self) -> int:
+        return sum(1 for m in self.matches if m.status == ReconciliationStatus.CB_FLAGGED)
+
+    @property
+    def total_chargebacks(self) -> int:
+        """Total number of chargeback lines."""
+        return sum(m.line_count for m in self.matches if m.is_chargeback)
+
     # --- Helper methods ---
 
     def get_sales_updates(self) -> dict[str, dict[str, float]]:
-        """Get updates grouped by sales item_id.
+        """Get updates grouped by sales item_id with net amounts (Payé - CB).
 
         Returns:
             Dict mapping item_id to {recu_field: amount}, e.g.:
-            {"12345": {"Reçu 1": 100.0, "Reçu 2": 50.0}}
+            {"12345": {"Reçu 1": 30.0}}  (net of Payé $510 - CB $480)
         """
         updates: dict[str, dict[str, float]] = {}
+
+        # 1) Collect PASSED amounts
         for m in self.matches:
             if (
                 m.status == ReconciliationStatus.PASSED
@@ -110,17 +128,23 @@ class ReconciliationResult:
                 and m.classification
                 and m.recu_amount is not None
             ):
-                if m.sales_item_id not in updates:
-                    updates[m.sales_item_id] = {}
-                if m.classification.recu_field in updates[m.sales_item_id]:
-                    logger.warning(
-                        "get_sales_updates: collision on item_id=%s field=%s — "
-                        "overwriting %.2f with %.2f",
-                        m.sales_item_id, m.classification.recu_field,
-                        updates[m.sales_item_id][m.classification.recu_field],
-                        m.recu_amount,
-                    )
-                updates[m.sales_item_id][m.classification.recu_field] = m.recu_amount
+                updates.setdefault(m.sales_item_id, {})[m.classification.recu_field] = m.recu_amount
+
+        # 2) Subtract CB_VERIFIED amounts (recu_amount is already negative)
+        for m in self.matches:
+            if (
+                m.status == ReconciliationStatus.CB_VERIFIED
+                and m.sales_item_id
+                and m.classification
+                and m.recu_amount is not None
+            ):
+                field = m.classification.recu_field
+                if m.sales_item_id in updates and field in updates[m.sales_item_id]:
+                    updates[m.sales_item_id][field] += m.recu_amount  # negative → subtraction
+                else:
+                    # CB without matching Payé in this batch — write negative as-is
+                    updates.setdefault(m.sales_item_id, {})[field] = m.recu_amount
+
         return updates
 
     def get_passed_hist_updates(self) -> list[tuple[int, Optional[str]]]:
@@ -142,18 +166,18 @@ class ReconciliationResult:
     def get_all_hist_updates(self) -> list[tuple[int, Optional[str], bool]]:
         """Get historical indices and advisors for all matched items.
 
-        Returns all matches (PASSED, FLAGGED, UNCLASSIFIED) — not NOT_FOUND —
-        so the writeback can write Conseiller for all found items and
-        Verifié/Pas Verifié labels.
+        Returns all matches (PASSED, FLAGGED, UNCLASSIFIED, CB_VERIFIED) —
+        not NOT_FOUND or CB_FLAGGED — so the writeback can write Conseiller
+        for all found items and Verifié/Pas Verifié labels.
 
         Returns:
             List of (hist_index, conseiller, is_passed) tuples.
         """
         results = []
         for m in self.matches:
-            if m.status == ReconciliationStatus.NOT_FOUND:
+            if m.status in (ReconciliationStatus.NOT_FOUND, ReconciliationStatus.CB_FLAGGED):
                 continue
-            is_passed = m.status == ReconciliationStatus.PASSED
+            is_passed = m.status in (ReconciliationStatus.PASSED, ReconciliationStatus.CB_VERIFIED)
             for idx in m.hist_indices:
                 results.append((idx, m.conseiller, is_passed))
         return results
@@ -174,15 +198,18 @@ class ReconciliationResult:
                 "Écart": f"{m.ecart_pct:.1f}%" if m.ecart_pct is not None else "—",
                 "Statut": m.status.value,
                 "Conseiller": m.conseiller or "—",
+                "CB": "CB" if m.is_chargeback else "",
             })
         return pd.DataFrame(rows)
 
     # Status priority: worst first (higher index = worse)
     _STATUS_PRIORITY = {
         ReconciliationStatus.PASSED: 0,
-        ReconciliationStatus.UNCLASSIFIED: 1,
-        ReconciliationStatus.NOT_FOUND: 2,
-        ReconciliationStatus.FLAGGED: 3,
+        ReconciliationStatus.CB_VERIFIED: 1,
+        ReconciliationStatus.UNCLASSIFIED: 2,
+        ReconciliationStatus.NOT_FOUND: 3,
+        ReconciliationStatus.CB_FLAGGED: 4,
+        ReconciliationStatus.FLAGGED: 5,
     }
 
     def to_sales_view_dataframe(self, sales_df: pd.DataFrame) -> pd.DataFrame:
@@ -242,10 +269,12 @@ class ReconciliationResult:
                 if pa is None:
                     pa = Reconciler._to_float(sales_row.get("PA"))
 
-            # Find match for each Reçu type
-            recu_1 = recu_2 = recu_3 = None
+            # Find match for each Reçu type (Payé and CB separately)
+            recu_paye = {"Reçu 1": None, "Reçu 2": None, "Reçu 3": None}
+            recu_cb = {"Reçu 1": None, "Reçu 2": None, "Reçu 3": None}
             ecart_1 = ecart_2 = ecart_3 = None
             worst_status = ReconciliationStatus.PASSED
+            has_cb = False
 
             for m in matches:
                 if self._STATUS_PRIORITY.get(m.status, 0) > self._STATUS_PRIORITY.get(worst_status, 0):
@@ -254,20 +283,33 @@ class ReconciliationResult:
                 if m.classification is None:
                     continue
 
-                if m.classification.recu_field == "Reçu 1":
-                    recu_1 = m.recu_amount
-                    ecart_1 = m.ecart_pct
-                elif m.classification.recu_field == "Reçu 2":
-                    recu_2 = m.recu_amount
-                    ecart_2 = m.ecart_pct
-                elif m.classification.recu_field == "Reçu 3":
-                    recu_3 = m.recu_amount
-                    ecart_3 = m.ecart_pct
+                field = m.classification.recu_field
+                if m.is_chargeback:
+                    has_cb = True
+                    recu_cb[field] = m.recu_amount  # negative
+                else:
+                    recu_paye[field] = m.recu_amount
+                    if field == "Reçu 1":
+                        ecart_1 = m.ecart_pct
+                    elif field == "Reçu 2":
+                        ecart_2 = m.ecart_pct
+                    elif field == "Reçu 3":
+                        ecart_3 = m.ecart_pct
+
+            # Compute net amounts (Payé + CB where CB is negative)
+            def _net(paye_val, cb_val):
+                if paye_val is None and cb_val is None:
+                    return None
+                return (paye_val or 0.0) + (cb_val or 0.0)
+
+            recu_1 = _net(recu_paye["Reçu 1"], recu_cb["Reçu 1"])
+            recu_2 = _net(recu_paye["Reçu 2"], recu_cb["Reçu 2"])
+            recu_3 = _net(recu_paye["Reçu 3"], recu_cb["Reçu 3"])
 
             # Compute Total écart: Total (formula) vs Total Reçu (formula)
             ecart_total = Reconciler._compute_ecart(total_recu_ref, total_ref)
 
-            rows.append({
+            row_data = {
                 "# de Police": police,
                 "Compagnie": compagnie,
                 "Conseiller": conseiller,
@@ -285,7 +327,10 @@ class ReconciliationResult:
                 "Total Reçu": total_recu_ref,
                 "Écart Total": f"{ecart_total:.1f}%" if ecart_total is not None else "—",
                 "Statut Rapp.": worst_status.value,
-            })
+            }
+            if has_cb:
+                row_data["CB"] = "Oui"
+            rows.append(row_data)
 
         return pd.DataFrame(rows)
 
@@ -304,11 +349,12 @@ class ReconciliationResult:
         Returns:
             DataFrame with Payé rows, Conseiller and Vérifié updated for matches.
         """
-        # Filter to Payé only
-        paye_mask = hist_df.get("Statut", pd.Series(dtype=str)).astype(str).str.strip() == "Payé"
-        hist_paye = hist_df[paye_mask].copy()
+        # Filter to Payé and Charge back
+        statut_col = hist_df.get("Statut", pd.Series(dtype=str)).astype(str).str.strip()
+        active_mask = statut_col.isin(["Payé", "Charge back"])
+        hist_active = hist_df[active_mask].copy()
 
-        if hist_paye.empty:
+        if hist_active.empty:
             return pd.DataFrame()
 
         # Build lookups: index → conseiller for all found matches,
@@ -316,24 +362,24 @@ class ReconciliationResult:
         conseiller_lookup: dict[int, str] = {}  # index → conseiller
         passed_indices: set[int] = set()
         for m in self.matches:
-            if m.status == ReconciliationStatus.NOT_FOUND:
+            if m.status in (ReconciliationStatus.NOT_FOUND, ReconciliationStatus.CB_FLAGGED):
                 continue
             for idx in m.hist_indices:
                 conseiller_lookup[idx] = m.conseiller or ""
-            if m.status == ReconciliationStatus.PASSED:
+            if m.status in (ReconciliationStatus.PASSED, ReconciliationStatus.CB_VERIFIED):
                 passed_indices.update(m.hist_indices)
 
         # Ensure Conseiller column exists before mutations
-        if "Conseiller" not in hist_paye.columns:
-            hist_paye["Conseiller"] = ""
+        if "Conseiller" not in hist_active.columns:
+            hist_active["Conseiller"] = ""
 
         # Add Verifié labels and update Conseiller
-        hist_paye["Verifié"] = "Pas Verifié"
-        for idx in hist_paye.index:
+        hist_active["Verifié"] = "Pas Verifié"
+        for idx in hist_active.index:
             if idx in conseiller_lookup and conseiller_lookup[idx]:
-                hist_paye.at[idx, "Conseiller"] = conseiller_lookup[idx]
+                hist_active.at[idx, "Conseiller"] = conseiller_lookup[idx]
             if idx in passed_indices:
-                hist_paye.at[idx, "Verifié"] = "Verifié"
+                hist_active.at[idx, "Verifié"] = "Verifié"
 
         # Select and order columns
         output_cols = [
@@ -341,8 +387,8 @@ class ReconciliationResult:
             "Verifié", "Reçu", "Texte", "Statut",
         ]
         # Only include columns that exist
-        cols = [c for c in output_cols if c in hist_paye.columns]
-        return hist_paye[cols].reset_index(drop=True)
+        cols = [c for c in output_cols if c in hist_active.columns]
+        return hist_active[cols].reset_index(drop=True)
 
 
 class Reconciler:
@@ -502,14 +548,15 @@ class Reconciler:
         """
         result = ReconciliationResult()
 
-        # Filter historical to only "Payé" rows
-        paye_mask = hist_df.get("Statut", pd.Series(dtype=str)).astype(str).str.strip() == "Payé"
-        hist_paye = hist_df[paye_mask]
+        # Filter historical to "Payé" + "Charge back" rows
+        statut_col = hist_df.get("Statut", pd.Series(dtype=str)).astype(str).str.strip()
+        active_mask = statut_col.isin(["Payé", "Charge back"])
+        hist_active = hist_df[active_mask]
 
-        if hist_paye.empty:
+        if hist_active.empty:
             return result
 
-        result.total_hist_lines = len(hist_paye)
+        result.total_hist_lines = len(hist_active)
 
         # Build sales lookup by # de Police
         sales_lookup: dict[str, pd.Series] = {}
@@ -538,33 +585,39 @@ class Reconciler:
 
         # --- Phase 1: Classify each row and group by (police, classification) ---
         # Key: (police_number, recu_field or "NOT_FOUND" or "UNCLASSIFIED")
+        # CB lines get a "CB_" prefix, e.g. "CB_Reçu 1"
         GroupKey = tuple[str, str]
         groups: dict[GroupKey, list[tuple[int, float, str, str]]] = defaultdict(list)
         # Each entry: (df_index, recu_amount, compagnie, texte)
         classification_map: dict[GroupKey, Optional[RecuClassification]] = {}
 
-        for idx, hist_row in hist_paye.iterrows():
+        for idx, hist_row in hist_active.iterrows():
             police = str(hist_row.get("# de Police", "")).strip()
             compagnie = str(hist_row.get("Compagnie", ""))
             texte = str(hist_row.get("Texte", ""))
             recu_amount = self._to_float(hist_row.get("Reçu")) or 0.0
+            statut = str(hist_row.get("Statut", "")).strip()
+            is_cb = (statut == "Charge back")
 
             sales_row = sales_lookup.get(police)
 
             if sales_row is None:
-                key = (police, "_NOT_FOUND")
+                key = (police, "CB_NOT_FOUND" if is_cb else "_NOT_FOUND")
                 groups[key].append((idx, recu_amount, compagnie, texte))
                 classification_map[key] = None
                 continue
 
             classification = self.classify_row(texte)
             if classification is None:
-                key = (police, "_UNCLASSIFIED")
+                key = (police, "CB_UNCLASSIFIED" if is_cb else "_UNCLASSIFIED")
                 groups[key].append((idx, recu_amount, compagnie, texte))
                 classification_map[key] = None
                 continue
 
-            key = (police, classification.recu_field)
+            if is_cb:
+                key = (police, f"CB_{classification.recu_field}")
+            else:
+                key = (police, classification.recu_field)
             groups[key].append((idx, recu_amount, compagnie, texte))
             classification_map[key] = classification
 
@@ -578,9 +631,12 @@ class Reconciler:
             texte = entries[0][3]
             classification = classification_map[group_key]
 
+            is_cb_group = recu_field_or_status.startswith("CB_")
+
             sales_row = sales_lookup.get(police)
 
-            if recu_field_or_status == "_NOT_FOUND":
+            # --- NOT_FOUND groups (both Payé and CB) ---
+            if recu_field_or_status in ("_NOT_FOUND", "CB_NOT_FOUND"):
                 result.matches.append(ReconciliationMatch(
                     hist_indices=indices,
                     police_number=police,
@@ -593,10 +649,12 @@ class Reconciler:
                     ecart_pct=None,
                     status=ReconciliationStatus.NOT_FOUND,
                     line_count=len(entries),
+                    is_chargeback=is_cb_group,
                 ))
                 continue
 
-            if recu_field_or_status == "_UNCLASSIFIED":
+            # --- UNCLASSIFIED groups (both Payé and CB) ---
+            if recu_field_or_status in ("_UNCLASSIFIED", "CB_UNCLASSIFIED"):
                 result.matches.append(ReconciliationMatch(
                     hist_indices=indices,
                     police_number=police,
@@ -612,29 +670,42 @@ class Reconciler:
                     conseiller=self._get_conseiller(sales_row) if sales_row is not None else None,
                     pa_amount=self._to_float(sales_row.get("PA")) if sales_row is not None else None,
                     line_count=len(entries),
+                    is_chargeback=is_cb_group,
                 ))
                 continue
 
-            # Normal classified group — compare summed amount against reference
+            # --- Classified group — compare summed amount against reference ---
             reference = self._to_float(sales_row.get(classification.compare_column))
             pa = self._to_float(sales_row.get("PA"))
             threshold = self.determine_threshold(pa)
             conseiller = self._get_conseiller(sales_row)
             sales_item_id = str(sales_row.get("item_id", ""))
 
-            ecart_pct = self._compute_ecart(total_recu, reference)
-            if ecart_pct is not None and ecart_pct <= threshold:
-                status = ReconciliationStatus.PASSED
-            elif reference is None and allow_none_reference:
-                logger.warning(
-                    "Reconciler: %s reference for police %s is None — "
-                    "marking as PASSED (allow_none_reference=True)",
-                    classification.compare_column,
-                    police,
-                )
-                status = ReconciliationStatus.PASSED
+            if is_cb_group:
+                # Chargebacks: compare abs(total_recu) vs reference
+                compare_amount = abs(total_recu)
+                ecart_pct = self._compute_ecart(compare_amount, reference)
+                if ecart_pct is not None and ecart_pct <= threshold:
+                    status = ReconciliationStatus.CB_VERIFIED
+                elif reference is None and allow_none_reference:
+                    status = ReconciliationStatus.CB_VERIFIED
+                else:
+                    status = ReconciliationStatus.CB_FLAGGED
             else:
-                status = ReconciliationStatus.FLAGGED
+                # Payé: existing logic unchanged
+                ecart_pct = self._compute_ecart(total_recu, reference)
+                if ecart_pct is not None and ecart_pct <= threshold:
+                    status = ReconciliationStatus.PASSED
+                elif reference is None and allow_none_reference:
+                    logger.warning(
+                        "Reconciler: %s reference for police %s is None — "
+                        "marking as PASSED (allow_none_reference=True)",
+                        classification.compare_column,
+                        police,
+                    )
+                    status = ReconciliationStatus.PASSED
+                else:
+                    status = ReconciliationStatus.FLAGGED
 
             result.matches.append(ReconciliationMatch(
                 hist_indices=indices,
@@ -651,6 +722,7 @@ class Reconciler:
                 conseiller=conseiller,
                 pa_amount=pa,
                 line_count=len(entries),
+                is_chargeback=is_cb_group,
             ))
 
         return result
