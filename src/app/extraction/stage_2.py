@@ -1356,13 +1356,21 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
             return ["background-color: rgba(200, 0, 100, 0.1)"] * len(row)
         return [""] * len(row)
 
-    # --- Sales / Production table ---
+    # --- Sales / Production table (Payé only — this is what gets uploaded) ---
     sales_view_df = result.to_sales_view_dataframe(sales_df)
 
     if not sales_view_df.empty:
         st.subheader("Ventes / Production — Mise à jour Reçu")
         styled_sales = sales_view_df.style.apply(_highlight_status, axis=1)
         st.dataframe(styled_sales, width="stretch", height=400, hide_index=True)
+
+    # --- Chargebacks table (visual only — NOT uploaded) ---
+    cb_view_df = result.to_sales_view_dataframe(sales_df, chargeback_only=True)
+
+    if not cb_view_df.empty:
+        st.subheader("Ventes / Production — Charge backs (non uploadé)")
+        styled_cb = cb_view_df.style.apply(_highlight_status, axis=1)
+        st.dataframe(styled_cb, width="stretch", height=400, hide_index=True)
 
     # --- Historical payments table ---
     hist_view_df = result.to_hist_view_dataframe(df)

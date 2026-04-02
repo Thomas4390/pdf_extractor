@@ -939,7 +939,10 @@ def test_reconcile_surcom_none_reference_passed():
 
 
 def test_chargeback_none_reference_verified():
-    """Chargeback with None reference → CB_VERIFIED, not CB_FLAGGED."""
+    """Chargeback with None reference → CB_VERIFIED, not CB_FLAGGED.
+
+    Chargebacks are NOT included in sales updates (visual only).
+    """
     r = Reconciler()
 
     hist_df = pd.DataFrame([
@@ -957,9 +960,14 @@ def test_chargeback_none_reference_verified():
     assert result.cb_verified == 1
     assert result.cb_flagged == 0
 
+    # CB should NOT be in sales updates (not uploaded)
     updates = result.get_sales_updates()
-    assert "CB1" in updates
-    assert updates["CB1"]["Reçu 2"] == -200.46
+    assert "CB1" not in updates
+
+    # But CB should appear in the chargeback view
+    cb_view = result.to_sales_view_dataframe(sales_df, chargeback_only=True)
+    assert len(cb_view) == 1
+    assert cb_view.iloc[0]["Reçu 2"] == -200.46
 
 
 def test_reconcile_flagged_only_on_real_ecart():

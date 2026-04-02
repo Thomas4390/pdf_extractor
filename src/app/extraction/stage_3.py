@@ -23,9 +23,9 @@ from src.utils.data_unifier import BoardType
 
 
 def _has_reconciliation() -> bool:
-    """Check if reconciliation is active with passed results (including CB verified)."""
+    """Check if reconciliation is active with passed Payé results."""
     recon = st.session_state.get("reconciliation_result")
-    return recon is not None and (recon.passed > 0 or recon.cb_verified > 0)
+    return recon is not None and recon.passed > 0
 
 
 def render_stage_3() -> None:

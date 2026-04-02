@@ -114,38 +114,26 @@ class ReconciliationResult:
     # --- Helper methods ---
 
     def get_sales_updates(self) -> dict[str, dict[str, float]]:
-        """Get updates grouped by sales item_id with net amounts (Payé - CB).
+        """Get updates grouped by sales item_id — Payé only, no chargebacks.
+
+        Chargebacks are excluded from writeback: they are displayed in a
+        separate visual table but never written to Ventes/Production.
 
         Returns:
             Dict mapping item_id to {recu_field: amount}, e.g.:
-            {"12345": {"Reçu 1": 30.0}}  (net of Payé $510 - CB $480)
+            {"12345": {"Reçu 1": 100.0}}
         """
         updates: dict[str, dict[str, float]] = {}
 
-        # 1) Collect PASSED amounts
         for m in self.matches:
             if (
                 m.status == ReconciliationStatus.PASSED
+                and not m.is_chargeback
                 and m.sales_item_id
                 and m.classification
                 and m.recu_amount is not None
             ):
                 updates.setdefault(m.sales_item_id, {})[m.classification.recu_field] = m.recu_amount
-
-        # 2) Subtract CB_VERIFIED amounts (recu_amount is already negative)
-        for m in self.matches:
-            if (
-                m.status == ReconciliationStatus.CB_VERIFIED
-                and m.sales_item_id
-                and m.classification
-                and m.recu_amount is not None
-            ):
-                field = m.classification.recu_field
-                if m.sales_item_id in updates and field in updates[m.sales_item_id]:
-                    updates[m.sales_item_id][field] += m.recu_amount  # negative → subtraction
-                else:
-                    # CB without matching Payé in this batch — write negative as-is
-                    updates.setdefault(m.sales_item_id, {})[field] = m.recu_amount
 
         return updates
 
@@ -214,20 +202,21 @@ class ReconciliationResult:
         ReconciliationStatus.FLAGGED: 5,
     }
 
-    def to_sales_view_dataframe(self, sales_df: pd.DataFrame) -> pd.DataFrame:
+    def to_sales_view_dataframe(
+        self,
+        sales_df: pd.DataFrame,
+        *,
+        chargeback_only: bool = False,
+    ) -> pd.DataFrame:
         """Board-format sales view: one row per police with Reçu 1/2/3 and écarts.
-
-        Columns produced:
-        # de Police | Compagnie | Conseiller | PA |
-        Com | Reçu 1 | Écart 1 | Boni | Reçu 2 | Écart 2 |
-        Sur-Com | Reçu 3 | Écart 3 | Total | Total Reçu | Écart Total |
-        Statut Rapp.
 
         Args:
             sales_df: Sales/production DataFrame from Monday.com.
+            chargeback_only: If True, show only chargeback matches.
+                If False (default), show only Payé matches.
 
         Returns:
-            DataFrame with one row per police number (only matched polices).
+            DataFrame with one row per police number.
         """
         # Build sales lookup
         sales_lookup: dict[str, pd.Series] = {}
@@ -242,9 +231,13 @@ class ReconciliationResult:
                         )
                     sales_lookup[police] = row
 
-        # Group matches by police_number
+        # Group matches by police_number, filtering by type
         by_police: dict[str, list[ReconciliationMatch]] = defaultdict(list)
         for m in self.matches:
+            if chargeback_only and not m.is_chargeback:
+                continue
+            if not chargeback_only and m.is_chargeback:
+                continue
             by_police[m.police_number].append(m)
 
         rows = []
@@ -271,12 +264,10 @@ class ReconciliationResult:
                 if pa is None:
                     pa = Reconciler._to_float(sales_row.get("PA"))
 
-            # Find match for each Reçu type (Payé and CB separately)
-            recu_paye = {"Reçu 1": None, "Reçu 2": None, "Reçu 3": None}
-            recu_cb = {"Reçu 1": None, "Reçu 2": None, "Reçu 3": None}
+            # Collect amounts per Reçu field
+            recu_amounts = {"Reçu 1": None, "Reçu 2": None, "Reçu 3": None}
             ecart_1 = ecart_2 = ecart_3 = None
             worst_status = ReconciliationStatus.PASSED
-            has_cb = False
 
             for m in matches:
                 if self._STATUS_PRIORITY.get(m.status, 0) > self._STATUS_PRIORITY.get(worst_status, 0):
@@ -286,13 +277,8 @@ class ReconciliationResult:
                     continue
 
                 field = m.classification.recu_field
-                if m.is_chargeback:
-                    has_cb = True
-                    recu_cb[field] = m.recu_amount  # negative
-                else:
-                    recu_paye[field] = m.recu_amount
+                recu_amounts[field] = m.recu_amount
 
-                # Store ecart_pct for both Payé and CB matches
                 if field == "Reçu 1" and ecart_1 is None:
                     ecart_1 = m.ecart_pct
                 elif field == "Reçu 2" and ecart_2 is None:
@@ -300,29 +286,24 @@ class ReconciliationResult:
                 elif field == "Reçu 3" and ecart_3 is None:
                     ecart_3 = m.ecart_pct
 
-            # Compute net amounts (Payé + CB where CB is negative)
-            def _net(paye_val, cb_val):
-                if paye_val is None and cb_val is None:
-                    return None
-                return (paye_val or 0.0) + (cb_val or 0.0)
+            recu_1 = recu_amounts["Reçu 1"]
+            recu_2 = recu_amounts["Reçu 2"]
+            recu_3 = recu_amounts["Reçu 3"]
 
-            recu_1 = _net(recu_paye["Reçu 1"], recu_cb["Reçu 1"])
-            recu_2 = _net(recu_paye["Reçu 2"], recu_cb["Reçu 2"])
-            recu_3 = _net(recu_paye["Reçu 3"], recu_cb["Reçu 3"])
-
-            # Compute Total Reçu from actual matched amounts — always use this
-            # over the board's formula value (which reflects stale Reçu 1/2/3
-            # before the writeback updates them)
+            # Compute totals
             computed_total_recu = sum(v for v in (recu_1, recu_2, recu_3) if v is not None)
 
-            # Compute Total reference: prefer formula Total, fall back to Com+Boni+Sur-Com
             if total_ref is None:
                 ref_parts = [v for v in (com_ref, boni_ref, surcom_ref) if v is not None]
                 computed_total_ref = sum(ref_parts) if ref_parts else None
             else:
                 computed_total_ref = total_ref
 
-            ecart_total = Reconciler._compute_ecart(computed_total_recu, computed_total_ref)
+            # For CB view, compare abs(total) against reference
+            if chargeback_only and computed_total_ref is not None:
+                ecart_total = Reconciler._compute_ecart(abs(computed_total_recu), computed_total_ref)
+            else:
+                ecart_total = Reconciler._compute_ecart(computed_total_recu, computed_total_ref)
 
             row_data = {
                 "# de Police": police,
@@ -343,8 +324,6 @@ class ReconciliationResult:
                 "Écart Total": f"{ecart_total:.1f}%" if ecart_total is not None else "—",
                 "Statut Rapp.": worst_status.value,
             }
-            if has_cb:
-                row_data["CB"] = "Oui"
             rows.append(row_data)
 
         return pd.DataFrame(rows)
