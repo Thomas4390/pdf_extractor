@@ -1404,6 +1404,7 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
                     ecart_abs = round(m.recu_amount - m.reference_amount, 2) if m.recu_amount is not None and m.reference_amount is not None else None
                     flag_rows.append({
                         "# de Police": m.police_number,
+                        "Conseiller": m.conseiller or "—",
                         "Type": m.classification.label if m.classification else "?",
                         "Lignes": m.line_count,
                         "Reçu": m.recu_amount,
@@ -1422,6 +1423,7 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
             for m in cb_matches:
                 cb_rows.append({
                     "# de Police": m.police_number,
+                    "Conseiller": m.conseiller or "—",
                     "Type": m.classification.label if m.classification else "?",
                     "Montant CB": m.recu_amount,
                     "Référence": m.reference_amount,
@@ -1437,16 +1439,23 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
         overwrite_rows = []
         for item_id, fields in sales_updates.items():
             item_rows = sales_df[sales_df["item_id"].astype(str) == str(item_id)]
-            # Get police number for display
+            # Get police number and conseiller for display
             police = ""
-            if not item_rows.empty and "# de Police" in item_rows.columns:
-                police = str(item_rows.iloc[0].get("# de Police", ""))
+            conseiller = "—"
+            if not item_rows.empty:
+                if "# de Police" in item_rows.columns:
+                    police = str(item_rows.iloc[0].get("# de Police", ""))
+                if "Conseiller" in item_rows.columns:
+                    val = item_rows.iloc[0].get("Conseiller")
+                    if val is not None and str(val).strip():
+                        conseiller = str(val).strip()
             for field_name, new_value in fields.items():
                 if not item_rows.empty and field_name in item_rows.columns:
                     existing = item_rows.iloc[0].get(field_name)
                     if existing is not None and str(existing).strip() not in ("", "0", "0.0", "None"):
                         overwrite_rows.append({
                             "# de Police": police,
+                            "Conseiller": conseiller,
                             "Champ": field_name,
                             "Valeur actuelle": existing,
                             "Nouvelle valeur": new_value,
