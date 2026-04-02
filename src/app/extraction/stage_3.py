@@ -530,6 +530,26 @@ def _execute_reconciliation_writeback(
             conseiller_col_id = col_id_map.get("Conseiller")
             verifie_col_id = col_id_map.get("Verifié")
 
+            # Pre-seed Conseiller dropdown labels to avoid duplicates
+            conseiller_label_map: dict[str, int] = {}
+            if conseiller_col_id and col_type_map.get("Conseiller") == "dropdown":
+                unique_conseillers = list({
+                    c.strip()
+                    for _, c, _ in hist_updates
+                    if c and c.strip()
+                })
+                if unique_conseillers:
+                    run_async(
+                        pipeline.monday.ensure_dropdown_labels(
+                            int(hist_board_id), conseiller_col_id, unique_conseillers
+                        )
+                    )
+                    conseiller_label_map = run_async(
+                        pipeline.monday.get_dropdown_label_map(
+                            int(hist_board_id), conseiller_col_id
+                        )
+                    )
+
             for hist_index, conseiller, is_passed in hist_updates:
                 try:
                     hist_item_id = index_to_item_id.get(hist_index)
@@ -545,11 +565,15 @@ def _execute_reconciliation_writeback(
                         label = "Verifié" if is_passed else "Pas Verifié"
                         column_values[verifie_col_id] = {"label": label}
 
-                    # Conseiller: write for all found matches
+                    # Conseiller: use label ID to avoid duplicates
                     if conseiller and conseiller_col_id:
                         col_type = col_type_map.get("Conseiller", "")
                         if col_type == "dropdown":
-                            column_values[conseiller_col_id] = {"labels": [conseiller]}
+                            label_id = conseiller_label_map.get(conseiller.strip())
+                            if label_id is not None:
+                                column_values[conseiller_col_id] = {"ids": [str(label_id)]}
+                            else:
+                                column_values[conseiller_col_id] = {"labels": [conseiller]}
                         else:
                             column_values[conseiller_col_id] = conseiller
 

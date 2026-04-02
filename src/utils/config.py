@@ -5,6 +5,7 @@ Handles environment variables and application settings using Pydantic.
 Supports both local .env files and Streamlit Cloud secrets.
 """
 
+import functools
 import os
 from pathlib import Path
 from typing import Optional
@@ -213,7 +214,7 @@ class Settings(BaseSettings):
         description="Number of items per batch upload to Monday.com",
     )
     monday_max_concurrent: int = Field(
-        default=5, ge=1, le=20,
+        default=3, ge=1, le=20,
         description="Maximum concurrent requests to Monday.com API",
     )
     monday_rate_limit_delay: float = Field(
@@ -247,12 +248,13 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
+@functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Get application settings (fresh instance each time for dev)."""
+    """Get application settings (cached for process lifetime)."""
     return Settings()
 
 
-# Convenience alias - creates fresh instance
+# Convenience alias
 settings = get_settings()
 
 

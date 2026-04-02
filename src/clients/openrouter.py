@@ -362,6 +362,7 @@ class OpenRouterClient:
         Returns:
             Tuple of (result, error, raw_content)
         """
+        content: Optional[str] = None
         try:
             result = await self._make_request(messages, temperature, model=model, max_tokens=max_tokens, timeout=timeout)
 
@@ -381,7 +382,7 @@ class OpenRouterClient:
             return parsed, None, content
 
         except json.JSONDecodeError as e:
-            return None, e, content if 'content' in dir() else None
+            return None, e, content
         except Exception as e:
             return None, e, None
 

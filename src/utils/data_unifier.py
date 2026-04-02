@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from .constants import EXCLUDED_ADVISORS
+
 # Try to import Google Sheets client
 try:
     import gspread
@@ -128,7 +130,7 @@ class DataUnifier:
     _EXCLUDED_SUB_ADVISORS = {'achraf'}
 
     # Full advisor names to always blank out (normalized, lower-case)
-    _EXCLUDED_ADVISORS = {'achraf el hajji'}
+    _EXCLUDED_ADVISORS = EXCLUDED_ADVISORS
 
     @staticmethod
     def _col_index_to_letter(idx: int) -> str:
