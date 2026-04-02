@@ -313,11 +313,15 @@ class ReconciliationResult:
             # Use computed total when formula-based total is unavailable
             display_total_recu = total_recu_ref if total_recu_ref is not None else computed_total_recu
 
-            # Compute Total écart using computed total when formula unavailable
+            # Compute Total écart: prefer formula Total, fall back to sum of refs
             if total_ref is not None:
                 ecart_total = Reconciler._compute_ecart(display_total_recu, total_ref)
             else:
-                ecart_total = None
+                # Total is a formula column that often returns None —
+                # compute reference from available Com + Boni + Sur-Com
+                ref_parts = [v for v in (com_ref, boni_ref, surcom_ref) if v is not None]
+                computed_total_ref = sum(ref_parts) if ref_parts else None
+                ecart_total = Reconciler._compute_ecart(display_total_recu, computed_total_ref)
 
             row_data = {
                 "# de Police": police,
