@@ -1321,10 +1321,7 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
 
     # --- Run reconciliation ---
     reconciler = Reconciler()
-    result = reconciler.reconcile(
-        df, sales_df,
-        allow_none_reference=bool(_empty_formula_cols),
-    )
+    result = reconciler.reconcile(df, sales_df)
     st.session_state.reconciliation_result = result
 
     if result.total_hist_lines == 0:

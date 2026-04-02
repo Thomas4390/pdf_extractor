@@ -526,8 +526,6 @@ class Reconciler:
         self,
         hist_df: pd.DataFrame,
         sales_df: pd.DataFrame,
-        *,
-        allow_none_reference: bool = False,
     ) -> ReconciliationResult:
         """Run reconciliation between historical payments and sales/production.
 
@@ -535,13 +533,15 @@ class Reconciler:
         their Reçu amounts are summed before comparing against the sales
         reference value.
 
+        When the sales reference (Com/Boni/Sur-Com) is None — typically
+        because Boni and Sur-Com are formula columns whose values weren't
+        enriched — the match is marked PASSED (or CB_VERIFIED for
+        chargebacks).  This ensures Reçu 2/3 are always written even when
+        Monday.com formula enrichment fails.
+
         Args:
             hist_df: Historical payments DataFrame.
             sales_df: Sales/production DataFrame.
-            allow_none_reference: If True, when the sales reference value
-                (Com/Boni/Sur-Com) is None, mark the match as PASSED instead
-                of FLAGGED.  Useful when formula enrichment from Monday.com
-                is partial or failed.
 
         Returns:
             ReconciliationResult with all matches and metrics.
@@ -687,22 +687,19 @@ class Reconciler:
                 ecart_pct = self._compute_ecart(compare_amount, reference)
                 if ecart_pct is not None and ecart_pct <= threshold:
                     status = ReconciliationStatus.CB_VERIFIED
-                elif reference is None and allow_none_reference:
+                elif reference is None:
+                    # Formula columns (Boni, Sur-Com) often return None
                     status = ReconciliationStatus.CB_VERIFIED
                 else:
                     status = ReconciliationStatus.CB_FLAGGED
             else:
-                # Payé: existing logic unchanged
+                # Payé: compare summed Reçu against sales reference
                 ecart_pct = self._compute_ecart(total_recu, reference)
                 if ecart_pct is not None and ecart_pct <= threshold:
                     status = ReconciliationStatus.PASSED
-                elif reference is None and allow_none_reference:
-                    logger.warning(
-                        "Reconciler: %s reference for police %s is None — "
-                        "marking as PASSED (allow_none_reference=True)",
-                        classification.compare_column,
-                        police,
-                    )
+                elif reference is None:
+                    # Formula columns (Boni, Sur-Com) often return None —
+                    # trust the extracted amount and write it
                     status = ReconciliationStatus.PASSED
                 else:
                     status = ReconciliationStatus.FLAGGED

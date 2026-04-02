@@ -359,7 +359,7 @@ def test_reconcile_filters_paye_only():
     ])
 
     result = r.reconcile(hist_df, sales_df)
-    assert result.total_hist_lines == 1  # Only the Payé row
+    assert result.total_hist_lines == 2  # Payé + Charge back rows
 
 
 def test_reconcile_hist_updates_with_aggregation():
@@ -440,7 +440,7 @@ def test_reconcile_to_display_dataframe():
 
 
 def test_reconcile_empty_hist():
-    """Test reconciliation with no Payé rows."""
+    """Test reconciliation with no active rows (Payé or Charge back)."""
     r = Reconciler()
 
     hist_df = pd.DataFrame([
@@ -449,7 +449,7 @@ def test_reconcile_empty_hist():
             "Compagnie": "UV Inc",
             "Texte": "Commission test",
             "Reçu": -100.0,
-            "Statut": "Charge back",
+            "Statut": "Annulé",  # Neither Payé nor Charge back
         },
     ])
 
@@ -767,8 +767,8 @@ def test_to_hist_view_dataframe():
     result = r.reconcile(hist_df, sales_df)
     view = result.to_hist_view_dataframe(hist_df)
 
-    # Only Payé rows (2 out of 3)
-    assert len(view) == 2
+    # Payé + Charge back rows (3 out of 3)
+    assert len(view) == 3
 
     # Expected columns
     for col in ["# de Police", "Nom Client", "Compagnie", "Conseiller",
@@ -887,28 +887,8 @@ def test_reconcile_new_format_uv_multi_police():
     assert updates["S2"]["Reçu 1"] == 120.0
 
 
-def test_reconcile_none_reference_default_flagged():
-    """Default: None reference → FLAGGED (ecart_pct is None)."""
-    r = Reconciler()
-
-    hist_df = pd.DataFrame([
-        {"# de Police": "POL001", "Compagnie": "UV Inc",
-         "Texte": "Protection | Commission (Partage: 50%, Com: 50%, TB: 0%)",
-         "Reçu": 100.0, "Statut": "Payé"},
-    ])
-
-    sales_df = pd.DataFrame([
-        {"# de Police": "POL001", "Com": None, "Boni": None, "Sur-Com": None,
-         "PA": 1000.0, "item_id": "X1", "Conseiller": "Claire"},
-    ])
-
-    result = r.reconcile(hist_df, sales_df)
-    assert result.flagged == 1
-    assert result.passed == 0
-
-
-def test_reconcile_none_reference_allow_passed():
-    """allow_none_reference=True: None reference → PASSED."""
+def test_reconcile_none_reference_passed_by_default():
+    """None reference → PASSED: formula columns (Boni, Sur-Com) often return None."""
     r = Reconciler()
 
     hist_df = pd.DataFrame([
@@ -925,14 +905,86 @@ def test_reconcile_none_reference_allow_passed():
          "PA": 1000.0, "item_id": "X1", "Conseiller": "Claire"},
     ])
 
-    result = r.reconcile(hist_df, sales_df, allow_none_reference=True)
+    result = r.reconcile(hist_df, sales_df)
     assert result.passed == 2
     assert result.flagged == 0
 
-    # Reçu amounts should still be written
+    # Reçu amounts should still be written even when reference is None
     updates = result.get_sales_updates()
     assert updates["X1"]["Reçu 1"] == 100.0
     assert updates["X1"]["Reçu 2"] == 50.0
+
+
+def test_reconcile_surcom_none_reference_passed():
+    """Sur-Com formula column returns None → still PASSED and Reçu 3 written."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV",
+         "Texte": "Vie entière | Sur-Com (Partage: 60%, Com: 55%, TB: 75%)",
+         "Reçu": 226.09, "Statut": "Payé"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 200.0, "Boni": None, "Sur-Com": None,
+         "PA": 913.5, "item_id": "S1", "Conseiller": "Mathieu"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    assert result.passed == 1
+    assert result.flagged == 0
+
+    updates = result.get_sales_updates()
+    assert updates["S1"]["Reçu 3"] == 226.09
+
+
+def test_chargeback_none_reference_verified():
+    """Chargeback with None reference → CB_VERIFIED, not CB_FLAGGED."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV",
+         "Texte": "Chapitre B | Boni (Partage: 40%, Com: 55%, TB: 175%)",
+         "Reçu": -200.46, "Statut": "Charge back"},
+    ])
+
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 152.68, "Boni": None, "Sur-Com": None,
+         "PA": 694.0, "item_id": "CB1", "Conseiller": "Test"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    assert result.cb_verified == 1
+    assert result.cb_flagged == 0
+
+    updates = result.get_sales_updates()
+    assert "CB1" in updates
+    assert updates["CB1"]["Reçu 2"] == -200.46
+
+
+def test_reconcile_flagged_only_on_real_ecart():
+    """FLAGGED only when reference EXISTS and deviation exceeds threshold."""
+    r = Reconciler()
+
+    hist_df = pd.DataFrame([
+        {"# de Police": "POL001", "Compagnie": "UV",
+         "Texte": "Commission test",
+         "Reçu": 200.0, "Statut": "Payé"},
+    ])
+
+    # Com=100 → deviation = 100% → way above 10% threshold
+    sales_df = pd.DataFrame([
+        {"# de Police": "POL001", "Com": 100.0, "Boni": None, "Sur-Com": None,
+         "PA": 1000.0, "item_id": "F1", "Conseiller": "Test"},
+    ])
+
+    result = r.reconcile(hist_df, sales_df)
+    assert result.flagged == 1
+    assert result.passed == 0
+
+    # FLAGGED matches should NOT be in sales updates
+    updates = result.get_sales_updates()
+    assert "F1" not in updates
 
 
 def test_get_all_hist_updates():
@@ -1070,8 +1122,10 @@ def main():
         test_classify_new_format_surcom_suffix,
         test_classify_old_format_backward_compat,
         test_reconcile_new_format_uv_multi_police,
-        test_reconcile_none_reference_default_flagged,
-        test_reconcile_none_reference_allow_passed,
+        test_reconcile_none_reference_passed_by_default,
+        test_reconcile_surcom_none_reference_passed,
+        test_chargeback_none_reference_verified,
+        test_reconcile_flagged_only_on_real_ecart,
         test_get_all_hist_updates,
         test_reconcile_mixed_compagnie_same_police,
     ]
