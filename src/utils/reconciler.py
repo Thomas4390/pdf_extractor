@@ -310,20 +310,19 @@ class ReconciliationResult:
             recu_2 = _net(recu_paye["Reçu 2"], recu_cb["Reçu 2"])
             recu_3 = _net(recu_paye["Reçu 3"], recu_cb["Reçu 3"])
 
-            # Compute Total Reçu from actual matched amounts (not formula)
+            # Compute Total Reçu from actual matched amounts — always use this
+            # over the board's formula value (which reflects stale Reçu 1/2/3
+            # before the writeback updates them)
             computed_total_recu = sum(v for v in (recu_1, recu_2, recu_3) if v is not None)
-            # Use computed total when formula-based total is unavailable
-            display_total_recu = total_recu_ref if total_recu_ref is not None else computed_total_recu
 
-            # Compute Total écart: prefer formula Total, fall back to sum of refs
-            if total_ref is not None:
-                ecart_total = Reconciler._compute_ecart(display_total_recu, total_ref)
-            else:
-                # Total is a formula column that often returns None —
-                # compute reference from available Com + Boni + Sur-Com
+            # Compute Total reference: prefer formula Total, fall back to Com+Boni+Sur-Com
+            if total_ref is None:
                 ref_parts = [v for v in (com_ref, boni_ref, surcom_ref) if v is not None]
                 computed_total_ref = sum(ref_parts) if ref_parts else None
-                ecart_total = Reconciler._compute_ecart(display_total_recu, computed_total_ref)
+            else:
+                computed_total_ref = total_ref
+
+            ecart_total = Reconciler._compute_ecart(computed_total_recu, computed_total_ref)
 
             row_data = {
                 "# de Police": police,
@@ -339,8 +338,8 @@ class ReconciliationResult:
                 "Sur-Com": surcom_ref,
                 "Reçu 3": recu_3,
                 "Écart 3": f"{ecart_3:.1f}%" if ecart_3 is not None else "—",
-                "Total": total_ref,
-                "Total Reçu": display_total_recu,
+                "Total": computed_total_ref,
+                "Total Reçu": computed_total_recu,
                 "Écart Total": f"{ecart_total:.1f}%" if ecart_total is not None else "—",
                 "Statut Rapp.": worst_status.value,
             }
