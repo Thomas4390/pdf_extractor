@@ -211,8 +211,9 @@ def render_pdf_extraction_tab() -> None:
             else:
                 env_board_id = settings.monday_board_paiement_historique
             default_idx = 0
+            env_board_id_str = str(env_board_id)
             for idx, name in enumerate(board_names):
-                if board_options[name] == env_board_id:
+                if board_options[name] == env_board_id_str:
                     default_idx = idx
                     break
 
