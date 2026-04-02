@@ -127,6 +127,9 @@ class DataUnifier:
     # Sub-advisors excluded from advisor assignment (business rule)
     _EXCLUDED_SUB_ADVISORS = {'achraf'}
 
+    # Full advisor names to always blank out (normalized, lower-case)
+    _EXCLUDED_ADVISORS = {'achraf el hajji'}
+
     @staticmethod
     def _col_index_to_letter(idx: int) -> str:
         """Convert a 0-based column index to Excel-style letter(s) (A, B, ..., Z, AA, AB, ...)."""
@@ -200,6 +203,12 @@ class DataUnifier:
             for orig, norm in zip(originals, df['Conseiller']):
                 if pd.notna(orig) and pd.notna(norm) and str(orig).strip() != str(norm).strip():
                     advisor_normalizations.append((str(orig), str(norm)))
+
+        # Blank out excluded advisor names (after normalization)
+        if 'Conseiller' in df.columns:
+            df['Conseiller'] = df['Conseiller'].apply(
+                lambda x: None if pd.notna(x) and str(x).strip().lower() in self._EXCLUDED_ADVISORS else x
+            )
 
         # Appliquer le schéma de colonnes final
         df = self._apply_final_schema(df, board_type)

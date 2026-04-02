@@ -754,6 +754,9 @@ class Reconciler:
             return 100.0 if actual != 0 else 0.0
         return abs((actual - reference) / reference) * 100
 
+    # Advisor names to blank out (normalized, lower-case)
+    _EXCLUDED_ADVISORS = {'achraf el hajji'}
+
     @staticmethod
     def _get_conseiller(sales_row: pd.Series) -> Optional[str]:
         """Extract advisor name from sales row."""
@@ -761,4 +764,8 @@ class Reconciler:
         if conseiller is None or pd.isna(conseiller):
             return None
         name = str(conseiller).strip()
-        return name if name else None
+        if not name:
+            return None
+        if name.lower() in Reconciler._EXCLUDED_ADVISORS:
+            return None
+        return name
