@@ -23,6 +23,8 @@ from typing import Optional
 
 import pandas as pd
 
+from .constants import EXCLUDED_ADVISORS
+
 logger = logging.getLogger(__name__)
 
 
@@ -765,7 +767,7 @@ class Reconciler:
         return abs((actual - reference) / reference) * 100
 
     # Advisor names to blank out (normalized, lower-case)
-    _EXCLUDED_ADVISORS = {'achraf el hajji'}
+    _EXCLUDED_ADVISORS = EXCLUDED_ADVISORS
 
     @staticmethod
     def _get_conseiller(sales_row: pd.Series) -> Optional[str]:

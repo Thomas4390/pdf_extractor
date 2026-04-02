@@ -145,10 +145,15 @@ def _render_session_info() -> None:
     files_count = len(st.session_state.uploaded_files) if st.session_state.uploaded_files else 0
     rows_count = len(st.session_state.combined_data) if st.session_state.combined_data is not None else 0
 
+    if st.session_state.get("app_mode") == "aggregation":
+        step_display = f"{st.session_state.get('agg_step', 1)}/3"
+    else:
+        step_display = f"{st.session_state.stage}/3"
+
     st.markdown(f"""
     <div class="sidebar-stats">
         <div class="sidebar-stat">
-            <div class="number">{st.session_state.stage}/3</div>
+            <div class="number">{step_display}</div>
             <div class="label">Étape</div>
         </div>
         <div class="sidebar-stat">

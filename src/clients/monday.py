@@ -12,8 +12,10 @@ import logging
 import os
 import random
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
+from collections.abc import Callable
 from typing import Any, Optional
 
 import httpx
@@ -42,12 +44,50 @@ def _get_monday_config():
 
 _cfg = _get_monday_config()
 DEFAULT_BATCH_SIZE = _cfg.monday_batch_size if _cfg else 50
-DEFAULT_MAX_CONCURRENT = _cfg.monday_max_concurrent if _cfg else 5
+DEFAULT_MAX_CONCURRENT = _cfg.monday_max_concurrent if _cfg else 3
 RATE_LIMIT_DELAY = _cfg.monday_rate_limit_delay if _cfg else 0.5
 
-# Retry configuration for transient server errors (5xx)
+# Retry configuration for transient server errors (5xx) and rate limits
 MAX_RETRIES = _cfg.monday_max_retries if _cfg else 3
 RETRY_BASE_DELAY = _cfg.monday_retry_base_delay if _cfg else 2.0
+
+# Rate-limit error codes returned by Monday.com GraphQL API
+_RATE_LIMIT_CODES = frozenset({
+    "RATE_LIMIT_EXCEEDED",
+    "FIELD_MINUTE_RATE_LIMIT_EXCEEDED",
+})
+_RATE_LIMIT_MESSAGES = (
+    "minute limit rate exceeded",
+    "rate limit",
+    "too many requests",
+)
+
+
+def _is_rate_limited(error: "MondayError") -> bool:
+    """Check whether a MondayError signals a rate-limit condition."""
+    if error.status_code == 429:
+        return True
+    if error.errors and isinstance(error.errors, list):
+        for err in error.errors:
+            code = err.get("extensions", {}).get("code", "")
+            if code in _RATE_LIMIT_CODES:
+                return True
+            msg = err.get("message", "").lower()
+            if any(phrase in msg for phrase in _RATE_LIMIT_MESSAGES):
+                return True
+    return False
+
+
+def _get_retry_after(error: "MondayError") -> float:
+    """Extract a retry delay from the error, with a safe minimum."""
+    api_secs = 1.0
+    if error.errors and isinstance(error.errors, list):
+        for err in error.errors:
+            api_secs = max(
+                api_secs,
+                err.get("extensions", {}).get("retry_in_seconds", 1),
+            )
+    return max(api_secs, 5.0)
 
 
 # =============================================================================
@@ -73,6 +113,9 @@ class MondayError(Exception):
     message: str
     status_code: Optional[int] = None
     errors: Optional[list] = None
+
+    def __post_init__(self):
+        super().__init__(self.message)
 
     def __str__(self) -> str:
         return f"MondayError: {self.message}"
@@ -189,7 +232,7 @@ class MondayClient:
         query: str,
         variables: Optional[dict] = None
     ) -> dict:
-        """Execute a GraphQL query asynchronously with retry on server errors."""
+        """Execute a GraphQL query asynchronously with retry on server/rate-limit errors."""
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
@@ -203,6 +246,12 @@ class MondayClient:
                         headers=self.headers,
                         json=payload
                     )
+
+                    if response.status_code == 429:
+                        raise MondayError(
+                            message=f"HTTP 429: {response.text}",
+                            status_code=429
+                        )
 
                     if response.status_code >= 500:
                         raise MondayError(
@@ -220,17 +269,6 @@ class MondayClient:
 
                     if "errors" in result:
                         errors = result["errors"]
-                        # Check if this is a server-side error (retryable)
-                        is_server_error = any(
-                            err.get("extensions", {}).get("status_code") == 500
-                            or "internal server error" in err.get("message", "").lower()
-                            for err in (errors if isinstance(errors, list) else [])
-                        )
-                        if is_server_error and attempt < MAX_RETRIES - 1:
-                            raise MondayError(
-                                message=str(errors),
-                                errors=errors
-                            )
                         raise MondayError(
                             message=str(errors),
                             errors=errors
@@ -240,17 +278,29 @@ class MondayClient:
 
             except MondayError as e:
                 last_error = e
-                is_retryable = (
+
+                # Rate-limit → always retry with backoff
+                if _is_rate_limited(e) and attempt < MAX_RETRIES - 1:
+                    delay = min(_get_retry_after(e) * (2 ** attempt), 120.0)
+                    logger.warning(
+                        f"Monday.com rate limit (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {delay:.1f}s... Error: {e.message[:200]}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Server error (5xx) → retry with backoff
+                is_server_error = (
                     e.status_code and e.status_code >= 500
                 ) or (
-                    e.errors and any(
+                    e.errors and isinstance(e.errors, list) and any(
                         err.get("extensions", {}).get("status_code") == 500
                         or "internal server error" in err.get("message", "").lower()
-                        for err in (e.errors if isinstance(e.errors, list) else [])
+                        for err in e.errors
                     )
                 )
-                if is_retryable and attempt < MAX_RETRIES - 1:
-                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                if is_server_error and attempt < MAX_RETRIES - 1:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), 120.0)
                     logger.warning(
                         f"Monday.com server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {delay}s... Error: {e.message[:200]}"
@@ -259,10 +309,12 @@ class MondayClient:
                     continue
                 raise
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise MondayError("No attempts were made (MAX_RETRIES may be 0)")
 
     def _execute_query_sync(self, query: str, variables: Optional[dict] = None) -> dict:
-        """Execute a GraphQL query synchronously with retry on server errors."""
+        """Execute a GraphQL query synchronously with retry on server/rate-limit errors."""
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
@@ -276,6 +328,12 @@ class MondayClient:
                     json=payload,
                     timeout=self.timeout
                 )
+
+                if response.status_code == 429:
+                    raise MondayError(
+                        message=f"HTTP 429: {response.text}",
+                        status_code=429
+                    )
 
                 if response.status_code >= 500:
                     raise MondayError(
@@ -293,30 +351,35 @@ class MondayClient:
 
                 if "errors" in result:
                     errors = result["errors"]
-                    is_server_error = any(
-                        err.get("extensions", {}).get("status_code") == 500
-                        or "internal server error" in err.get("message", "").lower()
-                        for err in (errors if isinstance(errors, list) else [])
-                    )
-                    if is_server_error and attempt < MAX_RETRIES - 1:
-                        raise MondayError(message=str(errors), errors=errors)
                     raise MondayError(message=str(errors), errors=errors)
 
                 return result
 
             except MondayError as e:
                 last_error = e
-                is_retryable = (
+
+                # Rate-limit → always retry with backoff
+                if _is_rate_limited(e) and attempt < MAX_RETRIES - 1:
+                    delay = min(_get_retry_after(e) * (2 ** attempt), 120.0)
+                    logger.warning(
+                        f"Monday.com rate limit (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {delay:.1f}s... Error: {e.message[:200]}"
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Server error (5xx) → retry with backoff
+                is_server_error = (
                     e.status_code and e.status_code >= 500
                 ) or (
-                    e.errors and any(
+                    e.errors and isinstance(e.errors, list) and any(
                         err.get("extensions", {}).get("status_code") == 500
                         or "internal server error" in err.get("message", "").lower()
-                        for err in (e.errors if isinstance(e.errors, list) else [])
+                        for err in e.errors
                     )
                 )
-                if is_retryable and attempt < MAX_RETRIES - 1:
-                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                if is_server_error and attempt < MAX_RETRIES - 1:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), 120.0)
                     logger.warning(
                         f"Monday.com server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {delay}s... Error: {e.message[:200]}"
@@ -325,7 +388,9 @@ class MondayClient:
                     continue
                 raise
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise MondayError("No attempts were made (MAX_RETRIES may be 0)")
 
     # -------------------------------------------------------------------------
     # Board operations
@@ -660,7 +725,7 @@ class MondayClient:
         self,
         board_id: int,
         column_id: str,
-        name_mapper: Optional[callable] = None,
+        name_mapper: Optional[Callable[..., Any]] = None,
     ) -> list[dict]:
         """Preview the mapping that would be applied during migration.
 
@@ -698,7 +763,7 @@ class MondayClient:
         self,
         board_id: int,
         column_id: str,
-        name_mapper: Optional[callable] = None,
+        name_mapper: Optional[Callable[..., Any]] = None,
     ) -> list[dict]:
         """Synchronous wrapper for preview_column_mapping."""
         return asyncio.run(self.preview_column_mapping(board_id, column_id, name_mapper))
@@ -748,9 +813,9 @@ class MondayClient:
                             return label_map
             # Labels not yet available, wait and retry
             if attempt < max_retries - 1:
-                print(f"[dropdown] Label map empty on attempt {attempt + 1}, retrying in {retry_delay}s...")
+                logger.debug("[dropdown] Label map empty on attempt %d, retrying in %.1fs...", attempt + 1, retry_delay)
                 await asyncio.sleep(retry_delay)
-        print(f"[dropdown] WARNING: Label map still empty after {max_retries} attempts")
+        logger.warning("[dropdown] Label map still empty after %d attempts", max_retries)
         return {}
 
     async def migrate_column_to_dropdown(
@@ -758,8 +823,8 @@ class MondayClient:
         board_id: int,
         source_column_id: str,
         source_column_title: str,
-        progress_callback: Optional[callable] = None,
-        name_mapper: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+        name_mapper: Optional[Callable[..., Any]] = None,
         max_concurrent: int = 5
     ) -> dict:
         """Migrate a column (status/text) to a new dropdown column.
@@ -882,7 +947,7 @@ class MondayClient:
                         create_labels_if_missing=True
                     )
                     await asyncio.sleep(0.3)
-                except (MondayError, Exception) as e:
+                except Exception as e:
                     result["errors"].append(f"Seed label '{label}': {e}")
 
                 if progress_callback:
@@ -954,7 +1019,7 @@ class MondayClient:
                                 progress_callback(progress, 100, f"Migration {completed['count']}/{total_items}")
                             return None  # Success
 
-                        except (MondayError, Exception) as e:
+                        except Exception as e:
                             if attempt < max_retries - 1:
                                 # Exponential backoff + jitter to prevent thundering herd
                                 delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
@@ -1020,7 +1085,7 @@ class MondayClient:
                         )
                         result["retried"] += 1
                         await asyncio.sleep(0.5)
-                    except (MondayError, Exception) as e:
+                    except Exception as e:
                         result["errors"].append(f"Retry item {item_id}: {e}")
 
             result["success"] = True
@@ -1037,8 +1102,8 @@ class MondayClient:
         board_id: int,
         source_column_id: str,
         source_column_title: str,
-        progress_callback: Optional[callable] = None,
-        name_mapper: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+        name_mapper: Optional[Callable[..., Any]] = None,
         max_concurrent: int = 5
     ) -> dict:
         """Synchronous wrapper for migrate_column_to_dropdown."""
@@ -1102,17 +1167,17 @@ class MondayClient:
 
                 # Skip if column ID is missing (malformed data)
                 if not col_id:
-                    print(f"Skipping column '{col_name}' with missing ID")
+                    logger.debug("Skipping column '%s' with missing ID", col_name)
                     continue
 
                 # Skip read-only column types
                 if col_type in self.READ_ONLY_COLUMN_TYPES:
-                    print(f"Skipping read-only column '{col_name}' (type: {col_type})")
+                    logger.debug("Skipping read-only column '%s' (type: %s)", col_name, col_type)
                     continue
 
                 # Also skip by column ID prefix (backup check)
                 if col_id.startswith(self.READ_ONLY_COLUMN_ID_PREFIXES):
-                    print(f"Skipping read-only column '{col_name}' (id: {col_id})")
+                    logger.debug("Skipping read-only column '%s' (id: %s)", col_name, col_id)
                     continue
 
                 column_id_map[col_name] = col_id
@@ -1132,7 +1197,7 @@ class MondayClient:
                     # Wait for Monday.com to process
                     await asyncio.sleep(1.0)
                 except MondayError as e:
-                    print(f"Warning: Could not create column '{col_name}': {e}")
+                    logger.warning("Could not create column '%s': %s", col_name, e)
                     continue
 
         return column_id_map, column_type_map
@@ -1259,10 +1324,10 @@ class MondayClient:
             # Always clean up the temporary item
             try:
                 await self.delete_item(temp.id)
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Failed to delete temp item %s on board %s",
-                    temp.id, board_id,
+                    "Failed to delete temp item %s on board %s: %s",
+                    temp.id, board_id, exc,
                 )
 
         logger.info(
@@ -1270,6 +1335,196 @@ class MondayClient:
             missing, board_id, column_id,
         )
         return missing
+
+    async def deduplicate_dropdown_labels(
+        self,
+        board_id: int,
+        column_id: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Find and remove duplicate dropdown labels on a board.
+
+        Duplicate labels share the same name but have different IDs.
+        For each group of duplicates, the label with the lowest ID is kept
+        (canonical) and items referencing higher IDs are updated.
+
+        Args:
+            board_id: Board containing the dropdown column.
+            column_id: Column ID of the dropdown.
+            dry_run: If True, only report duplicates without fixing.
+
+        Returns:
+            Dict with keys: duplicates_found, items_updated, labels_removed,
+            and detail (list of {name, canonical_id, duplicate_ids}).
+        """
+        result = {
+            "duplicates_found": 0,
+            "items_updated": 0,
+            "labels_removed": 0,
+            "detail": [],
+        }
+
+        # Step 1: Get all labels from column settings
+        columns = await self.list_columns(board_id)
+        settings = {}
+        for col in columns:
+            if col["id"] == column_id:
+                settings = json.loads(col.get("settings_str", "{}"))
+                break
+
+        raw_labels = settings.get("labels", [])
+        if not raw_labels:
+            return result
+
+        # Normalize to list of {id, name}
+        label_entries: list[dict] = []
+        if isinstance(raw_labels, list):
+            for lb in raw_labels:
+                label_entries.append({"id": lb["id"], "name": lb["name"]})
+        elif isinstance(raw_labels, dict):
+            for key, val in raw_labels.items():
+                if isinstance(val, str):
+                    label_entries.append({"id": int(key), "name": val})
+                elif isinstance(val, dict):
+                    label_entries.append({
+                        "id": val.get("id", int(key)),
+                        "name": val["name"],
+                    })
+
+        # Step 2: Group by name to find duplicates
+        name_to_ids: dict[str, list[int]] = defaultdict(list)
+        for entry in label_entries:
+            name_to_ids[entry["name"]].append(entry["id"])
+
+        duplicate_groups = {
+            name: sorted(ids)
+            for name, ids in name_to_ids.items()
+            if len(ids) > 1
+        }
+
+        if not duplicate_groups:
+            return result
+
+        result["duplicates_found"] = sum(
+            len(ids) - 1 for ids in duplicate_groups.values()
+        )
+        for name, ids in duplicate_groups.items():
+            result["detail"].append({
+                "name": name,
+                "canonical_id": ids[0],
+                "duplicate_ids": ids[1:],
+            })
+
+        if dry_run:
+            return result
+
+        # Step 3: Read all items and fix references to duplicate label IDs
+        # Build a mapping: duplicate_id -> canonical_id
+        dup_to_canonical: dict[int, int] = {}
+        for name, ids in duplicate_groups.items():
+            canonical = ids[0]
+            for dup_id in ids[1:]:
+                dup_to_canonical[dup_id] = canonical
+
+        all_items = await self.extract_board_data(board_id)
+        for item in all_items:
+            for cv in item.get("column_values", []):
+                if cv["id"] != column_id or not cv.get("value"):
+                    continue
+
+                try:
+                    val = json.loads(cv["value"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                label_ids = val.get("ids", [])
+                if not label_ids:
+                    continue
+
+                new_ids = []
+                changed = False
+                for lid in label_ids:
+                    if lid in dup_to_canonical:
+                        new_ids.append(dup_to_canonical[lid])
+                        changed = True
+                    else:
+                        new_ids.append(lid)
+
+                if changed:
+                    # Deduplicate in case canonical was already present
+                    new_ids = list(dict.fromkeys(new_ids))
+                    await self.update_item_column_values(
+                        item_id=item["id"],
+                        board_id=board_id,
+                        column_values={column_id: {"ids": [str(i) for i in new_ids]}},
+                        create_labels_if_missing=False,
+                    )
+                    result["items_updated"] += 1
+                    await asyncio.sleep(RATE_LIMIT_DELAY)
+
+        result["labels_removed"] = result["duplicates_found"]
+
+        logger.info(
+            "deduplicate_dropdown_labels: board %s col %s — "
+            "fixed %d items, removed %d duplicate labels",
+            board_id, column_id,
+            result["items_updated"], result["labels_removed"],
+        )
+        return result
+
+    def deduplicate_dropdown_labels_sync(
+        self,
+        board_id: int,
+        column_id: str,
+        dry_run: bool = True,
+    ) -> dict:
+        """Synchronous wrapper for deduplicate_dropdown_labels."""
+        return asyncio.run(
+            self.deduplicate_dropdown_labels(board_id, column_id, dry_run)
+        )
+
+    async def _preseed_dropdown_labels(
+        self,
+        board_id: int,
+        df: pd.DataFrame,
+        column_id_map: dict[str, str],
+        column_type_map: Optional[dict[str, str]] = None,
+    ) -> dict[str, dict[str, int]]:
+        """Pre-seed dropdown labels and return {col_name: {label_text: label_id}}.
+
+        Ensures all unique dropdown values exist as labels before batch upload,
+        avoiding duplicate labels from concurrent ``create_labels_if_missing``.
+        """
+        dropdown_label_maps: dict[str, dict[str, int]] = {}
+        column_type_map = column_type_map or {}
+
+        for col_name, col_id in column_id_map.items():
+            is_dropdown = (
+                column_type_map.get(col_name) == "dropdown"
+                or col_name in self.DROPDOWN_COLUMNS
+            )
+            if not is_dropdown or col_name not in df.columns:
+                continue
+
+            unique_values = (
+                df[col_name].dropna().astype(str).str.strip().unique().tolist()
+            )
+            unique_values = [v for v in unique_values if v]
+            if not unique_values:
+                continue
+
+            await self.ensure_dropdown_labels(board_id, col_id, unique_values)
+            label_map = await self.get_dropdown_label_map(board_id, col_id)
+            if label_map:
+                dropdown_label_maps[col_name] = label_map
+            else:
+                logger.warning(
+                    "_preseed_dropdown_labels: label map empty for column '%s' "
+                    "(board %s, col %s) — falling back to text-based labels",
+                    col_name, board_id, col_id,
+                )
+
+        return dropdown_label_maps
 
     # -------------------------------------------------------------------------
     # Batch upload
@@ -1283,7 +1538,8 @@ class MondayClient:
         self,
         value: Any,
         column_name: str,
-        actual_type: Optional[str] = None
+        actual_type: Optional[str] = None,
+        dropdown_label_id: Optional[int] = None,
     ) -> Any:
         """Format a value for Monday.com API based on actual column type.
 
@@ -1291,6 +1547,7 @@ class MondayClient:
             value: The value to format
             column_name: Column name (used as fallback for type lookup)
             actual_type: Actual Monday.com column type string (e.g., "text", "numbers")
+            dropdown_label_id: Pre-resolved label ID for dropdown columns (avoids duplicates)
         """
         if pd.isna(value) or value is None or value == "":
             return None
@@ -1317,7 +1574,8 @@ class MondayClient:
                 return None
 
             elif actual_type == "dropdown" or is_dropdown_column:
-                # Dropdown uses labels array format
+                if dropdown_label_id is not None:
+                    return {"ids": [str(dropdown_label_id)]}
                 return {"labels": [str(value)]}
 
             elif actual_type in ("status", "color"):
@@ -1336,7 +1594,7 @@ class MondayClient:
 
             else:
                 # text, short_text, and other text-like columns
-                return str(value) if value else None
+                return str(value) if value is not None else None
 
         # Fallback to our mapping if actual_type not provided
         col_type = self.COLUMN_TYPE_MAPPING.get(column_name, ColumnType.TEXT)
@@ -1356,7 +1614,8 @@ class MondayClient:
             return None
 
         elif col_type == ColumnType.DROPDOWN or is_dropdown_column:
-            # Dropdown uses labels array format (supports 1000+ options)
+            if dropdown_label_id is not None:
+                return {"ids": [str(dropdown_label_id)]}
             return {"labels": [str(value)]}
 
         elif col_type == ColumnType.STATUS:
@@ -1375,7 +1634,7 @@ class MondayClient:
 
         else:
             # Text column
-            return str(value) if value else None
+            return str(value) if value is not None else None
 
     # Column ID prefixes that indicate read-only columns
     READ_ONLY_COLUMN_ID_PREFIXES = (
@@ -1396,7 +1655,8 @@ class MondayClient:
         self,
         row: pd.Series,
         column_id_map: dict[str, str],
-        column_type_map: Optional[dict[str, str]] = None
+        column_type_map: Optional[dict[str, str]] = None,
+        dropdown_label_maps: Optional[dict[str, dict[str, int]]] = None,
     ) -> dict:
         """Convert a DataFrame row to Monday.com column_values format.
 
@@ -1407,9 +1667,11 @@ class MondayClient:
             row: DataFrame row to convert
             column_id_map: column_name -> column_id mapping
             column_type_map: column_name -> actual Monday.com type (optional)
+            dropdown_label_maps: {col_name: {label_text: label_id}} for dropdown columns
         """
         column_values = {}
         column_type_map = column_type_map or {}
+        dropdown_label_maps = dropdown_label_maps or {}
 
         for col_name, col_id in column_id_map.items():
             # Skip read-only columns (formula, auto_number, etc.)
@@ -1419,7 +1681,16 @@ class MondayClient:
 
             if col_name in row.index and col_name != "Nom Client":
                 actual_type = column_type_map.get(col_name)
-                formatted = self._format_column_value(row[col_name], col_name, actual_type)
+
+                # Resolve dropdown label ID if available
+                label_id = None
+                if col_name in dropdown_label_maps and not pd.isna(row[col_name]):
+                    label_text = str(row[col_name]).strip()
+                    label_id = dropdown_label_maps[col_name].get(label_text)
+
+                formatted = self._format_column_value(
+                    row[col_name], col_name, actual_type, label_id
+                )
                 if formatted is not None:
                     column_values[col_id] = formatted
 
@@ -1433,7 +1704,7 @@ class MondayClient:
         item_name_column: str = "Nom Client",
         create_missing_columns: bool = True,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[Callable[..., Any]] = None
     ) -> UploadResult:
         """
         Upload a DataFrame to Monday.com.
@@ -1479,13 +1750,24 @@ class MondayClient:
                 if col["title"] in columns_to_create
             }
 
-        # Upload items with rate limiting
+        # Pre-seed dropdown labels to avoid duplicates from concurrent creation
+        dropdown_label_maps = await self._preseed_dropdown_labels(
+            board_id, df, column_id_map, column_type_map
+        )
+
+        # Upload items with rate limiting and retry
         semaphore = asyncio.Semaphore(max_concurrent)
+        upload_retries = 2  # up to 2 extra attempts per row
 
         async def upload_row(idx: int, row: pd.Series) -> CreateResult:
             async with semaphore:
                 item_name = str(row.get(item_name_column, f"Item {idx}"))
-                column_values = self._row_to_column_values(row, column_id_map, column_type_map)
+                column_values = self._row_to_column_values(
+                    row, column_id_map, column_type_map, dropdown_label_maps
+                )
+
+                # Throttle BEFORE sending to control actual request rate
+                await asyncio.sleep(RATE_LIMIT_DELAY)
 
                 create_result = await self.create_item(
                     board_id=board_id,
@@ -1494,8 +1776,22 @@ class MondayClient:
                     column_values=column_values
                 )
 
-                # Rate limiting
-                await asyncio.sleep(RATE_LIMIT_DELAY)
+                # Retry on failure with exponential backoff
+                for retry in range(upload_retries):
+                    if create_result.success:
+                        break
+                    delay = RETRY_BASE_DELAY * (2 ** retry) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"create_item retry {retry + 1}/{upload_retries} for "
+                        f"'{item_name}' in {delay:.1f}s: {create_result.error}"
+                    )
+                    await asyncio.sleep(delay)
+                    create_result = await self.create_item(
+                        board_id=board_id,
+                        item_name=item_name,
+                        group_id=group_id,
+                        column_values=column_values
+                    )
 
                 if progress_callback:
                     progress_callback(idx + 1, result.total)
@@ -1696,6 +1992,14 @@ class MondayClient:
     # all MondayClient instances.  Used to enforce a global cooldown so
     # back-to-back board loads don't exhaust the 10k values/min budget.
     _last_formula_request_time: float = 0.0
+    _formula_cooldown_lock: asyncio.Lock = None  # type: ignore[assignment]
+
+    @classmethod
+    def _get_formula_lock(cls) -> asyncio.Lock:
+        """Lazily create the formula cooldown lock (must be in an event loop)."""
+        if cls._formula_cooldown_lock is None:
+            cls._formula_cooldown_lock = asyncio.Lock()
+        return cls._formula_cooldown_lock
 
     async def _enrich_formula_columns(
         self,
@@ -1737,18 +2041,19 @@ class MondayClient:
             f"for {len(items)} items"
         )
 
-        # --- Global cooldown ---
+        # --- Global cooldown (lock-protected to prevent TOCTOU race) ---
         # If another board was enriched recently, wait until enough budget
         # has regenerated (at least 15 s between enrichment runs).
-        now = time.monotonic()
-        elapsed = now - MondayClient._last_formula_request_time
-        cooldown = 15.0
-        if elapsed < cooldown:
-            wait = cooldown - elapsed
-            logger.info(
-                f"Formula enrichment: global cooldown — waiting {wait:.1f}s"
-            )
-            await asyncio.sleep(wait)
+        async with self._get_formula_lock():
+            now = time.monotonic()
+            elapsed = now - MondayClient._last_formula_request_time
+            cooldown = 15.0
+            if elapsed < cooldown:
+                wait = cooldown - elapsed
+                logger.info(
+                    f"Formula enrichment: global cooldown — waiting {wait:.1f}s"
+                )
+                await asyncio.sleep(wait)
 
         # Build item_id → {col_id → col_val reference} map
         item_cv_map: dict[str, dict[str, dict]] = {}
@@ -1888,8 +2193,6 @@ class MondayClient:
 
         Returns float if numeric, raw text if not, None if empty.
         """
-        import json as json_module
-
         # 1. display_value — most reliable for formula results
         #    Use `is not None` (not truthiness) to handle numeric 0
         display = col_val.get("display_value")
@@ -1908,7 +2211,7 @@ class MondayClient:
         raw_value = col_val.get("value")
         if raw_value:
             try:
-                parsed = json_module.loads(raw_value)
+                parsed = json.loads(raw_value)
                 if isinstance(parsed, (int, float)):
                     return float(parsed)
                 if isinstance(parsed, dict):
@@ -2004,8 +2307,7 @@ class MondayClient:
                     try:
                         raw_value = col_val.get("value")
                         if raw_value:
-                            import json as json_module
-                            parsed = json_module.loads(raw_value)
+                            parsed = json.loads(raw_value)
                             row[col_title] = float(parsed) if parsed else None
                         else:
                             row[col_title] = None
@@ -2106,7 +2408,8 @@ class MondayClient:
         try:
             await self._execute_query(mutation)
             return True
-        except MondayError:
+        except MondayError as e:
+            logger.error("update_item_column_values failed for item %s: %s", item_id, e)
             return False
 
     async def move_item_to_group(
@@ -2150,7 +2453,7 @@ class MondayClient:
         column_id_map: dict[str, str],
         column_type_map: Optional[dict[str, str]] = None,
         advisor_column_name: str = "Conseiller",
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
     ) -> dict:
         """
         Upsert data by advisor - update existing items or create new ones.
@@ -2175,6 +2478,11 @@ class MondayClient:
         result = {"updated": 0, "created": 0, "errors": []}
         column_type_map = column_type_map or {}
         total = len(data)
+
+        # Pre-seed dropdown labels to avoid duplicates
+        dropdown_label_maps = await self._preseed_dropdown_labels(
+            board_id, data, column_id_map, column_type_map
+        )
 
         for idx, row in data.iterrows():
             advisor_name = row.get(advisor_column_name)
@@ -2211,7 +2519,17 @@ class MondayClient:
                     # Skip formula columns - they are auto-calculated and can't be updated
                     if actual_type == "formula":
                         continue
-                    formatted = self._format_column_value(row[col_name], col_name, actual_type)
+
+                    # Resolve dropdown label ID
+                    label_id = None
+                    if col_name in dropdown_label_maps and not pd.isna(row[col_name]):
+                        label_id = dropdown_label_maps[col_name].get(
+                            str(row[col_name]).strip()
+                        )
+
+                    formatted = self._format_column_value(
+                        row[col_name], col_name, actual_type, label_id
+                    )
                     if formatted is not None:
                         column_values[col_id] = formatted
 
@@ -2223,11 +2541,13 @@ class MondayClient:
                 try:
                     # Update column values
                     if column_values:
-                        await self.update_item_column_values(
+                        success = await self.update_item_column_values(
                             item_id=item_id,
                             board_id=board_id,
                             column_values=column_values,
                         )
+                        if not success:
+                            result["errors"].append(f"Update failed for {advisor_name}")
 
                     result["updated"] += 1
                 except MondayError as e:
@@ -2237,7 +2557,14 @@ class MondayClient:
                 # (advisor doesn't exist in this group yet, even if in other groups)
                 # Format advisor column value based on actual column type
                 advisor_type = column_type_map.get(advisor_column_name)
-                advisor_formatted = self._format_column_value(advisor_name, advisor_column_name, advisor_type)
+                advisor_label_id = None
+                if advisor_column_name in dropdown_label_maps:
+                    advisor_label_id = dropdown_label_maps[advisor_column_name].get(
+                        str(advisor_name).strip()
+                    )
+                advisor_formatted = self._format_column_value(
+                    advisor_name, advisor_column_name, advisor_type, advisor_label_id
+                )
                 if advisor_formatted is not None:
                     column_values[advisor_column_id] = advisor_formatted
 
@@ -2272,7 +2599,7 @@ class MondayClient:
         column_id_map: dict[str, str],
         column_type_map: Optional[dict[str, str]] = None,
         advisor_column_name: str = "Conseiller",
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
     ) -> dict:
         """
         Upsert data using item name as the identifier (for boards without a Conseiller column).
@@ -2295,6 +2622,11 @@ class MondayClient:
         result = {"updated": 0, "created": 0, "errors": []}
         column_type_map = column_type_map or {}
         total = len(data)
+
+        # Pre-seed dropdown labels to avoid duplicates
+        dropdown_label_maps = await self._preseed_dropdown_labels(
+            board_id, data, column_id_map, column_type_map
+        )
 
         # Get all existing items in the target group
         try:
@@ -2324,7 +2656,17 @@ class MondayClient:
                     # Skip formula columns - they are auto-calculated and can't be updated
                     if actual_type == "formula":
                         continue
-                    formatted = self._format_column_value(row[col_name], col_name, actual_type)
+
+                    # Resolve dropdown label ID
+                    label_id = None
+                    if col_name in dropdown_label_maps and not pd.isna(row[col_name]):
+                        label_id = dropdown_label_maps[col_name].get(
+                            str(row[col_name]).strip()
+                        )
+
+                    formatted = self._format_column_value(
+                        row[col_name], col_name, actual_type, label_id
+                    )
                     if formatted is not None:
                         column_values[col_id] = formatted
 
@@ -2835,7 +3177,7 @@ class MondayClient:
         column_id_map: dict[str, str],
         column_type_map: Optional[dict[str, str]] = None,
         advisor_column_name: str = "Conseiller",
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
     ) -> dict:
         """Synchronous wrapper for upsert_by_advisor."""
         return asyncio.run(
@@ -2859,7 +3201,7 @@ class MondayClient:
         column_id_map: dict[str, str],
         column_type_map: Optional[dict[str, str]] = None,
         advisor_column_name: str = "Conseiller",
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
     ) -> dict:
         """Synchronous wrapper for upsert_by_item_name."""
         return asyncio.run(
@@ -2890,7 +3232,7 @@ class MondayClient:
         group_id: Optional[str] = None,
         item_name_column: str = "Nom Client",
         create_missing_columns: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[Callable[..., Any]] = None
     ) -> UploadResult:
         """Synchronous wrapper for upload_dataframe."""
         return asyncio.run(

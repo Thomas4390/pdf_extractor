@@ -325,7 +325,7 @@ class BaseExtractor(ABC, Generic[T]):
                     except Exception as e:
                         chunk_start = idx * MAX_PAGES_PER_CHUNK
                         chunk_end = chunk_start + len(chunk) - 1
-                        raise type(e)(
+                        raise RuntimeError(
                             f"[{self.document_type}] Chunk {idx + 1}/{len(chunks)} "
                             f"(pages {chunk_start}-{chunk_end}) failed: {e}"
                         ) from e
