@@ -1372,6 +1372,38 @@ def _render_reconciliation_tab(df: pd.DataFrame) -> None:
         styled_cb = cb_view_df.style.apply(_highlight_status, axis=1)
         st.dataframe(styled_cb, width="stretch", height=400, hide_index=True)
 
+    # --- Red rows table (NOT_FOUND from both sales tables) + xlsx export ---
+    status_col = "Statut Rapp."
+    red_parts = []
+    if not sales_view_df.empty and status_col in sales_view_df.columns:
+        red_sales = sales_view_df[sales_view_df[status_col] == ReconciliationStatus.NOT_FOUND.value]
+        if not red_sales.empty:
+            red_parts.append(red_sales)
+    if not cb_view_df.empty and status_col in cb_view_df.columns:
+        red_cb = cb_view_df[cb_view_df[status_col] == ReconciliationStatus.NOT_FOUND.value]
+        if not red_cb.empty:
+            red_parts.append(red_cb)
+
+    if red_parts:
+        red_df = pd.concat(red_parts, ignore_index=True)
+        st.subheader(f"Anomalies — Non trouvés ({len(red_df)} lignes)")
+        styled_red = red_df.style.apply(
+            lambda row: ["background-color: rgba(244, 67, 54, 0.15)"] * len(row),
+            axis=1,
+        )
+        st.dataframe(styled_red, width="stretch", height=400, hide_index=True)
+
+        # Excel export
+        buf = io.BytesIO()
+        red_df.to_excel(buf, index=False, engine="openpyxl")
+        buf.seek(0)
+        st.download_button(
+            label="Exporter les anomalies (.xlsx)",
+            data=buf,
+            file_name="anomalies_non_trouves.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     # --- Historical payments table ---
     hist_view_df = result.to_hist_view_dataframe(df)
 
