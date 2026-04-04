@@ -221,6 +221,18 @@ def _load_aggregation_data_thread(
             from src.utils.advisor_matcher import normalize_advisor_name_full
             from src.utils.advisor_status import AdvisorStatusCalculator
 
+            # Skip reload if the class-level cache is already populated —
+            # the advisor first-appearance map doesn't depend on the
+            # selected period, so it stays valid across period changes.
+            if (
+                AdvisorStatusCalculator._cache_loaded
+                and AdvisorStatusCalculator._first_appearance_cache
+            ):
+                _update_progress(
+                    "📊 Historique conseillers — réutilisé depuis le cache",
+                )
+                return 0
+
             try:
                 groups = await client.list_groups(history_board_id)
 
@@ -234,6 +246,24 @@ def _load_aggregation_data_thread(
 
                 if not sorted_groups:
                     _update_progress("📊 Historique conseillers — aucun groupe")
+                    return 0
+
+                # Only load months up to and including the selected period:
+                # advisors can only be "new" relative to earlier months, so
+                # months strictly after the selected period don't change the
+                # first-appearance map.
+                selected_ym = _date_range_end_year_month(date_range)
+                if selected_ym is not None:
+                    sel_year, sel_month = selected_ym
+                    sorted_groups = [
+                        (y, m, g) for (y, m, g) in sorted_groups
+                        if (y, m) <= (sel_year, sel_month)
+                    ]
+
+                if not sorted_groups:
+                    _update_progress(
+                        "📊 Historique conseillers — aucun mois antérieur",
+                    )
                     return 0
 
                 # Update total now that we know how many groups there are
@@ -434,6 +464,24 @@ def start_background_aggregation_load() -> bool:
     thread.start()
 
     return True
+
+
+def _date_range_end_year_month(
+    date_range: Optional[tuple[str, str]],
+) -> Optional[tuple[int, int]]:
+    """Extract (year, month) from the end of a (start_iso, end_iso) range.
+
+    Returns None if the range is not provided or can't be parsed. Used to
+    prune advisor-history months strictly after the user's selected period.
+    """
+    if not date_range:
+        return None
+    try:
+        _, end_iso = date_range
+        parts = end_iso.split("-")
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return None
 
 
 def _resolve_selected_date_range() -> Optional[tuple[str, str]]:
