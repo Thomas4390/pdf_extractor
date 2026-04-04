@@ -154,6 +154,72 @@ def render_agg_step_1_config() -> None:
 
     st.markdown("---")
 
+    # Period selector — chosen BEFORE loading so the API-side date filter
+    # fetches only the items we need.
+    st.subheader("📅 Période à analyser")
+
+    # Initialize default period if unset
+    if st.session_state.get("agg_flexible_period") is None:
+        st.session_state.agg_flexible_period = FlexiblePeriod(
+            period_type=PeriodType.MONTH, months_ago=1,
+        )
+    if st.session_state.get("agg_period") is None:
+        st.session_state.agg_period = DatePeriod.MONTH_1
+
+    current_flex = st.session_state.agg_flexible_period
+    default_month_index = 1
+    if current_flex.period_type == PeriodType.MONTH:
+        default_month_index = min(max(current_flex.months_ago, 0), 11)
+
+    col_picker, col_apply = st.columns([3, 1])
+    with col_picker:
+        selected_month = st.selectbox(
+            "Mois à extraire",
+            options=range(12),
+            index=default_month_index,
+            format_func=lambda i: (
+                f"{DatePeriod(i).display_name} ({DatePeriod(i).short_label})"
+            ),
+            key="agg_step1_month_selector",
+            label_visibility="collapsed",
+        )
+    with col_apply:
+        if st.button("Appliquer", key="agg_step1_apply_period", width="stretch"):
+            new_flex = FlexiblePeriod(
+                period_type=PeriodType.MONTH, months_ago=selected_month,
+            )
+            new_legacy = DatePeriod(selected_month)
+            # If the loaded data was filtered for a different window,
+            # invalidate the cache so the next load fetches the right data.
+            old_flex = st.session_state.agg_flexible_period
+            period_actually_changed = (
+                old_flex.period_type != PeriodType.MONTH
+                or old_flex.months_ago != selected_month
+            )
+            if (
+                st.session_state.get("agg_data_loaded")
+                and period_actually_changed
+            ):
+                reset_background_aggregation_data()
+                st.session_state.agg_data_loaded = False
+                st.session_state.agg_source_data = {}
+            st.session_state.agg_flexible_period = new_flex
+            st.session_state.agg_period = new_legacy
+            st.rerun()
+
+    current_flex = st.session_state.agg_flexible_period
+    start_date, end_date = current_flex.get_date_range()
+    st.caption(
+        f"📆 **{current_flex.display_name}** — du "
+        f"{start_date.strftime('%d/%m/%Y')} au {end_date.strftime('%d/%m/%Y')}"
+    )
+    st.info(
+        "💡 Besoin d'une semaine, trimestre, année ou plage personnalisée ? "
+        "Choisis un mois ici pour charger, puis affine sur l'Étape 2."
+    )
+
+    st.markdown("---")
+
     # Data loading status
     st.subheader("📥 Chargement des données")
 
@@ -179,7 +245,7 @@ def render_agg_step_1_config() -> None:
             st.session_state.agg_data_loaded = False
             st.session_state.agg_source_data = {}
             reset_background_aggregation_data()
-            load_source_data()
+            start_background_aggregation_load()
             st.rerun()
 
     else:
@@ -218,13 +284,19 @@ def render_agg_step_1_config() -> None:
                 st.rerun()
 
         else:
-            st.info("Chargement automatique des données...")
-            if st.session_state.agg_selected_sources:
-                if start_background_aggregation_load():
-                    st.rerun()
-                else:
-                    load_source_data()
-                    st.rerun()
+            # Explicit load trigger: uses the period selected above.
+            if st.button(
+                "📥 Charger les données",
+                type="primary",
+                key="agg_step1_load_btn",
+                width="stretch",
+            ):
+                if st.session_state.agg_selected_sources:
+                    if start_background_aggregation_load():
+                        st.rerun()
+                    else:
+                        load_source_data()
+                        st.rerun()
 
     # Navigation
     can_proceed = st.session_state.get("agg_data_loaded", False)
@@ -388,12 +460,15 @@ def render_agg_step_2_period_preview() -> None:
             )
             period_changed = True
 
-    # If period changed, re-filter data and auto-import metrics
+    # If period changed, we need fresh data (server-side filter is tied to
+    # the period that was loaded). Invalidate cache, trigger reload, and
+    # bounce the user back to Step 1 where the loading UI handles progress.
     if period_changed:
-        with st.spinner("⏳ Filtrage et agrégation des données..."):
-            filter_and_aggregate_data()
-        with st.spinner("📊 Import des métriques..."):
-            apply_metrics_to_aggregation(silent=True)
+        reset_background_aggregation_data()
+        st.session_state.agg_data_loaded = False
+        st.session_state.agg_source_data = {}
+        start_background_aggregation_load()
+        st.session_state.agg_step = 1
         st.rerun()
 
     # Show current period info

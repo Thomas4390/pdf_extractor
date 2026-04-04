@@ -18,6 +18,9 @@ _background_agg_data: dict = {}
 _background_agg_loading: bool = False
 _background_agg_error: Optional[str] = None
 _background_agg_progress: dict = {}
+# Date range used for the last successful load. Used to invalidate the
+# cache when the user switches to a period outside the loaded window.
+_background_agg_date_range: Optional[tuple[str, str]] = None
 
 
 def get_board_name_by_id(boards: list[dict], board_id: int, fallback: str = "Unknown") -> str:
@@ -125,7 +128,8 @@ def _load_aggregation_data_thread(
             Falls back to client-side filtering if the board's date column
             can't be resolved.
     """
-    global _background_agg_data, _background_agg_loading, _background_agg_error, _background_agg_progress
+    global _background_agg_data, _background_agg_loading, _background_agg_error
+    global _background_agg_progress, _background_agg_date_range
 
     import asyncio
 
@@ -135,6 +139,7 @@ def _load_aggregation_data_thread(
     _background_agg_loading = True
     _background_agg_error = None
     _background_agg_data = {}
+    _background_agg_date_range = date_range
 
     if board_names is None:
         board_names = {}
@@ -363,23 +368,46 @@ def start_background_aggregation_load() -> bool:
     Returns:
         True if loading was started, False if already loading, data exists, or no API key
     """
-    global _background_agg_loading, _background_agg_data
+    global _background_agg_loading, _background_agg_data, _background_agg_date_range
 
     # Don't reload if already loading
     if _background_agg_loading:
         return False
 
-    # Don't reload if background data already exists
+    # Resolve requested period to (start_iso, end_iso).
+    requested_range = _resolve_selected_date_range()
+
+    # If the user switched to a period outside the loaded window, invalidate
+    # the cache so we reload with the new server-side filter applied.
+    if (
+        _background_agg_date_range is not None
+        and _background_agg_date_range != requested_range
+    ):
+        _background_agg_data = {}
+        st.session_state.agg_source_data = {}
+        st.session_state.agg_data_loaded = False
+        _background_agg_date_range = None
+
+    # Don't reload if background data already exists (and still covers the
+    # current period — checked above)
     if _background_agg_data and not _background_agg_error:
         return False
 
     # Don't reload if session state already has valid data (cache check)
     existing_data = st.session_state.get("agg_source_data", {})
     data_loaded = st.session_state.get("agg_data_loaded", False)
-    if data_loaded and existing_data and any(
-        not df.empty for df in existing_data.values() if hasattr(df, 'empty')
+    loaded_range = st.session_state.get("agg_loaded_date_range")
+    if (
+        data_loaded
+        and existing_data
+        and loaded_range == requested_range
+        and any(not df.empty for df in existing_data.values() if hasattr(df, 'empty'))
     ):
         return False
+    # Range mismatch in session state — force reload by clearing the cache.
+    if data_loaded and loaded_range != requested_range:
+        st.session_state.agg_source_data = {}
+        st.session_state.agg_data_loaded = False
 
     api_key = st.session_state.get("monday_api_key")
     if not api_key:
@@ -396,14 +424,11 @@ def start_background_aggregation_load() -> bool:
         for b in boards:
             board_names[int(b["id"])] = b["name"]
 
-    # Resolve selected period to (start_iso, end_iso) for server-side filtering.
     # Falls back to None (full board fetch) on any error — client-side filter
     # in filter_and_aggregate_data() will still apply correctly.
-    date_range = _resolve_selected_date_range()
-
     thread = threading.Thread(
         target=_load_aggregation_data_thread,
-        args=(api_key, selected_sources, board_names, date_range),
+        args=(api_key, selected_sources, board_names, requested_range),
         daemon=True,
     )
     thread.start()
@@ -455,15 +480,20 @@ def apply_background_aggregation_data() -> bool:
 
     st.session_state.agg_source_data = _background_agg_data.copy()
     st.session_state.agg_data_loaded = True
+    # Remember the date range this data was filtered for, so later calls
+    # can detect when the user needs fresh data for a different period.
+    st.session_state.agg_loaded_date_range = _background_agg_date_range
 
     return True
 
 
 def reset_background_aggregation_data() -> None:
     """Reset the background aggregation data."""
-    global _background_agg_data, _background_agg_loading, _background_agg_error, _background_agg_progress
+    global _background_agg_data, _background_agg_loading, _background_agg_error
+    global _background_agg_progress, _background_agg_date_range
 
     _background_agg_data = {}
     _background_agg_loading = False
     _background_agg_error = None
     _background_agg_progress = {}
+    _background_agg_date_range = None
