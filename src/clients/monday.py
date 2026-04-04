@@ -223,6 +223,10 @@ class MondayClient:
             "API-Version": "2025-04"
         }
 
+        # Per-instance cache: board_id -> {column_title: column_id}.
+        # Populated lazily by _resolve_column_id_by_title().
+        self._column_id_cache: dict[int, dict[str, str]] = {}
+
     # -------------------------------------------------------------------------
     # Low-level API methods
     # -------------------------------------------------------------------------
@@ -617,6 +621,27 @@ class MondayClient:
         if not boards:
             raise MondayError(f"Board {board_id} not found or not accessible")
         return boards[0]["columns"]
+
+    async def _resolve_column_id_by_title(
+        self, board_id: int, column_title: str,
+    ) -> Optional[str]:
+        """Resolve a column's ID from its title, with per-board caching.
+
+        Returns None if the title is not found on the board.
+        The cache is populated on first call for each board.
+        """
+        title_map = self._column_id_cache.get(board_id)
+        if title_map is None:
+            try:
+                columns = await self.list_columns(board_id)
+            except MondayError as e:
+                logger.warning(
+                    f"Could not list columns for board {board_id}: {e}"
+                )
+                return None
+            title_map = {col["title"]: col["id"] for col in columns}
+            self._column_id_cache[board_id] = title_map
+        return title_map.get(column_title)
 
     async def create_column(
         self,
@@ -1825,12 +1850,32 @@ class MondayClient:
     # Data extraction (read operations)
     # -------------------------------------------------------------------------
 
+    # GraphQL fragment for the item fields we always want back.
+    _ITEM_FIELDS = """
+        id
+        name
+        group {
+            id
+            title
+        }
+        column_values {
+            id
+            text
+            value
+            column {
+                title
+                type
+            }
+        }
+    """
+
     async def extract_board_data(
         self,
         board_id: int,
         group_id: Optional[str] = None,
         limit: int = 500,
         skip_formula_enrichment: bool = False,
+        date_filter: Optional[tuple[str, str, str]] = None,
     ) -> list[dict]:
         """
         Extract all items from a board with pagination.
@@ -1842,42 +1887,57 @@ class MondayClient:
             skip_formula_enrichment: If True, skip the slow FormulaValue
                 enrichment pass.  Callers can later call
                 ``enrich_formula_columns()`` on a subset of items.
+            date_filter: Optional (column_id, start_date, end_date) to filter
+                server-side via items_page query_params with the between
+                operator. Dates are ISO strings "YYYY-MM-DD". Ignored if
+                group_id is also provided (mutually exclusive).
 
         Returns:
             List of item dictionaries with column values
         """
         all_items = []
-        cursor = None
+        cursor: Optional[str] = None
+
+        # date_filter is only applied at the board level; combining it with a
+        # group filter is not supported in this query structure.
+        effective_date_filter = date_filter if not group_id else None
+        if date_filter and group_id:
+            logger.warning(
+                "extract_board_data: date_filter ignored when group_id is set"
+            )
+
+        query_params_clause = ""
+        if effective_date_filter:
+            col_id, start_iso, end_iso = effective_date_filter
+            # column_id in Monday's GraphQL is serialized as a string literal.
+            query_params_clause = (
+                f', query_params: {{ rules: [{{ '
+                f'column_id: "{col_id}", '
+                f'compare_value: ["{start_iso}", "{end_iso}"], '
+                f'operator: between '
+                f'}}] }}'
+            )
 
         while True:
-            # Build cursor argument
-            cursor_arg = f', cursor: "{cursor}"' if cursor else ""
-
-            # Build query based on whether we're filtering by group
-            if group_id:
+            if cursor:
+                # Subsequent pages: next_items_page preserves the original
+                # query_params context from the cursor.
+                query = f"""
+                {{
+                    next_items_page(limit: {limit}, cursor: "{cursor}") {{
+                        cursor
+                        items {{{self._ITEM_FIELDS}}}
+                    }}
+                }}
+                """
+            elif group_id:
                 query = f"""
                 {{
                     boards(ids: {board_id}) {{
                         groups(ids: ["{group_id}"]) {{
-                            items_page(limit: {limit}{cursor_arg}) {{
+                            items_page(limit: {limit}) {{
                                 cursor
-                                items {{
-                                    id
-                                    name
-                                    group {{
-                                        id
-                                        title
-                                    }}
-                                    column_values {{
-                                        id
-                                        text
-                                        value
-                                        column {{
-                                            title
-                                            type
-                                        }}
-                                    }}
-                                }}
+                                items {{{self._ITEM_FIELDS}}}
                             }}
                         }}
                     }}
@@ -1887,25 +1947,9 @@ class MondayClient:
                 query = f"""
                 {{
                     boards(ids: {board_id}) {{
-                        items_page(limit: {limit}{cursor_arg}) {{
+                        items_page(limit: {limit}{query_params_clause}) {{
                             cursor
-                            items {{
-                                id
-                                name
-                                group {{
-                                    id
-                                    title
-                                }}
-                                column_values {{
-                                    id
-                                    text
-                                    value
-                                    column {{
-                                        title
-                                        type
-                                    }}
-                                }}
-                            }}
+                            items {{{self._ITEM_FIELDS}}}
                         }}
                     }}
                 }}
@@ -1913,18 +1957,22 @@ class MondayClient:
 
             result = await self._execute_query(query)
 
-            # Extract items based on query structure
-            boards = result["data"]["boards"]
-            if not boards:
-                raise MondayError(f"Board {board_id} not found or not accessible")
-
-            if group_id:
-                groups = boards[0]["groups"]
-                if not groups:
-                    break
-                items_page = groups[0]["items_page"]
+            # Extract items based on query structure.
+            if cursor:
+                items_page = result["data"]["next_items_page"]
             else:
-                items_page = boards[0]["items_page"]
+                boards = result["data"]["boards"]
+                if not boards:
+                    raise MondayError(
+                        f"Board {board_id} not found or not accessible"
+                    )
+                if group_id:
+                    groups = boards[0]["groups"]
+                    if not groups:
+                        break
+                    items_page = groups[0]["items_page"]
+                else:
+                    items_page = boards[0]["items_page"]
 
             items = items_page["items"]
             cursor = items_page["cursor"]
@@ -1988,11 +2036,20 @@ class MondayClient:
                 "still missing after enrichment"
             )
 
-    # Shared timestamp tracking the last formula enrichment request across
-    # all MondayClient instances.  Used to enforce a global cooldown so
-    # back-to-back board loads don't exhaust the 10k values/min budget.
+    # Shared state tracking the last formula enrichment request across
+    # all MondayClient instances.  Used to enforce a cooldown that is
+    # proportional to the last batch's budget use (not a fixed 15s).
     _last_formula_request_time: float = 0.0
+    _last_formula_batch_values: int = 0
     _formula_cooldown_lock: asyncio.Lock = None  # type: ignore[assignment]
+
+    # Formula-column rate-limit policy: 10k values/min enforced by Monday,
+    # we use 50% of that budget to stay safe under bursty concurrency.
+    _FORMULA_RATE_LIMIT_PER_MIN: int = 10_000
+    _FORMULA_SAFE_RATE: float = 10_000 * 0.5  # values per minute
+    # Minimum cooldown between enrichments; guarantees we never go faster
+    # than once every N seconds even with tiny batches.
+    _FORMULA_MIN_COOLDOWN_S: float = 2.0
 
     @classmethod
     def _get_formula_lock(cls) -> asyncio.Lock:
@@ -2041,13 +2098,19 @@ class MondayClient:
             f"for {len(items)} items"
         )
 
-        # --- Global cooldown (lock-protected to prevent TOCTOU race) ---
-        # If another board was enriched recently, wait until enough budget
-        # has regenerated (at least 15 s between enrichment runs).
+        # --- Adaptive global cooldown (lock-protected to prevent TOCTOU) ---
+        # Required cooldown = time needed for the previous batch's budget
+        # share to regenerate. Much smaller than the previous fixed 15s for
+        # small boards (e.g. ~2s after date-filtered loads).
         async with self._get_formula_lock():
             now = time.monotonic()
             elapsed = now - MondayClient._last_formula_request_time
-            cooldown = 15.0
+            last_values = MondayClient._last_formula_batch_values
+            needed = (
+                (last_values / self._FORMULA_SAFE_RATE) * 60
+                if last_values else 0.0
+            )
+            cooldown = max(needed, self._FORMULA_MIN_COOLDOWN_S)
             if elapsed < cooldown:
                 wait = cooldown - elapsed
                 logger.info(
@@ -2076,9 +2139,8 @@ class MondayClient:
         # Rate limit: 10,000 formula values/min.
         # Each batch requests batch_size × len(col_group) values.
         # Calculate inter-batch delay to stay safely under the limit.
-        rate_limit_per_min = 10_000
-        # Use 50% of the budget to leave headroom for back-to-back boards
-        safe_rate = rate_limit_per_min * 0.5
+        # Use 50% of the budget to leave headroom for back-to-back boards.
+        safe_rate = self._FORMULA_SAFE_RATE
 
         for col_group in col_groups:
             col_ids_str = ", ".join(f'"{cid}"' for cid in col_group)
@@ -2110,6 +2172,9 @@ class MondayClient:
                     query, max_retries=max_retries
                 )
                 MondayClient._last_formula_request_time = time.monotonic()
+                # Track actual values sent so the next enrichment's cooldown
+                # can scale with this batch's budget usage.
+                MondayClient._last_formula_batch_values = len(batch_ids) * len(col_group)
 
                 if result is None:
                     continue  # Batch failed after retries, skip

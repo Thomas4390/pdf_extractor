@@ -104,7 +104,10 @@ def load_boards_async(force_rerun: bool = False) -> None:
 
 
 def _load_aggregation_data_thread(
-    api_key: str, selected_sources: dict, board_names: dict[int, str] | None = None,
+    api_key: str,
+    selected_sources: dict,
+    board_names: dict[int, str] | None = None,
+    date_range: Optional[tuple[str, str]] = None,
 ) -> None:
     """
     Background thread function to load aggregation source data.
@@ -117,6 +120,10 @@ def _load_aggregation_data_thread(
         api_key: Monday.com API key
         selected_sources: Dict of {source_key: board_id}
         board_names: Optional dict of {board_id: board_name} for display
+        date_range: Optional (start_iso, end_iso) tuple in "YYYY-MM-DD" format
+            used to push date filtering server-side via Monday query_params.
+            Falls back to client-side filtering if the board's date column
+            can't be resolved.
     """
     global _background_agg_data, _background_agg_loading, _background_agg_error, _background_agg_progress
 
@@ -166,12 +173,35 @@ def _load_aggregation_data_thread(
         # Store raw items per source for deferred formula enrichment
         _source_items: dict[str, list[dict]] = {}
 
+        async def _resolve_date_filter(
+            board_id: int, date_column_title: str,
+        ) -> Optional[tuple[str, str, str]]:
+            """Build server-side date filter for extract_board_data.
+
+            Returns None if no range available or column cannot be resolved;
+            caller will fall back to client-side date filtering.
+            """
+            if not date_range or not date_column_title:
+                return None
+            col_id = await client._resolve_column_id_by_title(
+                board_id, date_column_title,
+            )
+            if not col_id:
+                return None
+            start_iso, end_iso = date_range
+            return (col_id, start_iso, end_iso)
+
         async def _load_one_source(source_key: str, board_id: int, config) -> None:
             """Load a single source board (without formulas) and log completion."""
             display_label = board_names.get(board_id, config.display_name)
             try:
+                date_filter = await _resolve_date_filter(
+                    board_id, getattr(config, "date_column", ""),
+                )
                 items = await client.extract_board_data(
-                    board_id, skip_formula_enrichment=True,
+                    board_id,
+                    skip_formula_enrichment=True,
+                    date_filter=date_filter,
                 )
                 _source_items[source_key] = items
                 df = client.board_items_to_dataframe(items)
@@ -268,6 +298,23 @@ def _load_aggregation_data_thread(
 
             # Phase 2: Enrich formula columns sequentially per board
             # (rate limit: 10k formula values/min — sequential avoids collisions)
+
+            # Pre-count boards with formulas to keep progress total coherent
+            def _board_has_formulas(items: list[dict]) -> bool:
+                if not items:
+                    return False
+                return any(
+                    cv.get("column", {}).get("type") == "formula"
+                    for cv in items[0].get("column_values", [])
+                )
+
+            boards_with_formulas = sum(
+                1 for items in _source_items.values() if _board_has_formulas(items)
+            )
+            if boards_with_formulas:
+                progress_state["total"] += boards_with_formulas
+                _background_agg_progress["total"] = progress_state["total"]
+
             for source_key, items in _source_items.items():
                 if not items:
                     continue
@@ -277,13 +324,7 @@ def _load_aggregation_data_thread(
                 board_id = selected_sources[source_key]
                 display_label = board_names.get(board_id, config.display_name)
 
-                # Check if this board has any formula columns
-                has_formulas = any(
-                    cv.get("column", {}).get("type") == "formula"
-                    for item in items[:1]
-                    for cv in item.get("column_values", [])
-                )
-                if not has_formulas:
+                if not _board_has_formulas(items):
                     continue
 
                 try:
@@ -355,14 +396,41 @@ def start_background_aggregation_load() -> bool:
         for b in boards:
             board_names[int(b["id"])] = b["name"]
 
+    # Resolve selected period to (start_iso, end_iso) for server-side filtering.
+    # Falls back to None (full board fetch) on any error — client-side filter
+    # in filter_and_aggregate_data() will still apply correctly.
+    date_range = _resolve_selected_date_range()
+
     thread = threading.Thread(
         target=_load_aggregation_data_thread,
-        args=(api_key, selected_sources, board_names),
+        args=(api_key, selected_sources, board_names, date_range),
         daemon=True,
     )
     thread.start()
 
     return True
+
+
+def _resolve_selected_date_range() -> Optional[tuple[str, str]]:
+    """Extract (start_iso, end_iso) from the currently selected period.
+
+    Returns None if no period is selected or on any error. Prefers the
+    FlexiblePeriod when available, falling back to the legacy DatePeriod.
+    """
+    try:
+        flexible_period = st.session_state.get("agg_flexible_period")
+        if flexible_period is not None:
+            start, end = flexible_period.get_date_range()
+            return start.isoformat(), end.isoformat()
+
+        legacy_period = st.session_state.get("agg_period")
+        if legacy_period is not None:
+            from src.utils.aggregator import get_period_date_range
+            start, end = get_period_date_range(legacy_period)
+            return start.isoformat(), end.isoformat()
+    except Exception:
+        pass
+    return None
 
 
 def get_background_aggregation_status() -> dict:
