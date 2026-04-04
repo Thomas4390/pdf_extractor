@@ -867,7 +867,7 @@ def normalize_advisor_column(
         # Get unique original names that couldn't be matched
         unknown_names = df.loc[unknown_mask, "_original_advisor"].unique().tolist()
         # Clean up the names (remove empty/nan)
-        unknown_names = [n for n in unknown_names if n and n.lower() not in ["nan", "none", ""]]
+        unknown_names = [str(n) for n in unknown_names if n is not None and str(n).strip().lower() not in ["nan", "none", ""]]
         # Filter them out
         df = df[~unknown_mask]
 
