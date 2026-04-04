@@ -37,7 +37,7 @@ from src.app.extraction import render_stage_1, render_stage_2, render_stage_3
 from src.app.sidebar import render_sidebar
 from src.app.state import init_session_state
 from src.app.styles import apply_custom_styles
-from src.app.utils.board_utils import load_boards_async, start_background_aggregation_load
+from src.app.utils.board_utils import load_boards_async
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +84,6 @@ def main() -> None:
         st.session_state.monday_boards is None and
         not st.session_state.boards_loading):
         load_boards_async()
-
-    # Start background aggregation data loading once boards are available
-    if (st.session_state.monday_api_key and
-        st.session_state.monday_boards is not None and
-        not st.session_state.get("agg_data_loaded", False)):
-        start_background_aggregation_load()
 
     render_sidebar()
 
