@@ -959,11 +959,18 @@ class DataUnifier:
         Produit des lignes SÉPARÉES pour commissions et boni:
         - Lignes commission: Com = somme par police, Boni = None, Reçu = Com
         - Lignes boni: Com = None, Boni = somme par police, Reçu = Boni
+
+        La date de référence pour toutes les lignes est la date de paie
+        (report.date_paie) et non la date d'émission de chaque police.
         """
         if not report.commissions and not report.bonis:
             return pd.DataFrame(columns=self.FINAL_COLUMNS_HISTORICAL)
 
         rows = []
+
+        # Date de référence: la date de paie du rapport s'applique à toutes
+        # les lignes (commissions et boni) issues de ce rapport Assomption.
+        date_reference = self._format_date(report.date_paie)
 
         # --- Commissions: agrégation par numéro de police ---
         comm_groups: dict[str, list] = {}
@@ -1026,7 +1033,7 @@ class DataUnifier:
                 'Boni': None,
                 'Sur-Com': None,
                 'Reçu': total_commission if total_commission is not None else None,
-                'Date': self._format_date(first.date_emission),
+                'Date': date_reference,
                 'Texte': texte,
                 '_police_count': len(comms),
             })
@@ -1080,7 +1087,7 @@ class DataUnifier:
                 'Boni': total_boni if total_boni is not None else None,
                 'Sur-Com': None,
                 'Reçu': total_boni if total_boni is not None else None,
-                'Date': self._format_date(first.date_emission),
+                'Date': date_reference,
                 'Texte': texte,
                 '_police_count': len(bonis),
             })
