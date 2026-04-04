@@ -216,61 +216,66 @@ def _load_aggregation_data_thread(
                 _background_agg_data[source_key] = pd.DataFrame()
                 _update_progress(f"⚠️ {display_label} — erreur: {e}")
 
-        async def _load_advisor_history() -> int:
-            """Load advisor history. Returns number of groups loaded."""
+        async def _prefetch_history_groups() -> list:
+            """Return the list of (year, month, group) history entries to
+            load, or an empty list if the cache is already populated or
+            no suitable groups exist. Runs a single list_groups() call so
+            the progress total can be computed upfront.
+            """
+            from src.utils.advisor_status import AdvisorStatusCalculator
+
+            if (
+                AdvisorStatusCalculator._cache_loaded
+                and AdvisorStatusCalculator._first_appearance_cache
+            ):
+                return []
+
+            try:
+                groups = await client.list_groups(history_board_id)
+            except Exception:
+                return []
+
+            sorted_groups = []
+            for group in groups:
+                title = group.get("title", "")
+                year, month = AdvisorStatusCalculator._parse_month_year(title)
+                if year > 0 and month > 0:
+                    sorted_groups.append((year, month, group))
+            sorted_groups.sort(key=lambda x: (x[0], x[1]))
+
+            # Only months <= selected period matter for first-appearance.
+            selected_ym = _date_range_end_year_month(date_range)
+            if selected_ym is not None:
+                sel_year, sel_month = selected_ym
+                sorted_groups = [
+                    (y, m, g) for (y, m, g) in sorted_groups
+                    if (y, m) <= (sel_year, sel_month)
+                ]
+            return sorted_groups
+
+        async def _load_advisor_history(sorted_groups: list) -> int:
+            """Load advisor history from pre-fetched groups."""
             from src.utils.advisor_matcher import normalize_advisor_name_full
             from src.utils.advisor_status import AdvisorStatusCalculator
 
-            # Skip reload if the class-level cache is already populated —
-            # the advisor first-appearance map doesn't depend on the
-            # selected period, so it stays valid across period changes.
             if (
                 AdvisorStatusCalculator._cache_loaded
                 and AdvisorStatusCalculator._first_appearance_cache
             ):
                 _update_progress(
                     "📊 Historique conseillers — réutilisé depuis le cache",
+                    increment=False,
+                )
+                return 0
+
+            if not sorted_groups:
+                _update_progress(
+                    "📊 Historique conseillers — aucun mois",
+                    increment=False,
                 )
                 return 0
 
             try:
-                groups = await client.list_groups(history_board_id)
-
-                sorted_groups = []
-                for group in groups:
-                    title = group.get("title", "")
-                    year, month = AdvisorStatusCalculator._parse_month_year(title)
-                    if year > 0 and month > 0:
-                        sorted_groups.append((year, month, group))
-                sorted_groups.sort(key=lambda x: (x[0], x[1]))
-
-                if not sorted_groups:
-                    _update_progress("📊 Historique conseillers — aucun groupe")
-                    return 0
-
-                # Only load months up to and including the selected period:
-                # advisors can only be "new" relative to earlier months, so
-                # months strictly after the selected period don't change the
-                # first-appearance map.
-                selected_ym = _date_range_end_year_month(date_range)
-                if selected_ym is not None:
-                    sel_year, sel_month = selected_ym
-                    sorted_groups = [
-                        (y, m, g) for (y, m, g) in sorted_groups
-                        if (y, m) <= (sel_year, sel_month)
-                    ]
-
-                if not sorted_groups:
-                    _update_progress(
-                        "📊 Historique conseillers — aucun mois antérieur",
-                    )
-                    return 0
-
-                # Update total now that we know how many groups there are
-                progress_state["total"] += len(sorted_groups)
-                _background_agg_progress["total"] = progress_state["total"]
-
-                # Load all group items concurrently
                 async def _load_history_group(year_month_group):
                     _year, _month, g = year_month_group
                     items = await client.extract_board_data(
@@ -310,7 +315,10 @@ def _load_aggregation_data_thread(
                 return len(sorted_groups)
 
             except Exception:
-                _update_progress("⚠️ Historique conseillers — erreur (statut par défaut)")
+                _update_progress(
+                    "⚠️ Historique conseillers — erreur (statut par défaut)",
+                    increment=False,
+                )
                 return 0
 
         async def _load_all_parallel() -> None:
@@ -324,17 +332,26 @@ def _load_aggregation_data_thread(
                     source_configs[source_key] = config
                     source_tasks.append(_load_one_source(source_key, board_id, config))
 
-            # Total starts at num_sources; advisor history will add its groups
-            progress_state["total"] = len(source_tasks)
+            # Pre-fetch history groups so we know the exact progress total
+            # from the start (no mid-run jumps from 3/3 to 18/18).
+            history_groups = await _prefetch_history_groups()
+
+            # Total = data loads + history months + one slot per source
+            # for formula enrichment (finalized regardless of formula count
+            # so the counter stays monotonic).
+            progress_state["total"] = (
+                len(source_tasks) + len(history_groups) + len(source_tasks)
+            )
             _background_agg_progress["total"] = progress_state["total"]
 
-            # Phase 1: Load all data in parallel (without formulas)
-            await asyncio.gather(*source_tasks, _load_advisor_history())
+            # Phase 1: Load all data in parallel (formulas come inline via
+            # the FormulaValue fragment, no separate pass needed in most cases).
+            await asyncio.gather(
+                *source_tasks, _load_advisor_history(history_groups),
+            )
 
-            # Phase 2: Enrich formula columns sequentially per board
-            # (rate limit: 10k formula values/min — sequential avoids collisions)
-
-            # Pre-count boards with formulas to keep progress total coherent
+            # Phase 2: Fallback enrichment for items whose display_value was
+            # missing from the main query (rare after the inline fragment).
             def _board_has_formulas(items: list[dict]) -> bool:
                 if not items:
                     return False
@@ -343,29 +360,19 @@ def _load_aggregation_data_thread(
                     for cv in items[0].get("column_values", [])
                 )
 
-            boards_with_formulas = sum(
-                1 for items in _source_items.values() if _board_has_formulas(items)
-            )
-            if boards_with_formulas:
-                progress_state["total"] += boards_with_formulas
-                _background_agg_progress["total"] = progress_state["total"]
-
             for source_key, items in _source_items.items():
-                if not items:
-                    continue
                 config = source_configs.get(source_key)
-                if not config:
-                    continue
-                board_id = selected_sources[source_key]
-                display_label = board_names.get(board_id, config.display_name)
+                board_id = selected_sources.get(source_key)
+                display_label = (
+                    board_names.get(board_id, config.display_name)
+                    if (config and board_id) else source_key
+                )
 
-                if not _board_has_formulas(items):
+                if not items or not _board_has_formulas(items):
+                    _update_progress(f"🔢 Formules — {display_label} (aucune)")
                     continue
 
                 try:
-                    _update_progress(
-                        f"🔢 Formules — {display_label}...", increment=False,
-                    )
                     await client.enrich_formula_columns(items)
                     # Rebuild DataFrame with enriched formula values
                     df = client.board_items_to_dataframe(items)

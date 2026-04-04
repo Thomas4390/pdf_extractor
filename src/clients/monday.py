@@ -1851,6 +1851,9 @@ class MondayClient:
     # -------------------------------------------------------------------------
 
     # GraphQL fragment for the item fields we always want back.
+    # The `... on FormulaValue { display_value }` inline fragment pulls
+    # formula results in the same query as items_page — avoiding a
+    # separate enrichment pass for most boards.
     _ITEM_FIELDS = """
         id
         name
@@ -1865,6 +1868,9 @@ class MondayClient:
             column {
                 title
                 type
+            }
+            ... on FormulaValue {
+                display_value
             }
         }
     """
@@ -2043,10 +2049,11 @@ class MondayClient:
     _last_formula_batch_values: int = 0
     _formula_cooldown_lock: asyncio.Lock = None  # type: ignore[assignment]
 
-    # Formula-column rate-limit policy: 10k values/min enforced by Monday,
-    # we use 50% of that budget to stay safe under bursty concurrency.
+    # Formula-column rate-limit policy: 10k values/min enforced by Monday.
+    # 80% budget leaves enough headroom for retries while moving ~2x faster
+    # than the old 50% setting. Retry logic handles any transient overrun.
     _FORMULA_RATE_LIMIT_PER_MIN: int = 10_000
-    _FORMULA_SAFE_RATE: float = 10_000 * 0.5  # values per minute
+    _FORMULA_SAFE_RATE: float = 10_000 * 0.8  # values per minute
     # Minimum cooldown between enrichments; guarantees we never go faster
     # than once every N seconds even with tiny batches.
     _FORMULA_MIN_COOLDOWN_S: float = 2.0
@@ -2061,7 +2068,7 @@ class MondayClient:
     async def _enrich_formula_columns(
         self,
         items: list[dict],
-        batch_size: int = 25,
+        batch_size: int = 100,
         max_formula_cols_per_query: int = 5,
         max_retries: int = 8,
     ) -> None:
@@ -2093,9 +2100,24 @@ class MondayClient:
         if not formula_col_ids:
             return
 
+        # Only enrich items that still need it — the inline FormulaValue
+        # fragment in extract_board_data often populates display_value
+        # directly, so most items are already done.
+        items_to_enrich = [
+            item for item in items
+            if any(
+                cv.get("column", {}).get("type") == "formula"
+                and cv.get("display_value") is None
+                for cv in item.get("column_values", [])
+            )
+        ]
+        if not items_to_enrich:
+            logger.info("Formula enrichment: all values already populated")
+            return
+
         logger.info(
             f"Enriching {len(formula_col_ids)} formula column(s) "
-            f"for {len(items)} items"
+            f"for {len(items_to_enrich)}/{len(items)} items still missing values"
         )
 
         # --- Adaptive global cooldown (lock-protected to prevent TOCTOU) ---
@@ -2119,8 +2141,9 @@ class MondayClient:
                 await asyncio.sleep(wait)
 
         # Build item_id → {col_id → col_val reference} map
+        # (only items that still need enrichment)
         item_cv_map: dict[str, dict[str, dict]] = {}
-        for item in items:
+        for item in items_to_enrich:
             cv_refs = {}
             for cv in item.get("column_values", []):
                 if cv["id"] in formula_col_ids:
