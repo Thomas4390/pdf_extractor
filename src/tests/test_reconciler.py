@@ -1050,15 +1050,15 @@ def test_get_all_hist_updates():
     # POL001 (passed) + POL002 (flagged) = 2 entries, POL999 (not_found) excluded
     assert len(all_updates) == 2
 
-    # POL001: index 0, conseiller Marie, is_passed=True
+    # POL001: index 0, conseiller Marie, is_passed=True, lead_mc=None
     idx_0 = [u for u in all_updates if u[0] == 0]
     assert len(idx_0) == 1
-    assert idx_0[0] == (0, "Marie", True)
+    assert idx_0[0] == (0, "Marie", True, None)
 
-    # POL002: index 1, conseiller Jean, is_passed=False
+    # POL002: index 1, conseiller Jean, is_passed=False, lead_mc=None
     idx_1 = [u for u in all_updates if u[0] == 1]
     assert len(idx_1) == 1
-    assert idx_1[0] == (1, "Jean", False)
+    assert idx_1[0] == (1, "Jean", False, None)
 
     # get_passed_hist_updates should only return POL001
     passed = result.get_passed_hist_updates()

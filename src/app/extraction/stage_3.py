@@ -523,12 +523,13 @@ def _execute_reconciliation_writeback(
         try:
             col_id_map, col_type_map = run_async(
                 pipeline.monday.get_or_create_columns(
-                    int(hist_board_id), ["Conseiller", "Verifié"]
+                    int(hist_board_id), ["Conseiller", "Verifié", "Lead/MC"]
                 )
             )
 
             conseiller_col_id = col_id_map.get("Conseiller")
             verifie_col_id = col_id_map.get("Verifié")
+            lead_mc_col_id = col_id_map.get("Lead/MC")
 
             # Pre-seed Conseiller dropdown labels to avoid duplicates
             conseiller_label_map: dict[str, int] = {}
@@ -550,7 +551,7 @@ def _execute_reconciliation_writeback(
                         )
                     )
 
-            for hist_index, conseiller, is_passed in hist_updates:
+            for hist_index, conseiller, is_passed, lead_mc in hist_updates:
                 try:
                     hist_item_id = index_to_item_id.get(hist_index)
 
@@ -576,6 +577,10 @@ def _execute_reconciliation_writeback(
                                 column_values[conseiller_col_id] = {"labels": [conseiller]}
                         else:
                             column_values[conseiller_col_id] = conseiller
+
+                    # Lead/MC: STATUS label
+                    if lead_mc and lead_mc_col_id:
+                        column_values[lead_mc_col_id] = {"label": lead_mc}
 
                     if column_values:
                         run_async(

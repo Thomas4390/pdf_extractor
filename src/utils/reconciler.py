@@ -64,6 +64,7 @@ class ReconciliationMatch:
     pa_amount: Optional[float] = None        # PA from sales board
     line_count: int = 1                      # Number of lines aggregated
     is_chargeback: bool = False              # True if this group contains Charge back lines
+    lead_mc: Optional[str] = None            # Lead/MC from sales board
 
 
 @dataclass
@@ -153,7 +154,7 @@ class ReconciliationResult:
                     results.append((idx, m.conseiller))
         return results
 
-    def get_all_hist_updates(self) -> list[tuple[int, Optional[str], bool]]:
+    def get_all_hist_updates(self) -> list[tuple[int, Optional[str], bool, Optional[str]]]:
         """Get historical indices and advisors for all matched items.
 
         Returns all matches (PASSED, FLAGGED, UNCLASSIFIED, CB_VERIFIED) —
@@ -161,7 +162,7 @@ class ReconciliationResult:
         for all found items and Verifié/Pas Verifié labels.
 
         Returns:
-            List of (hist_index, conseiller, is_passed) tuples.
+            List of (hist_index, conseiller, is_passed, lead_mc) tuples.
         """
         results = []
         for m in self.matches:
@@ -169,7 +170,7 @@ class ReconciliationResult:
                 continue
             is_passed = m.status in (ReconciliationStatus.PASSED, ReconciliationStatus.CB_VERIFIED)
             for idx in m.hist_indices:
-                results.append((idx, m.conseiller, is_passed))
+                results.append((idx, m.conseiller, is_passed, m.lead_mc))
         return results
 
     def to_display_dataframe(self) -> pd.DataFrame:
@@ -351,15 +352,18 @@ class ReconciliationResult:
         if hist_active.empty:
             return pd.DataFrame()
 
-        # Build lookups: index → conseiller for all found matches,
+        # Build lookups: index → conseiller/lead_mc for all found matches,
         # and set of passed indices for Verifié
         conseiller_lookup: dict[int, str] = {}  # index → conseiller
+        lead_mc_lookup: dict[int, str] = {}     # index → lead_mc
         passed_indices: set[int] = set()
         for m in self.matches:
             if m.status in (ReconciliationStatus.NOT_FOUND, ReconciliationStatus.CB_FLAGGED):
                 continue
             for idx in m.hist_indices:
                 conseiller_lookup[idx] = m.conseiller or ""
+                if m.lead_mc:
+                    lead_mc_lookup[idx] = m.lead_mc
             if m.status in (ReconciliationStatus.PASSED, ReconciliationStatus.CB_VERIFIED):
                 passed_indices.update(m.hist_indices)
 
@@ -367,18 +371,21 @@ class ReconciliationResult:
         if "Conseiller" not in hist_active.columns:
             hist_active["Conseiller"] = ""
 
-        # Add Verifié labels and update Conseiller
+        # Add Verifié labels and update Conseiller + Lead/MC
         hist_active["Verifié"] = "Pas Verifié"
+        hist_active["Lead/MC"] = ""
         for idx in hist_active.index:
             if idx in conseiller_lookup and conseiller_lookup[idx]:
                 hist_active.at[idx, "Conseiller"] = conseiller_lookup[idx]
+            if idx in lead_mc_lookup:
+                hist_active.at[idx, "Lead/MC"] = lead_mc_lookup[idx]
             if idx in passed_indices:
                 hist_active.at[idx, "Verifié"] = "Verifié"
 
         # Select and order columns
         output_cols = [
             "# de Police", "Nom Client", "Compagnie", "Conseiller",
-            "Verifié", "Reçu", "Texte", "Statut",
+            "Lead/MC", "Verifié", "Reçu", "Texte", "Statut",
         ]
         # Only include columns that exist
         cols = [c for c in output_cols if c in hist_active.columns]
@@ -665,6 +672,7 @@ class Reconciler:
                     pa_amount=self._to_float(sales_row.get("PA")) if sales_row is not None else None,
                     line_count=len(entries),
                     is_chargeback=is_cb_group,
+                    lead_mc=self._get_lead_mc(sales_row) if sales_row is not None else None,
                 ))
                 continue
 
@@ -698,6 +706,8 @@ class Reconciler:
                 else:
                     status = ReconciliationStatus.FLAGGED
 
+            lead_mc = self._get_lead_mc(sales_row)
+
             result.matches.append(ReconciliationMatch(
                 hist_indices=indices,
                 police_number=police,
@@ -714,6 +724,7 @@ class Reconciler:
                 pa_amount=pa,
                 line_count=len(entries),
                 is_chargeback=is_cb_group,
+                lead_mc=lead_mc,
             ))
 
         return result
@@ -747,6 +758,15 @@ class Reconciler:
 
     # Advisor names to blank out (normalized, lower-case)
     _EXCLUDED_ADVISORS = EXCLUDED_ADVISORS
+
+    @staticmethod
+    def _get_lead_mc(sales_row: pd.Series) -> Optional[str]:
+        """Extract Lead/MC value from sales row."""
+        val = sales_row.get("Lead/MC")
+        if val is None or pd.isna(val):
+            return None
+        s = str(val).strip()
+        return s if s else None
 
     @staticmethod
     def _get_conseiller(sales_row: pd.Series) -> Optional[str]:
