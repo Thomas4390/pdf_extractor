@@ -494,14 +494,19 @@ def _execute_reconciliation_writeback(
                                 column_values[complet_col_id] = {"label": complet_label}
 
                     if column_values:
-                        run_async(
+                        ok = run_async(
                             pipeline.monday.update_item_column_values(
                                 item_id=str(item_id),
                                 board_id=int(sales_board_id),
                                 column_values=column_values,
                             )
                         )
-                        wb_sales_ok += 1
+                        if ok:
+                            wb_sales_ok += 1
+                        else:
+                            wb_errors.append(
+                                f"Sales item {item_id}: update rejected by Monday (see logs)"
+                            )
 
                     ops_done += 1
                     progress_bar.progress(
@@ -536,7 +541,7 @@ def _execute_reconciliation_writeback(
             if conseiller_col_id and col_type_map.get("Conseiller") == "dropdown":
                 unique_conseillers = list({
                     c.strip()
-                    for _, c, _ in hist_updates
+                    for _, c, _, _ in hist_updates
                     if c and c.strip()
                 })
                 if unique_conseillers:
@@ -583,14 +588,19 @@ def _execute_reconciliation_writeback(
                         column_values[lead_mc_col_id] = {"label": lead_mc}
 
                     if column_values:
-                        run_async(
+                        ok = run_async(
                             pipeline.monday.update_item_column_values(
                                 item_id=str(hist_item_id),
                                 board_id=int(hist_board_id),
                                 column_values=column_values,
                             )
                         )
-                        wb_hist_ok += 1
+                        if ok:
+                            wb_hist_ok += 1
+                        else:
+                            wb_errors.append(
+                                f"Hist item {hist_item_id}: update rejected by Monday (see logs)"
+                            )
 
                     ops_done += 1
                     progress_bar.progress(
