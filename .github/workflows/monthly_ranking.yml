@@ -1,0 +1,47 @@
+name: Monthly Ranking Update
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub Actions cron is best-effort — actual
+    # latency during peak hours can reach 10-15 minutes.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: monthly-ranking
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update-ranking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run monthly ranking
+        env:
+          MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          RANKING_SOURCE_BOARD_ID: ${{ secrets.RANKING_SOURCE_BOARD_ID }}
+          RANKING_METRICS: ${{ vars.RANKING_METRICS }}
+          RANKING_DATE_COLUMN: ${{ vars.RANKING_DATE_COLUMN }}
+          RANKING_MONTHS_AGO: ${{ vars.RANKING_MONTHS_AGO }}
+          RANKING_ADVISOR_COLUMN: ${{ vars.RANKING_ADVISOR_COLUMN }}
+          RANKING_USE_GROUP_AS_ADVISOR: ${{ vars.RANKING_USE_GROUP_AS_ADVISOR }}
+        run: python -m src.automations.monthly_ranking
