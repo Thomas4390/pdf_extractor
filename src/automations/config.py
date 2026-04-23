@@ -15,9 +15,18 @@ def _parse_metrics(raw: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
-def _require_env(name: str) -> str:
+def _env_or(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Return the env var, treating empty strings as unset (GitHub Actions
+    injects undefined vars/secrets as empty strings rather than omitting them)."""
     value = os.environ.get(name)
     if value is None or not value.strip():
+        return default
+    return value
+
+
+def _require_env(name: str) -> str:
+    value = _env_or(name)
+    if value is None:
         raise ValueError(f"Missing required env var: {name}")
     return value
 
@@ -57,18 +66,18 @@ class RankingConfig:
         metrics = _parse_metrics(_require_env("RANKING_METRICS"))
         date_column = _require_env("RANKING_DATE_COLUMN")
 
-        advisor_column = os.environ.get("RANKING_ADVISOR_COLUMN", "group_title")
+        advisor_column = _env_or("RANKING_ADVISOR_COLUMN", "group_title")
         use_group_as_advisor = _parse_bool(
-            os.environ.get("RANKING_USE_GROUP_AS_ADVISOR", "true")
+            _env_or("RANKING_USE_GROUP_AS_ADVISOR", "true")
         )
 
-        months_ago_raw = os.environ.get("RANKING_MONTHS_AGO", "0")
+        months_ago_raw = _env_or("RANKING_MONTHS_AGO", "0")
         months_ago = _parse_int_env("RANKING_MONTHS_AGO", months_ago_raw)
 
-        target_board_raw = os.environ.get("RANKING_TARGET_BOARD_ID")
+        target_board_raw = _env_or("RANKING_TARGET_BOARD_ID")
         target_board_id = (
             _parse_int_env("RANKING_TARGET_BOARD_ID", target_board_raw)
-            if target_board_raw and target_board_raw.strip()
+            if target_board_raw
             else None
         )
 

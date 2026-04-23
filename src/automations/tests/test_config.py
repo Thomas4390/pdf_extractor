@@ -67,6 +67,21 @@ class TestFromEnv:
         cfg = RankingConfig.from_env()
         assert cfg.target_board_id == 9999
 
+    def test_empty_string_optionals_fall_back_to_defaults(
+        self, base_env: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GitHub Actions injects undefined variables as empty strings rather
+        than omitting them — make sure we treat "" the same as unset."""
+        monkeypatch.setenv("RANKING_ADVISOR_COLUMN", "")
+        monkeypatch.setenv("RANKING_USE_GROUP_AS_ADVISOR", "")
+        monkeypatch.setenv("RANKING_MONTHS_AGO", "")
+        monkeypatch.setenv("RANKING_TARGET_BOARD_ID", "")
+        cfg = RankingConfig.from_env()
+        assert cfg.advisor_column == "group_title"
+        assert cfg.use_group_as_advisor is True
+        assert cfg.months_ago == 0
+        assert cfg.target_board_id is None
+
 
 @pytest.mark.unit
 class TestValidation:
